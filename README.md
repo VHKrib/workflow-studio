@@ -80,6 +80,7 @@ Three ideas it is built around:
 - **Per-card validation pass** — walks the chain in edge order, marks each card `ok` / `needs work`, and
   writes the verdict into that card's chat so the history stays with the card.
 - **Multiple canvases** — left sidebar lists workflows; each has its own cards, edges and agent; export/import as JSON.
+- **Talk a workflow into existence** — 「对话建链路」 opens a temporary canvas: your sentence becomes a draft input card right away, the agent's plan grows card by card while it streams, and 「存成正式」 turns it into a normal workflow (or `✕` throws it away).
 - **Copy a workflow** — one click (`复制链路` or the `⧉` on any row) makes an independent copy: cards, edges, modules, wording, executor. Rename suffix keeps the list unambiguous; editing one never touches the other.
 - **Check before running** — a local static pass flags broken links, process cards missing an input or output, empty cards and chains split in two — each with the card name and how to fix it. A **read-only rehearsal** then asks the executor, card by card, what it would do and what it is missing; it runs with **zero tools** (no commands, no file writes, no messages, no publishing, no spending) and the answers land back on the cards. One click clears them.
 - **Radial menu** — press and hold right mouse button (or `Space`) for add / ask / duplicate / delete / validate / run.
