@@ -21,14 +21,17 @@ body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);font
   -webkit-font-smoothing:antialiased;overflow:hidden;user-select:none}
 
 /* ---------- 顶栏 ---------- */
-.topbar{height:64px;display:flex;align-items:center;gap:12px;padding:0 18px 0 88px;
+.topbar{height:64px;display:flex;align-items:center;gap:10px;padding:0 18px 0 88px;
   background:var(--surface);border-bottom:1px solid var(--line);-webkit-app-region:drag}
-.brand{display:flex;align-items:center;gap:10px;min-width:0}
+/* 顶栏一排按钮多，名字区可收缩但不许溢出压到执行方选择器（默认 1380 宽下两者不相交） */
+.topbar button,.topbar .btn{padding:7px 11px}
+.brand{display:flex;align-items:center;gap:10px;flex:0 1 auto;min-width:170px}
+.brand-name{display:flex;flex:1 1 auto;min-width:0}
 .brand-mark{width:34px;height:34px;display:grid;place-items:center;flex:none;
   border:1px solid var(--accent-line);border-radius:var(--radius-sm);background:var(--accent-soft);
   color:var(--accent-ink);font-size:12.5px;font-weight:700;letter-spacing:.4px}
 #flowName{-webkit-app-region:no-drag;font:inherit;font-weight:600;font-size:14.5px;letter-spacing:.02em;color:var(--ink);
-  background:transparent;border:1px solid transparent;border-radius:7px;padding:1px 6px;width:220px;outline:none}
+  background:transparent;border:1px solid transparent;border-radius:7px;padding:1px 6px;width:100%;min-width:110px;max-width:220px;outline:none}
 #flowName:hover{border-color:var(--line)}
 #flowName:focus{border-color:var(--accent);background:#fff;box-shadow:0 0 0 3px var(--accent-soft)}
 .brand-sub{font-size:11.5px;color:var(--ink-3);padding-left:7px}

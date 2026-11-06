@@ -10,7 +10,7 @@
   <div class="topbar">
     <div class="brand">
       <div class="brand-mark">WF</div>
-      <div>
+      <div class="brand-name">
         <input id="flowName" class="brand-title" spellcheck="false" value="未命名工作流">
       </div>
     </div>
@@ -32,8 +32,13 @@
     <button id="btnNew">新建工作流</button>
     <button id="btnCopy" title="把当前这条链路复制成一条独立副本">复制链路</button>
     <button id="btnTest">测试</button>
-    <button id="btnOpen">导入</button>
-    <button id="btnSave">导出</button>
+    <div class="menu-wrap">
+      <button id="btnMore" class="ghost" title="导入 / 导出链路文件">⋯</button>
+      <div class="menu" id="moreMenu">
+        <div id="btnOpen">导入</div>
+        <div id="btnSave">导出</div>
+      </div>
+    </div>
     <button id="btnRun" class="primary">▶ 开始运行</button>
   </div>
 
