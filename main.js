@@ -7,6 +7,7 @@ const path = require('path');
 const PROFILES_DIR = path.join(os.homedir(), '.hermes', 'profiles');
 const { readChain } = require('./chain');
 const { createLinkStore } = require('./linkstore');
+const { createVersionStore } = require('./versions');
 const HERMES = path.join(os.homedir(), '.hermes', 'hermes-agent', '.hermes', 'bin', 'hermes');
 
 // 共享链路状态文件：人和 agent 共用一份底稿（画布写、agent 读；外面改了画布认领回来）
@@ -17,6 +18,13 @@ function links() {
     LINKS.drop('__temp__');          // 临时画布不跨进程存在：上次没收干净的那份，启动时抹掉
   }
   return LINKS;
+}
+
+// 版本记录：每条链路最近 20 版的底稿（回滚就靠它；和状态文件分开放，读状态文件的人不会读到 20 份历史）
+let VERS = null;
+function versions() {
+  if (!VERS) VERS = createVersionStore(path.join(app.getPath('userData'), 'versions'));
+  return VERS;
 }
 
 /** 读本机 profile 列表：id + 显示名 + 所属部门 + 描述 */
@@ -77,12 +85,15 @@ const runs = new Map();
 // 验收用：WF_READ_FAKE=hang 时，分析这条链路起一个不出声的子进程，用来验「没有输出时到点自己收场」。
 // 平时不设这个环境变量就一点也不影响（只有读取链路的分析会被替换，别的对话照常）。
 const READ_FAKE = process.env.WF_READ_FAKE || '';
+// 验收用：WF_CHAT_FAKE=hang 时，普通对话（卡片聊天 / 右下角对话框）也起一个不出声的子进程，
+// 用来验「对话正在跑的时候回滚，运行要被真的停掉」。平时不设就照常调 agent。
+const CHAT_FAKE = process.env.WF_CHAT_FAKE || '';
 ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000, toolsets }) => new Promise((resolve) => {
   if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES });
   const args = ['-p', profile, 'chat', '--format', 'stream-json'];
   if (toolsets) args.push('-t', String(toolsets));     // 只给指定工具组（分析链路时 todo,no_mcp：不能跑命令、不能写文件、不碰 MCP 接口）
   args.push('-q', prompt);
-  const fake = READ_FAKE === 'hang' && toolsets === 'todo,no_mcp';
+  const fake = (READ_FAKE === 'hang' && toolsets === 'todo,no_mcp') || (CHAT_FAKE === 'hang' && !toolsets);
   const child = fake ? spawn('/bin/sleep', ['600'], { env: { ...process.env } }) : spawn(HERMES, args, { env: { ...process.env } });
   runs.set(runId, child);
   let buf = '', finalText = '', tokens = null, err = '', killedByTimeout = false;
@@ -110,6 +121,7 @@ ipcMain.handle('agent:cancel', (_e, runId) => {
   const c = runs.get(runId);
   if (!c) return false;
   try { c.kill('SIGTERM'); } catch (_) { }
+  console.log(`[取消] 停掉正在跑的运行 ${runId}`);     // 回滚时也走这条路：日志里能查到「这次运行被停掉」
   return true;
 });
 
@@ -151,6 +163,16 @@ ipcMain.handle('link:write', (_e, { id, doc }) => {
 });
 ipcMain.handle('link:read', (_e, id) => links().read(id));
 ipcMain.handle('link:drop', (_e, id) => { links().drop(id); return true; });
+// 版本记录：列 / 推一条（主进程统一裁到最近 20 版）/ 删（链路删掉时一起清）
+ipcMain.handle('version:list', (_e, id) => versions().list(id));
+ipcMain.handle('version:push', (_e, { id, entry }) => {
+  try {
+    const r = versions().push(id, entry);
+    if (entry && entry.rollback) console.log(`[版本] ${id}：记下新版本 v${entry.v}（回滚到 v${(entry.rollback && entry.rollback.to) || '?'}）`);
+    return r;
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+});
+ipcMain.handle('version:drop', (_e, id) => versions().drop(id));
 // 只读：读一个 agent 的工作链路原料（身份 / 技能 / 最近干的活 / 上下游 / 读写的目录）
 ipcMain.handle('agent:chain', (_e, id) => readChain(id).catch(err => ({ ok: false, error: String(err && err.message || err) })));
 ipcMain.handle('flow:save', async (_e, flow) => {
