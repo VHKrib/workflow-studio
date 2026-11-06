@@ -29,7 +29,7 @@ const check = (name, ok, detail) => { if (!ok) fails++; console.log(`${ok ? 'PAS
 let p = parseChainPlan(J({ name: '正常', cards: [C('a', 'in', '派活'), C('b', 'proc', '干活'), C('c', 'out', '交付')], edges: [['a', 'b'], ['b', 'c']] }));
 check('normal', show(p) === 'a>b b>c' && planProblem(p) === '', show(p));
 
-// 2) 输入连输入（bgeflow 实测踩过）：丢掉这条；没人喂的加工卡补上前面最近的输入，落单的输入接到后面最近的加工 → 整条接通、过闸
+// 2) 输入连输入（真跑时踩过）：丢掉这条；没人喂的加工卡补上前面最近的输入，落单的输入接到后面最近的加工 → 整条接通、过闸
 p = parseChainPlan(J({ cards: [C('a', 'in', '派活'), C('b', 'in', '原图'), C('c', 'proc', '出图'), C('d', 'proc', '出片'), C('e', 'out', '交付')],
   edges: [['a', 'b'], ['c', 'd'], ['d', 'e']] }));
 check('in->in', !/a>b/.test(show(p)) && /b>c/.test(show(p)) && /a>c/.test(show(p)) && planProblem(p) === '', `${show(p)}｜${planProblem(p) || '过闸'}`);

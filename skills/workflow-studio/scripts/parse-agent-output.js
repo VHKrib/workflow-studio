@@ -2,7 +2,7 @@
 // 改了解析器或提示词之后先跑它，而不是在界面上靠肉眼看气泡。
 //
 //   node skills/workflow-studio/scripts/parse-agent-output.js /tmp/hermes-raw.txt
-//   node skills/workflow-studio/scripts/parse-agent-output.js --live "用三句话说明：为什么卖点卡必须先有证据出处？"
+//   HF_PROFILE=<profile-id> node skills/workflow-studio/scripts/parse-agent-output.js --live "用三句话说明：为什么卖点卡必须先有证据出处？"
 //
 // 输出：{secs, steps:[{label,time}], think 字数, answer 字数, answer 尾巴}
 // 加 --full 打印完整 think / answer，方便确认回答没有被截断或被分隔线污染。
@@ -10,9 +10,10 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const APP = path.join('<REPO>', 'renderer', 'app.js');
+const ROOT = path.join(__dirname, '..', '..', '..');            // 仓库根目录：脚本在 skills/<name>/scripts/
+const APP = path.join(ROOT, 'renderer', 'app.js');
 const HERMES = path.join(process.env.HOME || '', '.hermes', 'hermes-agent', '.hermes', 'bin', 'hermes');
-const PROFILE = process.env.HF_PROFILE || 'flowdev';
+const PROFILE = process.env.HF_PROFILE || '';                     // --live 必须显式给 profile（不写死真岗位名）
 
 // 从 app.js 里抠出 parseAgentOutput（花括号配对，免得下次改文件就找不到）
 function loadParser() {
@@ -37,6 +38,7 @@ let raw = '';
 if (live) {
   const q = args[args.indexOf('--live') + 1];
   if (!q) { console.error('--live 后面要跟一个提问'); process.exit(1); }
+  if (!PROFILE) { console.error('--live 需要 HF_PROFILE=<profile-id>（不写死真岗位名）'); process.exit(1); }
   raw = execFileSync(HERMES, ['-p', PROFILE, 'chat', '-q', q], { encoding: 'utf8', timeout: 180000 });
 } else {
   const file = args[0];

@@ -1,24 +1,25 @@
 ---
 name: workflow-studio
-description: Use when changing the TC 工作流台 Electron app (画布/卡片/agent 集成/开源维护). 提供结构、验证方法与改法。
+description: Use when changing the Workflow Studio (工作流开发平台) Electron app (画布/卡片/agent 集成/开源维护). 提供结构、验证方法与改法。
 ---
 
-# TC 工作流台 · 开发手册
+# 工作流开发平台 · 开发手册
 
 ## 何时用
 
-改 `<REPO>` 的任何东西：界面、卡片模型、agent 调用、导入导出、开源文件。
+改这个仓库的任何东西：界面、卡片模型、agent 调用、读取链路、导入导出、开源文件。
+代码在仓库根目录（`renderer/` 是界面与全部状态，`main.js` 是主进程，`preload.js` 是桥）。
 
 ## 启动与验证（每次改完都要做）
 
 ```bash
-cd <仓库根目录>                                   # 研发帮手在 dev 工作副本里改；用户在用的那份不在里面改
+cd <仓库根目录>                                   # 在 dev 工作副本里改；正在用的那份不在里面改
 node --check renderer/app.js && node --check main.js      # 语法
-export CDP_PORT=9333                               # 研发实现 9333 / 研发验收 9334 / 研发主管 9335；9222 是用户的窗口：不连、不关
+export CDP_PORT=9333                               # 实现 9333 / 验收 9334 / 主管 9335；9222 是用户在用的窗口：不连、不关
 pkill -f "remote-debugging-port=$CDP_PORT"; sleep 1        # 只关自己端口的实例——不带端口的 pkill 会把用户的窗口一起关掉
 ./node_modules/.bin/electron . --remote-debugging-port=$CDP_PORT --user-data-dir=$TMPDIR/wf-$CDP_PORT &   # 隔离实例：独立端口 + 独立数据
 sleep 8
-# tools/shot.js、tools/eval.js 目前写死 9222（用户的窗口）：改成读 CDP_PORT 之前别用；有的 scripts/ 不设 CDP_PORT 也默认连 9222，所以先 export
+# tools/shot.js 读 CDP_PORT（不写就是 9222 = 用户的窗口，所以先 export）；tools/eval.js 仍写死 9222，别用。有的 scripts/ 不设 CDP_PORT 也默认连 9222，所以先 export
 node skills/workflow-studio/scripts/cdp-await.js probe.js         # 要 await 页面异步函数时
 node skills/workflow-studio/scripts/cdp-canvas.js                 # 平移/缩放/拖动/贴边自动滚/重叠（自己还原位置）
 node skills/workflow-studio/scripts/cdp-dock.js                   # 拖卡进插槽：悬停/接入/拒绝成圈/拔出/成果槽 + 动画收干净
@@ -285,6 +286,49 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
   回显里的格式示例也是能解析的数组 → 必须取最靠后 + `validOpt()` 滤掉「短标题」占位）；
 - 展示与判定一律先过 `agentAnswer()` 去回显/去尾巴；`validateAll()` 的 `需补` 判定也用它，
   否则回显里提示词自带的「需补」会让每张卡都判 fail。
+
+## 读取 agent 的工作链路（只读 → 分析 → 人点确认才落卡）
+
+顶栏「⇣ 读取 agent 链路」→ `#readModal` → 选一个 agent → 预览 → 「放进画布」。
+改这块只动 `chain.js` / `main.js` / `renderer/app.js` 三处，别把职责搅在一起。
+
+### 三层结构
+
+| 层 | 文件 | 管什么 | 不许做什么 |
+|---|---|---|---|
+| 读原料 | `chain.js` | 读 `profile.yaml`（显示名/分组/职责）、`SOUL.md`、它自己的 `skills/` 与 `config.yaml` 里的 `external_dirs`；`state.db` 用 `sqlite3 -readonly` + `?mode=ro` 打开，算出干的活、技能使用次数、上下游、读写目录、常用工具；所有文本先过 `redact()` | 不写任何文件、不改 `state.db`、不 spawn 除 `sqlite3` 之外的东西、不读 `.env`/凭据；返回的东西要能直接进提示词（所以脱敏在 `chain.js` 做，不在前端做） |
+| 起进程 | `main.js` | `ipcMain.handle('agent:chain')` 转给 `readChain`；`agent:stream` spawn `hermes -p <id> chat --format stream-json -t <toolsets> -q <prompt>`，逐行转 `agent:event`，子进程存进 `runs`；`agent:cancel` 真 `kill('SIGTERM')`；超时也 SIGTERM | 不解析卡片、不判断拆得好不好、不碰画布状态（它不知道什么是卡） |
+| 预览与落卡 | `renderer/app.js` | `rd` 状态 + `openRead/paintRead/pickRead/analyzeChain/parseChainPlan/planProblem/layoutChain/placeChain/playArrival`；流式只追加预览格子，不重建 DOM | 不许绕过 `planProblem()` 闸门、不许在按钮之外调 `placeChain()`、不许自己决定执行方（`placeChain` 里执行方 = 被读的 agent） |
+
+### 五条不变量（验过的，改代码必须保住）
+
+1. **分析用的 agent 只给 `todo,no_mcp`**（`READ_TOOLSETS`）：跑不了命令、读写不了文件、发不了消息、碰不到任何 MCP 接口。`cdp-read.js` 的 `stream` 断言会查工具组就是这两个、且这次真的只调过 `todo_list`。
+2. **agent 永远不能直接往画布写东西**：落卡只在人按「放进画布」之后发生，入口只有 `placeChain()` 一处。预览、日志、重试都只改 `rd`。
+3. **取消必须真把子进程杀掉**：`cancelRead()` → `window.tcflow.cancelAgent(runId)` → `main.js` 的 `child.kill('SIGTERM')`。换 agent（`pickRead` 开头先 `cancelRead`）、关窗（`closeRead`）、Esc 都走它。只把 `busy` 置 false 让它继续跑 = 错。
+4. **同一时刻只允许一个分析在跑**：`analyzeChain()` 用 `rd.busy` 挡重入，`pickRead()` 先取消旧的再开新的；`rd.token` 让旧的结果回来时自己作废。
+5. **读别人的记录一律只读**：`state.db` 只读 URI 打开，不写不改；派活原文里夹着的密钥先 `redact()` 抹掉再进分析（`chainSQL` 取出的 `ask`/`done`/标题都过一遍）。
+
+### 这次踩过的坑（现象 → 现在的做法）
+
+- **拆出来的连线把两张输入卡连在一起，链路断成两截** → `parseChainPlan()` 的 `add()` 直接拒绝「连进输入卡」和「输入→输入」；再给没人喂的加工卡补线（接前面最近的输入/加工）、给没人接的加工卡接后面最近的输出，落单的输入/输出也补一下。`planProblem()` 最后查整条是否连成一片，断成几截就判不过、自动重来。
+- **卡片压在右下角对话框底下** → `placeChain()` 之后走 `fitView(true)`：挨着对话框放不下（要缩到 0.5 以下）就把对话框自动收成药丸，卡片不铺到它下面。
+- **分析吐出一张卡之后停住** → 现象是流里只冒出一张卡就没了下文（模型把 JSON 写断）。现在：`runStream` 有 240s 超时，`main.js` 到点 SIGTERM 收尾；`analyzeChain()` 最多自动重跑一次（`attempt < 2`），还不行就把「还是没拆好 + 它的原话」写进窗口，人可以自己点「重新分析」。第 2 张卡会去治根（提示词/时长/上限），这里先只写行为。
+- **只限制工具组时，被读 agent 挂着的 MCP 接口仍然可见可调** → 工具组写的是 `todo,no_mcp`：`no_mcp` 把 MCP 连接一起关掉，不只是收窄常规工具。
+
+### 跑验收
+
+```bash
+node --check renderer/app.js && node --check main.js     # 语法
+node skills/workflow-studio/scripts/check-plan.js        # 拆卡规则离线用例（不调 agent）：每条 PASS，最后一行「全部通过」
+export CDP_PORT=9333                                     # 隔离实例先起来（见「启动与验证」）
+CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read.js --agent <agent-id>
+#   agent 必须显式传（脚本没有默认值）。期望 PASS：open / layout / read / stream / plan / place / arrive / esc / errors
+#   stream = 卡一张张冒出来、只调 todo_list；place = 新工作流、执行方=被读的 agent、不重叠不压对话框；arrive = 动画收干净
+#   这条会真实调用分析用的 agent：同一张卡最多跑 2 次
+node skills/workflow-studio/scripts/cdp-canvas.js        # 老功能回归：平移/缩放锚点/拖动/连线/布局
+node skills/workflow-studio/scripts/cdp-dock.js          # 老功能回归：拖卡进插槽、拒绝成圈、拔出、成果槽、动画收干净
+node skills/workflow-studio/scripts/cdp-click.js --card "<卡片标题>" --mode double   # 老功能回归：单击只选中、双击开卡
+```
 
 ## 视觉规范（不要自创）
 

@@ -12,8 +12,9 @@ const PROFILES_DIR = path.join(HERMES_HOME, 'profiles');
 const BUNDLED_SKILLS = path.join(HERMES_HOME, 'hermes-agent', 'skills');
 const SQLITE = fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : 'sqlite3';
 
-// 工作流台自己发给 agent 的提问——不算它的活，统计时剔掉
-const STUDIO_PROMPTS = ['我们在工作流台里聊%', '我们在「工作流开发平台」里聊%', '只做评审，不执行%', '你是这条工作流的执行方%', '你是平台主管%', '【读取链路】%'];
+// 工作流开发平台自己发给 agent 的提问——不算它的活，统计时剔掉
+// 第一条用通配匹配「我们在工作流…里聊」，新版旧版的措辞都算自己的提问
+const STUDIO_PROMPTS = ['我们在工作流%里聊%', '只做评审，不执行%', '你是这条工作流的执行方%', '你是平台主管%', '【读取链路】%'];
 const sq = s => "'" + String(s).replace(/'/g, "''") + "'";
 // 派活原文里万一贴过密钥，读出来先抹掉
 const redact = s => String(s == null ? '' : s)
@@ -86,7 +87,8 @@ function profileMeta(id) {
   if (id === 'hermes' || id === 'default') {                     // 平台主管：profile.yaml 在 ~/.hermes 根上
     const y = readText(path.join(HERMES_HOME, 'profile.yaml'), 20000);
     const desc = unq((y.match(/^description:\s*(.+)$/m) || [])[1]);
-    const m = { id, name: '平台主管', section: '主管团队', desc };
+    const section = unq((y.match(/^sectionName:\s*(.+)$/m) || [])[1]);   // 配置里没写就不分组，别硬编
+    const m = { id, name: '平台主管', section, desc };
     nameCache.set(id, m); return m;
   }
   const y = readText(path.join(PROFILES_DIR, id, 'profile.yaml'), 20000);
@@ -123,7 +125,7 @@ function readSkillDir(root, shared) {
     }
     const heads = (md.replace(/^---[\s\S]*?\n---/, '').match(/^#{1,3} .+$/gm) || [])
       .map(h => h.replace(/^#+\s*/, '').trim()).filter(h => !/^(When to Use|何时用|坑|参考)/i.test(h)).slice(0, 8).map(h => h.slice(0, 40));
-    // 人能看懂的技能名：取正文第一个标题，去掉里面的代码片段（`productweb` 这种）
+    // 人能看懂的技能名：取正文第一个标题，去掉里面的代码片段（`some-skill-id` 这种）
     const h1 = ((md.replace(/^---[\s\S]*?\n---/, '').match(/^#{1,2} .+$/m) || [''])[0]).replace(/^#+\s*/, '');
     const title = h1.replace(/[（(][^（()）]*`[^`]*`[^（()）]*[）)]/g, '').replace(/`[^`]*`/g, '')
       .replace(/[（(]\s*[）)]/g, '').replace(/\s*·\s*/g, ' · ').replace(/\s+/g, ' ').trim().slice(0, 24);
@@ -212,7 +214,9 @@ async function readChain(id) {
 
 module.exports = { readChain, chainSQL, bucket, redact, PROFILES_DIR };
 
-// 直接跑：node chain.js <agent>   （打印读到的原料，方便核对）
+// 直接跑：node chain.js <agent>   （打印读到的原料，方便核对；agent 名必须显式给）
 if (require.main === module) {
-  readChain(process.argv[2] || 'productweb').then(r => { console.log(JSON.stringify(r, null, 1)); });
+  const who = process.argv[2];
+  if (!who) { console.error('usage: node chain.js <agent-id>'); process.exit(1); }
+  readChain(who).then(r => { console.log(JSON.stringify(r, null, 1)); });
 }

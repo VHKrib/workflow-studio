@@ -6,7 +6,7 @@
 
 - 用户跑的是**打包版** Hermes（`~/.hermes/hermes-agent/apps/desktop/release/mac-arm64/Hermes.app`）。
   打包版**不开 CDP**，`inspecting-hermes-desktop-dom` 那套连不上；也别拿 9222 去撞——那个端口现在是
-  工作流台自己，探到的会是本公司页面。
+  工作流开发平台自己，探到的会是本平台的页面。
 - 直接读源码目录 `~/.hermes/hermes-agent/apps/desktop/`：
 
 | 文件 | 拿什么 |

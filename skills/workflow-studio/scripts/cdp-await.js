@@ -1,4 +1,4 @@
-// 在跑着的工作流台实例里求值一段表达式，**支持 await**（tools/eval.js 只能同步求值）。
+// 在跑着的工作流开发平台实例里求值一段表达式，**支持 await**（tools/eval.js 只能同步求值）。
 //
 //   node skills/workflow-studio/scripts/cdp-await.js probe.js      # 探针写成文件，免得被 shell 引号咬
 //   node skills/workflow-studio/scripts/cdp-await.js "await chatSend('这张卡缺什么')"
