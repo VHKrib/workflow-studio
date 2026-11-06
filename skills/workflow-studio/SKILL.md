@@ -24,6 +24,7 @@ node skills/workflow-studio/scripts/cdp-await.js probe.js         # 要 await �
 node skills/workflow-studio/scripts/cdp-canvas.js                 # 平移/缩放/拖动/贴边自动滚/重叠（自己还原位置）
 node skills/workflow-studio/scripts/cdp-dock.js                   # 拖卡进插槽：悬停/接入/拒绝成圈/拔出/成果槽 + 动画收干净
 node skills/workflow-studio/scripts/cdp-dock.js --record docs/dock.gif   # 同时录演示（.gif / .mp4，ffmpeg）
+node tools/docshots.js                                                 # 重截 docs/read.png、docs/versions.png（中性示例，跑完会重载页面）
 node skills/workflow-studio/scripts/cdp-version.js                # 版本与回滚：5 改 5 版 / 并版 / 只留 20 / 回滚 / 拖动不出新版本（不调 agent）
 node skills/workflow-studio/scripts/cdp-edit.js                   # 编辑即版本：改正文/标题/内部实现/模块各一版 + 连打只 1 版 + 1 秒内同步（不调 agent）
 node skills/workflow-studio/scripts/cdp-copy.js                   # 复制链路 / 选中标记与记忆 / 静态体检抓断链空卡两截（不调 agent）
@@ -637,6 +638,22 @@ node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加 previ
 - 往顶栏加按钮前先量三条：名字与选择器 rect `overlap === 0`、名字中点 `elementFromPoint` 命中 `flowName`、
   最右按钮右边界 ≤ `innerWidth - 8`。这三条已经写进 `cdp-copy.js` 的 `topbar-no-overlap`，别等验收才看见。
   血的教训：24b04c0 新增「复制链路 / 测试」后 `#flowName` 还写死 220px，名字直接盖住执行方选择器 182px。
+
+### 窄窗口：放不下的按钮收进 ⋯（别再切出窗外）
+
+- 应用最小宽度是 1000（`main.js` 的 `minWidth`）。默认 1380 一排刚好；**1000 时曾经 1325 > 1000，右侧五个控件
+  被窗口右缘切掉，「开始运行」完全点不到**（`.topbar{overflow:visible}` 是切掉不是可滚）。
+- 现在的做法：`renderer/app.js` 的 `initTopbarFold() / fitTopbar()` 在启动和 `resize` 时量一次，按
+  `TOP_FOLD`（测试 → 复制链路 → 逐卡验证 → 对话建链路 → 读取 agent 链路，从最不常用的开始）把按钮**搬进 `#moreMenu`**，
+  窗口变宽再按原位注释插回。只搬 DOM、不移交事件，顶栏和菜单里是同一个 `onclick`；`.menu button` 有自己的条目样式。
+- 放不下的判定要**两处都看**：`scrollWidth > clientWidth`，以及最右控件是否顶进右内边距
+  （`scrollWidth` 只看 padding box，顶进 padding 的那几个像素它看不见，只量 scrollWidth 会漏 12px）。
+- 回归：`cdp-copy.js` 现在三连（`topbar-no-overlap` 1380 / `topbar-min-width` 1000 视口模拟 / `topbar-fold-click`
+  真鼠标点菜单里的「测试」/ `topbar-restore` 清掉模拟后还原）。视口模拟用 `Emulation.setDeviceMetricsOverride`，
+  不动真窗口、不依赖 System Events 权限。
+- 文档图跟界面一起走：`tools/docshots.js` 重截 `docs/read.png`（读取窗 + 一份中性示例预览）和
+  `docs/versions.png`（示例链路 4 卡 + 真做出来的 v1–v5）；`docs/dock.gif` 用 `cdp-dock.js --record docs/dock.gif` 重录。
+  这三张都上公开仓库，示例一律用「示例部门 / 示例岗位甲–丁 / 示例商品」这类中性说法。
 
 ## 常见坑
 

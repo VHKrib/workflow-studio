@@ -137,6 +137,48 @@ function bindUI() {
   $('#zoomOut').onclick = () => { zoom = Math.max(0.3, zoom - 0.1); applyZoom(); drawEdges(); };
   $('#zoomReset').onclick = () => { zoom = 1; applyZoom(); drawEdges(); };
   bindPanZoom();
+  initTopbarFold();
+}
+
+// ---------- 顶栏收纳：窗口窄到一排放不下时，把次要按钮搬进 ⋯ 菜单 ----------
+// 应用允许的最小宽度是 1000（main.js 的 minWidth）。默认 1380 下一件都不收，观感和以前完全一样；
+// 窗口拉窄就先收最不常用的，保证「开始运行」永远在窗内可点。
+// 只搬 DOM 节点、不移交事件：onclick 跟着元素走，顶栏和菜单里用的是同一套处理函数。
+const TOP_FOLD = ['btnTest', 'btnCopy', 'btnValidate', 'btnTempChat', 'btnRead'];   // 从最不常用的开始收
+let topFold = null;
+function initTopbarFold() {
+  const bar = document.querySelector('.topbar');
+  if (!bar || topFold) return;
+  topFold = TOP_FOLD.map(id => document.getElementById(id)).filter(Boolean).map(el => {
+    const slot = document.createComment('顶栏原位 ' + el.id);    // 搬走后原位记着，窗口变宽按原位插回
+    el.parentNode.insertBefore(slot, el);
+    return { el, slot };
+  });
+  addEventListener('resize', fitTopbar);
+  fitTopbar();
+  setTimeout(fitTopbar, 120);          // 首帧字体/布局稳定后再量一次，免得量到中间态
+}
+function fitTopbar() {
+  const bar = document.querySelector('.topbar'), menu = $('#moreMenu');
+  if (!bar || !menu || !topFold) return;
+  for (const { el, slot } of topFold) if (el.parentNode !== slot.parentNode) slot.parentNode.insertBefore(el, slot);
+  const msep = menu.querySelector('.msep');
+  // 放不下的判定要看两处：内容宽超了（scrollWidth），或者最后一个控件顶进了右内边距
+  // （scrollWidth 只看 padding box，顶进 padding 的那几个像素它看不见，只量 scrollWidth 会漏）。
+  const tooWide = () => {
+    if (bar.scrollWidth > bar.clientWidth + 1) return true;
+    const box = bar.getBoundingClientRect();
+    const limit = box.right - parseFloat(getComputedStyle(bar).paddingRight || 0);
+    let right = 0;
+    for (const el of bar.children) { const r = el.getBoundingClientRect(); if (r.width > 0) right = Math.max(right, r.right); }
+    return right > limit + 0.5;
+  };
+  let n = 0;
+  while (tooWide() && n < topFold.length) {
+    const { el } = topFold[n++];
+    if (msep) menu.insertBefore(el, msep); else menu.appendChild(el);   // 收进菜单：排在 导入/导出 上面
+  }
+  if (n !== (bar.__foldN || 0)) { bar.__foldN = n; menu.classList.remove('on'); }
 }
 
 // ---------- 画板拖动 / 缩放 ----------
