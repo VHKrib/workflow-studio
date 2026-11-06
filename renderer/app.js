@@ -372,12 +372,17 @@ async function askOptions(n) {
     '只输出 JSON 数组，不要解释、不要代码块标记。格式：',
     '[{"kind":"proc","title":"短标题","body":"这张卡具体要什么/做什么/产出什么"}]',
     '要求：kind 只能取 in / proc / out；title ≤ 14 字；body ≤ 60 字，写清字段或产物路径。',
+    '硬要求：候选**不得重复上面流程里已有的卡片**（标题相同即作废）；要给的是"还没做的那一步"。',
   ].join('\n');
   out.textContent = `正在让 ${agentName(w.agent)} 给下一步选项 …（只读）`;
   const r = await window.tcflow.askAgent({ profile: w.agent, prompt });
   if (!r.ok) { out.textContent = '失败：' + (r.error || r.text || r.code); return; }
-  const list = parseOptions(r.text);
-  if (!list.length) { out.innerHTML = `<div class="rawout">${esc(r.text).slice(0, 1200)}</div><p class="hint">没能解析出选项，上面是 agent 原文。</p>`; return; }
+  const exist = new Set(w.nodes.map(x => (x.title || '').trim()));
+  const list = parseOptions(r.text).filter(o => !exist.has(o.title.trim()));
+  if (!list.length) {
+    out.innerHTML = `<div class="rawout">${esc(r.text).slice(0, 1200)}</div><p class="hint">没有可加的新卡片（agent 给的候选与现有卡片重复，或没能解析成 JSON）。</p>`;
+    return;
+  }
   pendingOpts = { fromId: n.id, list };
   out.innerHTML = `<div class="optlabel">选一个直接加进流程（自动连线到「${esc(n.title)}」）</div>` +
     list.map((o, i) => `<button class="opt k-${o.kind}" data-i="${i}">
