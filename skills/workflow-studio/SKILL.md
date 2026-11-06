@@ -26,6 +26,8 @@ node skills/workflow-studio/scripts/cdp-dock.js                   # 拖卡进插
 node skills/workflow-studio/scripts/cdp-dock.js --record docs/dock.gif   # 同时录演示（.gif / .mp4，ffmpeg）
 node skills/workflow-studio/scripts/cdp-version.js                # 版本与回滚：5 改 5 版 / 并版 / 只留 20 / 回滚 / 拖动不出新版本（不调 agent）
 node skills/workflow-studio/scripts/cdp-edit.js                   # 编辑即版本：改正文/标题/内部实现/模块各一版 + 连打只 1 版 + 1 秒内同步（不调 agent）
+node skills/workflow-studio/scripts/cdp-copy.js                   # 复制链路 / 选中标记与记忆 / 静态体检抓断链空卡两截（不调 agent）
+node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加一次只读预演（真调执行方，一张卡一次）
 ```
 
 `tools/eval.js` 只是同步求值（没有 `awaitPromise`），等不到 `chatSend` / agent 回答。要断言异步结果
@@ -537,6 +539,70 @@ node skills/workflow-studio/scripts/cdp-edit.js          # 17 条：各改一次
 node skills/workflow-studio/scripts/cdp-edit.js --chat   # 再加一次真实调用：agent 复述改过的加工方式（原样引用）
 ```
 
+## 复制链路 + 选中一条来测（静态体检 / 只读预演）
+
+用户口径（2026-11）：先把一条链路**复制成独立副本**改着试；画布上**选中的那条**要一眼认得出、关掉重开还记得；
+测试先做两件不花钱/不动手的事——**静态体检**（本机算）和**只读预演**（执行方按卡片顺序说「会怎么做、缺什么」）。
+
+### 复制链路（`duplicateWorkflow` / `copyName`）
+
+- 入口两处：顶栏「复制链路」（复制当前这条）、右栏每条链路右上角的 `⧉`（复制任意一条）。两处都走同一个函数。
+- 带过去：卡片（类型 / 名字 / 正文 / 内部实现 / 模块 / 校验 / 坐标）、连线、执行方、校验项。
+  不带：卡片对话、预演结果（那是这台机器上的记录，不该跟着副本走）。
+- 副本的**每张卡、每块模块**都换新 id，连线按 id 映射重接 —— 所以改副本不影响原件，反之亦然。
+- 名字：`原名（副本）`，重名就`（副本 2）（副本 3）…`，绝不出现两条同名。
+- 版本：副本插在原件后面，`version: 1`，先 `pushVersion` 一条基线 `复制自「原名」`，再 `saveStore()`；
+  因为已经设好 `VER.sig`，这次 saveStore 不会再顺手记一版。状态文件按新 id 单独一份。
+
+### 选中的链路
+
+- 选中的就是画布当前那条（`store.current`）。右栏 `.wf.on` 有橘色竖条 + 行内「选中」徽标，别的行不标记。
+- 记住：`saveLocal()` 每次都把 `current` 写进 `localStorage['tcflow.v4']`；`loadStore()` 末尾补一条
+  「current 不在这份列表里就退回第一条」，所以删过链路也不会卡在一张空画布上。关窗重开还是上次那条。
+- 测试对象 = 选中的那条（`flow()`）：一次只测一条，不做批量。
+
+### 静态体检 `checkFlow(w)` → `checkText(w)`
+
+纯本机计算，不调模型。逐条给 `{哪张卡, 什么问题, 怎么补, kind}`：
+
+- 没指派执行方 / 一条卡片都没有；
+- 连线指向不存在的卡（删卡残留）；
+- 空卡：只有标题、正文为空；
+- 输入卡没人接（没出边）、有东西连进输入卡；加工卡缺输入（没入边）、缺产出（没出边）；输出卡没人做（没入边）；
+- 自连线 / 绕成圈（DFS 找回边，圈上卡片逐个点名）；
+- 断成几截：按不分方向的连通块数，每多出来的一截单独一条，写清是哪几张卡。
+
+报告在「测试」弹层里逐条渲染（`#tReport .trow`），`checkText()` 是同一份内容的纯文本版（验收贴原文用）。
+
+### 只读预演 `startPreview()` / `clearPreviews()`
+
+- 顺序走 `chainOrder(w)`，一张卡一次调用，提示词只问「按现在的写法，这一步你会怎么做、缺什么材料」，
+  3 行以内；回答回填 `node.preview = {at, ok, secs, steps, text}`（`steps` 是这次真实发生的工具调用数）。
+- **零工具**：`PREVIEW_TOOLSETS = 'context_engine,no_mcp'`（`context_engine` 解析不到任何工具，
+  `no_mcp` 关掉 MCP 连接）—— 跑不了命令、读写不了文件、发不了消息、发布、付费。主进程 `agent:stream`
+  在 `preview: true` 时**再强制盖一次**这个工具组，渲染层传错也拿不到别的工具。
+- 证据在主进程日志里：每次 `[预演] 起进程：… -t context_engine,no_mcp`，收尾
+  `[预演] 结束：工具调用 N 次 · 退出码 0`（正常应为 0）。界面每条结论下面也写「工具调用 N 次」。
+- 结果只属于这台机器：写 `saveStore(false)`（不涨版本、不写共享状态文件），`linkDoc()` 不带它；
+  外部认领 / 回滚时按卡片 id 保留（`applyLinkDoc` / `applyVerSnapshot` 里的 `preview`）。
+- 看得见：卡片底部挂 `预演 ✓`、左栏卡片里一块「预演结果」、测试弹层里每张卡一行。
+  「清空预演」一次删掉全部 `node.preview`，卡片标、左栏那块、弹层行一起收干净。
+- 收场：关弹层 / Esc / 切链路 / 新建 / 回滚 / 关窗口都 `stopPreview()`（`cancelAgent` 真杀子进程），
+  已经问完的结论留着。同一时刻只允许跑一次（`PV.busy`）。
+
+### 跑验收
+
+```bash
+node --check renderer/app.js && node --check main.js
+export CDP_PORT=9333
+node skills/workflow-studio/scripts/cdp-copy.js                   # 期望 13 条 PASS、末行「全部通过」
+node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加 preview-cards / preview-readonly / preview-panel / preview-clear
+```
+
+「关掉重开窗口还记得选中」用**正常关窗**验（页面 `window.close()` 再退出进程）。别用 `kill -9` / 连着
+`SIGTERM` 硬杀来判：Chromium 的 localStorage 是异步落盘的，硬杀会把最后一段写丢掉（这是环境行为，
+不是这段代码的 bug；正常关窗 + 重开实测选中还在）。
+
 ## 视觉规范（不要自创）
 
 要「跟 Hermes 一样」时先读 `references/hermes-chat-visual.md`（源码路径 + 具体 token 数值 + 搬运规则），
@@ -598,7 +664,7 @@ node skills/workflow-studio/scripts/cdp-edit.js --chat   # 再加一次真实调
 
 ## 开源
 
-本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `cdp-dock.js` / `cdp-version.js` / `cdp-edit.js` / `parse-agent-output.js`）就在仓库里：
+本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `cdp-dock.js` / `cdp-version.js` / `cdp-edit.js` / `cdp-copy.js` / `parse-agent-output.js`）就在仓库里：
 `skills/workflow-studio/`。新增验证脚本直接放这里（`scripts/` 是可直接重跑的采集/断言，不要写成一次性探针），
 并在 `git status` 里确认它们不是 `??` 漏提。
 
