@@ -12,6 +12,10 @@ const PROFILES_DIR = path.join(HERMES_HOME, 'profiles');
 const BUNDLED_SKILLS = path.join(HERMES_HOME, 'hermes-agent', 'skills');
 const SQLITE = fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : 'sqlite3';
 
+// 读多少条会话：默认最近 80 条。真干过活（有工具调用）的记录少于 30 次的 agent——比如合作邀约
+// 只有两三次——它的干活记录容易被一堆闲聊挤出 80 条的窗口，往前多读到 300 条；记录多的照旧 80，不拖慢。
+const READ_LIMIT = 80, READ_LIMIT_MORE = 300, READ_WORK_SMALL = 30;
+
 // 工作流开发平台自己发给 agent 的提问——不算它的活，统计时剔掉
 // 第一条用通配匹配「我们在工作流…里聊」，新版旧版的措辞都算自己的提问
 const STUDIO_PROMPTS = ['我们在工作流%里聊%', '只做评审，不执行%', '你是这条工作流的执行方%', '你是平台主管%', '【读取链路】%'];
@@ -27,7 +31,7 @@ function chainSQL() {
   return `
 WITH ex AS (SELECT DISTINCT session_id FROM messages WHERE role = 'user' AND (${like})),
 s AS (SELECT * FROM sessions WHERE id NOT IN (SELECT session_id FROM ex)),
-recent AS (SELECT id FROM s ORDER BY started_at DESC LIMIT 80),
+recent AS (SELECT id FROM s ORDER BY started_at DESC LIMIT (CASE WHEN (SELECT count(*) FROM s WHERE tool_call_count > 0) < ${READ_WORK_SMALL} THEN ${READ_LIMIT_MORE} ELSE ${READ_LIMIT} END)),
 calls AS (
   SELECT json_extract(j.value, '$.function.name') AS name, json_extract(j.value, '$.function.arguments') AS args
   FROM messages m, json_each(CASE WHEN json_valid(m.tool_calls) THEN m.tool_calls ELSE '[]' END) j
@@ -37,6 +41,9 @@ c2 AS (SELECT name, CASE WHEN json_valid(args) THEN args END AS a FROM calls)
 SELECT json_object(
   'excluded', (SELECT count(*) FROM ex),
   'sessions', (SELECT count(*) FROM s),
+  'workSessions', (SELECT count(*) FROM s WHERE tool_call_count > 0),
+  'readLimit', (CASE WHEN (SELECT count(*) FROM s WHERE tool_call_count > 0) < ${READ_WORK_SMALL} THEN ${READ_LIMIT_MORE} ELSE ${READ_LIMIT} END),
+  'readSessions', (SELECT count(*) FROM recent),
   'toolCalls', (SELECT coalesce(sum(tool_call_count), 0) FROM s),
   'first', (SELECT min(started_at) FROM s),
   'last', (SELECT max(started_at) FROM s),
@@ -169,6 +176,10 @@ async function readChain(id) {
   const dbFile = path.join(dir, 'state.db');
   const db = fs.existsSync(dbFile) ? await sqliteJSON(dbFile, chainSQL()) : {};
   const dbError = db && db.error ? db.error : '';
+  // 本次读了多宽：记录少的自动往前多读，日志里留一行，验收和排查都能对上
+  const readLimit = db.readLimit || READ_LIMIT, readSessions = db.readSessions || 0, workSessions = db.workSessions || 0;
+  console.log(`[读取链路] ${id}：本次读取 ${readSessions} 条 / 上限 ${readLimit}` +
+    (readLimit > READ_LIMIT ? `（只有 ${workSessions} 次干活记录，往前多读一些）` : `（干活记录 ${workSessions} 次，照常只读最近 ${READ_LIMIT} 条）`));
 
   // 上游：谁给它发过活（Message from …(@handle)）+ 会话来源；下游：它 message_agent 过谁
   const up = new Map();
@@ -202,7 +213,8 @@ async function readChain(id) {
 
   return {
     ok: true, id, name: meta.name, section: meta.section, desc: meta.desc, soul, readAt: Date.now(), dbError,
-    stats: { sessions: db.sessions || 0, toolCalls: db.toolCalls || 0, first: db.first || null, last: db.last || null, bySource: db.bySource || {}, excluded: db.excluded || 0 },
+    stats: { sessions: db.sessions || 0, toolCalls: db.toolCalls || 0, first: db.first || null, last: db.last || null, bySource: db.bySource || {}, excluded: db.excluded || 0,
+      workSessions, readLimit, readSessions },
     tasks, samples,
     tools: (db.tools || []).slice(0, 14),
     skills,
@@ -212,7 +224,7 @@ async function readChain(id) {
   };
 }
 
-module.exports = { readChain, chainSQL, bucket, redact, PROFILES_DIR };
+module.exports = { readChain, chainSQL, bucket, redact, PROFILES_DIR, READ_LIMIT, READ_LIMIT_MORE, READ_WORK_SMALL };
 
 // 直接跑：node chain.js <agent>   （打印读到的原料，方便核对；agent 名必须显式给）
 if (require.main === module) {

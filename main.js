@@ -74,16 +74,20 @@ function askAgent({ profile, prompt, timeoutMs = 120000, toolsets }) {
 
 /** 流式：边跑边把事件推给渲染层（Hermes 的对话框效果靠它） */
 const runs = new Map();
+// 验收用：WF_READ_FAKE=hang 时，分析这条链路起一个不出声的子进程，用来验「没有输出时到点自己收场」。
+// 平时不设这个环境变量就一点也不影响（只有读取链路的分析会被替换，别的对话照常）。
+const READ_FAKE = process.env.WF_READ_FAKE || '';
 ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000, toolsets }) => new Promise((resolve) => {
   if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES });
   const args = ['-p', profile, 'chat', '--format', 'stream-json'];
   if (toolsets) args.push('-t', String(toolsets));     // 只给指定工具组（分析链路时 todo,no_mcp：不能跑命令、不能写文件、不碰 MCP 接口）
   args.push('-q', prompt);
-  const child = spawn(HERMES, args, { env: { ...process.env } });
+  const fake = READ_FAKE === 'hang' && toolsets === 'todo,no_mcp';
+  const child = fake ? spawn('/bin/sleep', ['600'], { env: { ...process.env } }) : spawn(HERMES, args, { env: { ...process.env } });
   runs.set(runId, child);
-  let buf = '', finalText = '', tokens = null, err = '';
+  let buf = '', finalText = '', tokens = null, err = '', killedByTimeout = false;
   const send = ev => { try { if (!e.sender.isDestroyed()) e.sender.send('agent:event', { runId, ev }); } catch (_) { } };
-  const timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch (_) { } }, timeoutMs);
+  const timer = setTimeout(() => { killedByTimeout = true; try { child.kill('SIGTERM'); } catch (_) { } }, timeoutMs);
   child.stdout.on('data', d => {
     buf += d.toString('utf8');
     let i;
@@ -99,7 +103,7 @@ ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000,
   child.on('error', e2 => { clearTimeout(timer); runs.delete(runId); resolve({ ok: false, error: String(e2) }); });
   child.on('close', code => {
     clearTimeout(timer); runs.delete(runId);
-    resolve({ ok: code === 0, code, text: finalText, tokens, error: err.slice(-2000) });
+    resolve({ ok: code === 0 && !killedByTimeout, code, text: finalText, tokens, error: err.slice(-2000), timedOut: killedByTimeout });
   });
 }));
 ipcMain.handle('agent:cancel', (_e, runId) => {

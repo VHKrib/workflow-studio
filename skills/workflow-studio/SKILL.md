@@ -308,6 +308,11 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
 | 起进程 | `main.js` | `ipcMain.handle('agent:chain')` 转给 `readChain`；`agent:stream` spawn `hermes -p <id> chat --format stream-json -t <toolsets> -q <prompt>`，逐行转 `agent:event`，子进程存进 `runs`；`agent:cancel` 真 `kill('SIGTERM')`；超时也 SIGTERM | 不解析卡片、不判断拆得好不好、不碰画布状态（它不知道什么是卡） |
 | 预览与落卡 | `renderer/app.js` | `rd` 状态 + `openRead/paintRead/pickRead/analyzeChain/parseChainPlan/planProblem/layoutChain/placeChain/playArrival`；流式只追加预览格子，不重建 DOM | 不许绕过 `planProblem()` 闸门、不许在按钮之外调 `placeChain()`、不许自己决定执行方（`placeChain` 里执行方 = 被读的 agent） |
 
+读多少条：默认最近 80 条会话；**真干过活（`tool_call_count > 0`）的记录少于 30 次**的 agent（合作邀约这种），
+窗口放到 300 条，免得稀疏的几条干活记录被一堆闲聊挤出窗口；记录多的照旧 80，不拖慢。上限写在
+`chain.js` 的 `READ_LIMIT / READ_LIMIT_MORE / READ_WORK_SMALL`，在 SQL 里用 `CASE` 算（不读两次库）。
+每次读取在主进程日志打一行 `[读取链路] <agent>：本次读取 N 条 / 上限 80|300`，窗口「⚙ 读到的线索」里也有。
+
 ### 五条不变量（验过的，改代码必须保住）
 
 1. **分析用的 agent 只给 `todo,no_mcp`**（`READ_TOOLSETS`）：跑不了命令、读写不了文件、发不了消息、碰不到任何 MCP 接口。`cdp-read.js` 的 `stream` 断言会查工具组就是这两个、且这次真的只调过 `todo_list`。
@@ -316,11 +321,28 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
 4. **同一时刻只允许一个分析在跑**：`analyzeChain()` 用 `rd.busy` 挡重入，`pickRead()` 先取消旧的再开新的；`rd.token` 让旧的结果回来时自己作废。
 5. **读别人的记录一律只读**：`state.db` 只读 URI 打开，不写不改；派活原文里夹着的密钥先 `redact()` 抹掉再进分析（`chainSQL` 取出的 `ask`/`done`/标题都过一遍）。
 
+### 卡住要收场、能重来（验收：`cdp-read-stability.js`）
+
+- **总预算 `READ_BUDGET_MS` = 150 秒**（`preload.js` 从 `WF_READ_TIMEOUT_MS` 读，默认 150000；界面没有开关）。
+  一次分析 + 自动重来一次共用这个预算。实测正常 40–70 秒拆完，给到 2 分半是留一档慢模型的余量，
+  又不至于让人对着「正在拆卡」干等 4 分钟。
+- **两道刹车**：主进程 `agent:stream` 到点 SIGTERM（回包带 `timedOut: true`）；渲染层再兜一层
+  `Promise.race`（预算 +3 秒），万一 IPC 不回来也不会一直转圈，并把 runId 杀掉。
+- **断流/超时/取消都不留半张卡**：`analyzeChain()` 在 `ok=false`（断了/到点）时**不自动重来**，
+  直接清预览（`clearReadPreview()`）、写一句人话、开「重来」；`cancelRead()` 只收正在跑的那次
+  （`rd.msgs=[]`、`rd.plan=null`、清预览），已经拆好的结果不动。
+- **重来真重来**：`analyzeChain()` 开头先 `killReadRun()`；每次尝试用新的 `runId`，`active` 标志让
+  上一轮晚到的事件不往预览里写——同时只允许一个进程往预览里写。
+- **进度说人话**：气泡和底部提示每秒刷新 `readProgress()`——「还在拆，已经理出 N 张（已等 N 秒）」；
+  20 秒（`READ_STALL_MS`）没有新内容就改说「这一步有点慢：N 秒没有新内容，它还在想，不是卡住了」。
+
 ### 这次踩过的坑（现象 → 现在的做法）
 
 - **拆出来的连线把两张输入卡连在一起，链路断成两截** → `parseChainPlan()` 的 `add()` 直接拒绝「连进输入卡」和「输入→输入」；再给没人喂的加工卡补线（接前面最近的输入/加工）、给没人接的加工卡接后面最近的输出，落单的输入/输出也补一下。`planProblem()` 最后查整条是否连成一片，断成几截就判不过、自动重来。
 - **卡片压在右下角对话框底下** → `placeChain()` 之后走 `fitView(true)`：挨着对话框放不下（要缩到 0.5 以下）就把对话框自动收成药丸，卡片不铺到它下面。
-- **分析吐出一张卡之后停住** → 现象是流里只冒出一张卡就没了下文（模型把 JSON 写断）。现在：`runStream` 有 240s 超时，`main.js` 到点 SIGTERM 收尾；`analyzeChain()` 最多自动重跑一次（`attempt < 2`），还不行就把「还是没拆好 + 它的原话」写进窗口，人可以自己点「重新分析」。第 2 张卡会去治根（提示词/时长/上限），这里先只写行为。
+- **分析吐出一张卡之后停住** → 现象是流里只冒出一张卡就没了下文（模型把 JSON 写断）。现在：总预算 150 秒
+  （`READ_BUDGET_MS`，主进程到点 SIGTERM + 渲染层兜底），`analyzeChain()` 在跑完但拆得不好时最多自动重跑一次
+  （`attempt < 2`）；中途断了/到点就不重跑，直接「这次没拆全 / 到点了」+ 重来。第 2 张卡会去治根（提示词/时长/上限）。
 - **只限制工具组时，被读 agent 挂着的 MCP 接口仍然可见可调** → 工具组写的是 `todo,no_mcp`：`no_mcp` 把 MCP 连接一起关掉，不只是收窄常规工具。
 
 ### 跑验收
@@ -333,6 +355,11 @@ CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read.js --agent <agent-id>
 #   agent 必须显式传（脚本没有默认值）。期望 PASS：open / layout / read / stream / plan / place / arrive / esc / errors
 #   stream = 卡一张张冒出来、只调 todo_list；place = 新工作流、执行方=被读的 agent、不重叠不压对话框；arrive = 动画收干净
 #   这条会真实调用分析用的 agent：同一张卡最多跑 2 次
+node skills/workflow-studio/scripts/cdp-read-stability.js --agent <agent-id> --mode kill
+#   正常上限实例：跑到一半杀子进程 →「这次没拆全」+ 重来 + 预览清空；重来后同时只有 1 个分析进程；关窗 0 个
+#   小上限实例（WF_READ_FAKE=hang WF_READ_TIMEOUT_MS=12000）再加 --mode hang / --mode timeout：
+#   不出声也到点自己收场、重来可用、预览不留半张卡
+#   正常上限实例 --mode stall：20 秒没有新内容时，气泡和底部都写「它在想，不是卡住了」
 node skills/workflow-studio/scripts/cdp-canvas.js        # 老功能回归：平移/缩放锚点/拖动/连线/布局
 node skills/workflow-studio/scripts/cdp-dock.js          # 老功能回归：拖卡进插槽、拒绝成圈、拔出、成果槽、动画收干净
 node skills/workflow-studio/scripts/cdp-click.js --card "<卡片标题>" --mode double   # 老功能回归：单击只选中、双击开卡

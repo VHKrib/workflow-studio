@@ -13,6 +13,8 @@ contextBridge.exposeInMainWorld('tcflow', {
   },
   // 只读：读一个 agent 的工作链路原料
   readAgentChain: (id) => ipcRenderer.invoke('agent:chain', id),
+  // 一次分析最多等多久（毫秒）。默认 150 秒；WF_READ_TIMEOUT_MS 只给验收把上限调小用，界面上没有开关。
+  readTimeoutMs: Math.max(5000, Number(process.env.WF_READ_TIMEOUT_MS) || 150000),
   // 共享链路状态文件（人和 agent 共用一份底稿；画布写、人/agent 读）
   linkDir: () => ipcRenderer.invoke('link:dir'),
   linkPath: (id) => ipcRenderer.invoke('link:path', id),
