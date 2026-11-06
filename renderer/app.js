@@ -25,7 +25,11 @@ const USE_STREAM = true;   // true：真流式（Hermes 的边跑边出，但 CL
 const DOCK_AGENT = 'default';        // 右下角对话框固定对接「平台主管」（default profile）
 const TEMP_ID = '__temp__';          // 临时对话画布：跟着这次对话存在，不进工作流列表
 let tempFlow = null;                 // 临时画布的数据（不写 localStorage，关掉就没了）
-const LINK = { paths: {}, timer: 0, applying: false, delay: 350 };  // 共享链路状态文件（人和 agent 共用一份底稿）
+const LINK = { paths: {}, timer: 0, pendingId: '', applying: false, delay: 350 };  // 共享链路状态文件（人和 agent 共用一份底稿）
+// 版本：每条链路最近 20 版的底稿（人改一次 / agent 提议应用一次 = 一版；拖动位置不算）
+const VER = { max: 20, delay: 300, list: {}, sig: {}, paths: {}, timer: 0, pending: {}, busy: false };
+let changeBy = 'me';        // 这一批改动是谁做的：'me' 人 / 'agent' agent 提议后应用
+const RUNS = new Map();     // 正在跑的对话 runId → { flowId, cancelled }：回滚时按链路把它们停掉
 let store = { workflows: [], current: null };
 let selId = null;          // 只是选中（转盘/删除键用），不打开任何面板
 let panelCardId = null;     // 右栏正在看哪张卡：只有双击卡片（或卡上的按钮）才会打开
@@ -84,6 +88,7 @@ function cardLine(n, i) {
       window.tcflow.onLinkExternal(({ id, doc }) => { if (id !== TEMP_ID) applyLinkDoc(doc); });
     }
   } catch (e) { }
+  await initVersions();                 // 版本：老链路先记一版基线，之后每次改动才有回滚点
 })();
 
 function bindUI() {
@@ -266,13 +271,14 @@ function loadStore() {
 }
 // 画布改动 → 本地存储 + 共享状态文件（临时画布不写本地存储：关掉就没了）
 // bump=false：只是聊天/状态点这种不影响链路结构的改动，不算新版本、也不写文件（文件里只有链路）
+// bump=true 也不一定出「一版」：连续改动按一次算（见 scheduleVersion），位置变化不算内容改动
 function saveStore(bump = true) {
   const w = flow();
   const touch = bump && !LINK.applying;
-  if (w && touch) { w.version = (w.version || 0) + 1; w.updated_at = Date.now(); }
+  if (w && touch) w.updated_at = Date.now();
   const current = store.current === TEMP_ID ? (store.workflows[0] ? store.workflows[0].id : null) : store.current;
   try { localStorage.setItem(LS_KEY, JSON.stringify({ workflows: store.workflows, current })); } catch (e) { }
-  if (w && touch) queueLinkWrite(w);
+  if (w && touch) { scheduleVersion(w); queueLinkWrite(w); }
 }
 
 // ---------- 共享链路状态文件（人和 agent 共用的一份底稿） ----------
@@ -291,6 +297,9 @@ function linkDoc(w) {
     agent_name: w.agent ? execName(w.agent) : null,
     version: w.version || 1,
     updated_at: new Date(w.updated_at || Date.now()).toISOString(),
+    // 版本记录（最近 20 版）在另一个文件里；agent 想知道「刚才有没有回滚」看这两行就够
+    versions_path: VER.paths[w.id] || null,
+    rollback: w.rollback ? { at: new Date(w.rollback.at).toISOString(), from: w.rollback.from, to: w.rollback.to } : null,
     summary: {
       cards: w.nodes.length,
       edges: w.edges.length,
@@ -307,14 +316,23 @@ function linkDoc(w) {
     edges: w.edges.map(e => [e[0], e[1]]),
   };
 }
+function flushLinkWrite(id) {
+  if (!id || !window.tcflow || !window.tcflow.linkWrite) return;
+  const cur = id === TEMP_ID ? tempFlow : store.workflows.find(x => x.id === id);
+  if (!cur) return;
+  window.tcflow.linkWrite({ id, doc: linkDoc(cur) }).then(r => { if (r && r.path) LINK.paths[id] = r.path; }).catch(() => { });
+}
 function queueLinkWrite(w) {
   if (!window.tcflow || !window.tcflow.linkWrite || !w) return;
-  clearTimeout(LINK.timer);
   const id = w.id;
+  // 已经排了一次写、而且是同一条链路：让它按原时间写（写的时候读的是最新内容，版本号也已经是新的）。
+  // 别把每次改动都往后推——推来推去，坏文件要等更久才被好文件盖掉。
+  if (LINK.timer && LINK.pendingId === id) return;
+  if (LINK.timer) { const prev = LINK.pendingId; clearTimeout(LINK.timer); LINK.timer = 0; LINK.pendingId = ''; flushLinkWrite(prev); }  // 换了一条链路：先把上一条写掉
+  LINK.pendingId = id;
   LINK.timer = setTimeout(() => {
-    const cur = id === TEMP_ID ? tempFlow : store.workflows.find(x => x.id === id);
-    if (!cur || !window.tcflow.linkWrite) return;
-    window.tcflow.linkWrite({ id, doc: linkDoc(cur) }).then(r => { if (r && r.path) LINK.paths[id] = r.path; }).catch(() => { });
+    const cur = id; LINK.timer = 0; LINK.pendingId = '';
+    flushLinkWrite(cur);
   }, LINK.delay);
 }
 // 状态文件被外面改了（人改、别的工具改）：版本更大就认领回来，只重画变了的那几张卡
@@ -352,7 +370,7 @@ function applyLinkDoc(doc) {
     $('#flowName').value = w.name;
     $('#flowAgent').innerHTML = agentOptionsHTML(w.agent);
     patchNodesDiff();
-    $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+    $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线 · v${w.version || 1}`;
   }
   renderWorkflowList();
   return true;
@@ -390,6 +408,216 @@ function paintOne(n) {
 }
 
 
+// ---------- 版本：最近 20 版 + 控制台回滚 ----------
+// 一条链路只留最近 20 版（用户明确说不要全量历史）。每一版是一份「能把整条链路带回去」的底稿：
+// 卡片 / 连线 / 每张卡的模块 / 正文 / 内部实现 / 校验 / 坐标 / 执行方 / 链路名。
+// 出「一版」的时机：一次完整改动（连续打字、连着加卡+连线按一次算；拖动位置不算内容改动）。
+const hhmm = t => { const d = new Date(t || Date.now()); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+
+function verSnapshot(w) {
+  return {
+    name: w.name || '',
+    agent: w.agent || '',
+    cards: (w.nodes || []).map(n => ({
+      id: n.id, kind: n.kind, title: n.title, body: n.body || '', impl: implOf(n),
+      mods: modsOf(n).map(m => ({ type: m.type, name: m.name })),
+      checks: (n.checks || []).slice(),
+      x: Math.round(n.x || 0), y: Math.round(n.y || 0),
+    })),
+    edges: (w.edges || []).map(e => [e[0], e[1]]),
+  };
+}
+// 内容指纹：不含坐标——挪卡片不算内容改动，不产生版本
+function verContent(s) {
+  if (!s) return '';
+  return JSON.stringify([s.name || '', s.agent || '',
+    (s.cards || []).map(c => [c.id, c.kind, c.title, c.body, c.impl, (c.mods || []).map(m => m.type + ':' + m.name), c.checks || []]),
+    (s.edges || []).map(e => e.join('>')).sort()]);
+}
+// 这一版改了什么：说人话，是哪张卡的哪个环节
+function verWhat(prev, next) {
+  if (!prev) return '新建链路';
+  const parts = [];
+  const pm = new Map((prev.cards || []).map(c => [c.id, c])), nm = new Map((next.cards || []).map(c => [c.id, c]));
+  for (const c of next.cards || []) if (!pm.has(c.id)) parts.push(`加了卡「${c.title}」`);
+  for (const c of prev.cards || []) if (!nm.has(c.id)) parts.push(`删了卡「${c.title}」`);
+  for (const c of next.cards || []) {
+    const o = pm.get(c.id); if (!o) continue;
+    const f = [];
+    if (o.kind !== c.kind) f.push('类型');
+    if (o.title !== c.title) f.push('名字');
+    if (o.body !== c.body) f.push('正文');
+    if (o.impl !== c.impl) f.push('内部实现');
+    if (JSON.stringify(o.mods || []) !== JSON.stringify(c.mods || [])) f.push('模块');
+    if (JSON.stringify(o.checks || []) !== JSON.stringify(c.checks || [])) f.push('校验');
+    if (f.length) parts.push(`改「${c.title}」的${f.join('、')}`);
+  }
+  const pe = new Set((prev.edges || []).map(e => e.join('>'))), ne = new Set((next.edges || []).map(e => e.join('>')));
+  const addE = [...ne].filter(k => !pe.has(k)).length, delE = [...pe].filter(k => !ne.has(k)).length;
+  if (addE) parts.push(`加了 ${addE} 条连线`);
+  if (delE) parts.push(`删了 ${delE} 条连线`);
+  if ((prev.agent || '') !== (next.agent || '')) parts.push(`执行方改成「${execName(next.agent)}」`);
+  if ((prev.name || '') !== (next.name || '')) parts.push(`链路名改成「${next.name}」`);
+  if (!parts.length) return '更新';
+  return parts.slice(0, 5).join('；') + (parts.length > 5 ? ` 等 ${parts.length} 处` : '');
+}
+// 一次完整改动 = 一版：连续改动在 300ms 里并成一次，别把版本刷爆
+// 待记的改动按链路 id 分开存（两条链路在同一瞬间各自改一下，谁也不丢）
+function scheduleVersion(w, by) {
+  if (!w || w.temp || w.id === TEMP_ID) return;
+  if (LINK.applying) return;                          // 外部认领不是人改的：不记版本
+  const sig = verContent(verSnapshot(w));
+  if (sig === (VER.sig[w.id] || '')) return;           // 只有位置变了 → 不产生版本
+  VER.pending[w.id] = by || changeBy || 'me';
+  clearTimeout(VER.timer);
+  VER.timer = setTimeout(commitVersions, VER.delay);
+}
+function commitVersions() {
+  VER.timer = 0;
+  const todo = VER.pending; VER.pending = {};
+  for (const id of Object.keys(todo)) {
+    const w = store.workflows.find(x => x.id === id);
+    if (w) commitVersion(w, todo[id]);
+  }
+}
+function commitVersion(w, by) {
+  const snap = verSnapshot(w);
+  const sig = verContent(snap);
+  if (sig === (VER.sig[w.id] || '')) return;
+  const list = VER.list[w.id] || [];
+  const prev = list.length ? list[list.length - 1] : null;
+  const v = prev ? Math.max(prev.v, w.version || 0) + 1 : Math.max(1, w.version || 1);
+  w.version = v;
+  if (w.rollback && !w.rollback.settled) w.rollback.settled = true;   // 回滚之后又改了内容：提示改成「曾经回滚」
+  const entry = { v, at: Date.now(), by: by || 'me', what: verWhat(prev && prev.snapshot, snap), snapshot: snap };
+  pushVersion(w.id, entry);
+  queueLinkWrite(w);                                   // 版本号变了，状态文件跟着写新版本号
+}
+function pushVersion(id, entry) {
+  VER.sig[id] = verContent(entry.snapshot);
+  VER.list[id] = (VER.list[id] || []).filter(x => x.v !== entry.v).concat([entry]).sort((a, b) => a.v - b.v).slice(-VER.max);
+  try {
+    const r = window.tcflow.versionPush({ id, entry });
+    if (r && r.then) r.then(res => {
+      if (res && Array.isArray(res.list)) VER.list[id] = res.list;
+      if (res && res.path) VER.paths[id] = res.path;
+      paintVersionBox();
+    }).catch(() => { });
+  } catch (e) { }
+}
+
+// agent 提议、人点了确认才落地的那几处：这一批改动记成「agent 提议后应用」
+function saveAs(by) { const prev = changeBy; changeBy = by; saveStore(); changeBy = prev; }
+
+// 载入/补一版基线：新链路第一次打开时先记下「现在长什么样」，之后每次改动才有回滚点
+async function initVersions() {
+  for (const w of store.workflows) {
+    try {
+      const r = await window.tcflow.versionList(w.id);
+      const list = (r && r.list) || [];
+      if (r && r.path) VER.paths[w.id] = r.path;
+      if (!list.length) {
+        w.version = w.version || 1;
+        const snap = verSnapshot(w);
+        const entry = { v: w.version, at: Date.now(), by: 'me', what: '开始记版本（当前状态）', snapshot: snap };
+        VER.list[w.id] = [entry]; VER.sig[w.id] = verContent(snap);
+        const res = await window.tcflow.versionPush({ id: w.id, entry });
+        if (res && Array.isArray(res.list)) VER.list[w.id] = res.list;
+        if (res && res.path) VER.paths[w.id] = res.path;
+      } else {
+        VER.list[w.id] = list;
+        const top = list[list.length - 1];
+        w.version = Math.max(w.version || 1, top.v || 1);
+        VER.sig[w.id] = verContent(top.snapshot);
+        if (top.rollback) w.rollback = { at: top.at, from: top.from, to: top.rollback.to, v: top.v, settled: false };
+      }
+    } catch (e) { }
+  }
+  paintVersionBox();
+}
+
+// 把一份快照搬回链路：卡片、连线、模块、正文、内部实现、校验、执行方、链路名一个不漏。
+// 位置不搬到旧版：卡片没被回滚掉的继续待在原处（拖位置本来就是「不算改动」的东西）。
+function applyVerSnapshot(w, snap, keepPos) {
+  const old = new Map((w.nodes || []).map(n => [n.id, n]));
+  if (snap.name) w.name = snap.name;
+  w.agent = snap.agent || '';
+  w.nodes = (snap.cards || []).map(c => {
+    const prev = old.get(c.id) || {};
+    const now = keepPos && keepPos.get(c.id);
+    return {
+      id: c.id || uid(),
+      kind: ['in', 'proc', 'out'].includes(c.kind) ? c.kind : 'proc',
+      title: String(c.title || ''), body: String(c.body || ''), impl: String(c.impl || ''),
+      mods: (c.mods || []).map(m => ({ id: uid(), type: m.type || KIND_MOD[c.kind] || 'tool', name: String(m.name || '') })),
+      checks: (c.checks || []).slice(), chat: (prev.chat || []).slice(), status: prev.status || 'idle',
+      x: now ? now.x : (Number(c.x) || 0), y: now ? now.y : (Number(c.y) || 0),
+    };
+  });
+  const ids = new Set(w.nodes.map(n => n.id));
+  w.edges = (snap.edges || []).filter(e => Array.isArray(e) && ids.has(e[0]) && ids.has(e[1]));
+}
+
+// 回滚：把整条链路带回第 v 版；回滚本身也记一版（不删后面的版本，所以回得去、也再回得来）
+function rollbackTo(v) {
+  const w = flow();
+  if (!w || w.temp || w.id === TEMP_ID) return false;
+  const list = VER.list[w.id] || [];
+  const entry = list.find(x => x.v === Number(v));
+  if (!entry || !entry.snapshot) return false;
+  // 正在跑的对话先停掉：它跑在作废的链路上，不能让它继续做
+  const stopped = cancelRunsFor(w.id);
+  const from = w.version || 0;
+  const keepPos = new Map(verSnapshot(w).cards.map(c => [c.id, c]));
+  applyVerSnapshot(w, entry.snapshot, keepPos);
+  const newV = Math.max(from, ...list.map(x => x.v || 0)) + 1;
+  w.version = newV; w.updated_at = Date.now();
+  w.rollback = { at: Date.now(), from, to: Number(v), v: newV, settled: false };
+  const snap = verSnapshot(w);
+  VER.sig[w.id] = verContent(snap);
+  pushVersion(w.id, { v: newV, at: Date.now(), by: 'me', what: `回滚到 v${v}` + (stopped ? `（停掉 ${stopped} 个正在跑的对话）` : ''), snapshot: snap, rollback: { to: Number(v) } });
+  if (!find(selId)) selId = null;
+  if (!find(panelCardId)) { panelCardId = null; panelOpen = true; }
+  saveStore(false);                                    // 落本地存储（不算新改动：版本已经在上面记了）
+  queueLinkWrite(w);                                   // 状态文件立刻跟上
+  renderWorkflowList();                                // 右栏的卡数/执行方跟着变
+  render();
+  centerView();                                        // 只挪视口，不动缩放：回滚不该把画面缩掉
+  console.log(`[版本] 回滚 ${w.id}：v${from} → v${v}（记为新版本 v${newV}，停掉 ${stopped} 个运行）`);
+  return true;
+}
+
+// 回滚（和关链路）时把这条链路上正在跑的对话停掉：真发取消到主进程，子进程会被 SIGTERM 杀掉
+function cancelRunsFor(id) {
+  let n = 0;
+  for (const [runId, r] of RUNS) {
+    if (r.flowId !== id) continue;
+    r.cancelled = true; n++;
+    try { window.tcflow.cancelAgent(runId); } catch (e) { }
+    console.log(`[版本] 停掉正在跑的对话 ${runId}（链路 ${id} 已回滚，运行作废）`);
+  }
+  return n;
+}
+
+// 概览里的版本列表：最近 20 版，一条一行（第几版 / 什么时候 / 改了什么 / 谁改的），点一行回到那一版
+function verRowsHTML(w) {
+  const list = (VER.list[w.id] || []).slice().reverse();
+  return list.map(e => `<div class="verrow${e.v === (w.version || 1) ? ' on' : ''}" data-v="${e.v}" title="v${e.v} · ${hhmm(e.at)} · ${esc(e.what || '')}（点一下回到这一版；回滚也算新的一版，随时再回来）">
+      <b>v${e.v}</b><span class="vt">${hhmm(e.at)}</span>
+      <span class="vw">${esc(e.what || '')}</span>
+      <span class="vby${e.by === 'agent' ? ' agent' : ''}">${e.by === 'agent' ? 'agent' : '人'}</span>
+    </div>`).join('');
+}
+function paintVersionBox() {
+  const box = document.querySelector('#verList');
+  if (!box) return;
+  const w = flow();
+  if (!w || w.temp || w.id === TEMP_ID) { box.innerHTML = ''; return; }
+  box.innerHTML = verRowsHTML(w);
+  box.querySelectorAll('.verrow').forEach(el => el.onclick = () => rollbackTo(el.dataset.v));
+}
+
+
 // ---------- 工作流 ----------
 function createWorkflow(name, seed = false) {
   if (isTemp()) dropTemp();
@@ -413,14 +641,16 @@ function createWorkflow(name, seed = false) {
   saveStore(); renderWorkflowList(); render();
   return w;
 }
-function switchWorkflow(id) { if (isTemp()) dropTemp(); store.current = id; selId = null; panelCardId = null; panelOpen = false; saveStore(); renderWorkflowList(); render(); centerView(); }
+function switchWorkflow(id) { if (isTemp()) dropTemp(); store.current = id; selId = null; panelCardId = null; panelOpen = false; saveStore(false); renderWorkflowList(); render(); centerView(); }
 function deleteWorkflow(id, ev) {
   ev.stopPropagation();
   if (store.workflows.length <= 1) return alert('至少保留一个工作流');
   if (!confirm('删除这个工作流？画布内容会一起删掉。')) return;
   store.workflows = store.workflows.filter(w => w.id !== id);
   if (store.current === id) store.current = store.workflows[0].id;
-  saveStore(); renderWorkflowList(); render();
+  delete VER.list[id]; delete VER.sig[id]; delete VER.paths[id];
+  try { window.tcflow.versionDrop(id); } catch (e) { }   // 链路删了，它的版本底稿也一起清掉
+  saveStore(false); renderWorkflowList(); render();
 }
 function renderWorkflowList() {
   const box = $('#wfList'); box.innerHTML = '';
@@ -465,7 +695,7 @@ function addNode(kind, props = {}, select = true) {
   const n = Object.assign(base, { x: 60 + offset, y: 520 + offset }, props);
   flow().nodes.push(n);
   if (select) selId = n.id;
-  saveStore(); render();
+  saveStore(); renderWorkflowList(); render();   // 右栏的「N 卡」跟着变
   return n;
 }
 function delNode(id) {
@@ -473,7 +703,7 @@ function delNode(id) {
   flow().edges = flow().edges.filter(([a, b]) => a !== id && b !== id);
   if (selId === id) selId = null;
   if (panelCardId === id) { panelCardId = null; panelOpen = false; }
-  saveStore(); render();
+  saveStore(); renderWorkflowList(); render();
 }
 function connect(aId, bId, animate = true) {
   if (aId === bId) return;
@@ -499,7 +729,7 @@ function render() {
   renderPanel();
   renderDock();
   renderTempBar();
-  $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+  $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线 · v${w.version || 1}`;
   syncEmptyRead();
 }
 // 空画布上的「读取 agent 链路」按钮：跟着卡片数走。
@@ -732,7 +962,7 @@ function dragCard(e, n, el) {
       return;
     }
     keepInView();
-    saveStore();
+    saveStore(false);                       // 只是挪了位置：不产生版本（位置本来就不算内容改动）
   };
   addEventListener('pointermove', move); addEventListener('pointerup', up);
   wake();
@@ -860,7 +1090,7 @@ function denyDock(n, el, d, from, token) {
   const sock = d.pe.querySelector(`.sock[data-sock="${d.sock}"]`);
   n.x = from.x; n.y = from.y;
   el.style.left = (n.x + OX) + 'px'; el.style.top = (n.y + OY) + 'px';
-  drawEdges(); saveStore();
+  drawEdges(); saveStore(false);            // 弹回原处只是挪位置：不产生版本
   if (reducedMotion()) { el.style.transition = ''; return; }
   if (sock) sock.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-6px)' }, { transform: 'translateX(5px)' },
     { transform: 'translateX(-3px)' }, { transform: 'translateX(0)' }], { duration: 340, easing: 'ease-in-out' });
@@ -1022,10 +1252,15 @@ function renderPanel() {
       <label>这条流程的执行 agent</label>
       <select id="pFlowAgent">${agentOptionsHTML(w.agent)}</select>
       <div style="margin-top:10px">${rows}</div>
+      <div class="verbox">
+        <div class="verhd">版本<span class="sp"></span><span class="vn">v${w.version || 1} · ${(VER.list[w.id] || []).length} 条</span></div>
+        <div class="verlist" id="verList"></div>
+      </div>
       <button id="pAskFlow" class="primary" style="width:100%;margin-top:12px">让 agent 看整条流程</button>
       <div id="agentOut">（agent 会读全部卡片，指出断链、缺校验的地方）</div>`;
     $('#pFlowAgent').onchange = e => { w.agent = e.target.value; saveStore(); renderWorkflowList(); render(); };
     $('#pAskFlow').onclick = askFlow;
+    paintVersionBox();                                  // 版本列表：点一行就回到那一版
     return;
   }
   const k = KINDS[n.kind];
@@ -1130,11 +1365,20 @@ const MODS_RULE = 'mods 把这张卡用到的东西拆成短词模块（每块 8
 const LINK_RULE = '画布你只能读：不能加卡、改字、删卡、连线。你想改，就在回答里写一条提议（「提议：把「卡名」的加工方式改成 …」），人点了才会生效；不要说「我已经改好了」。状态文件也是只读的：不要用写文件、跑命令之类的工具去改它。';
 function linkBrief(w) {
   const p = LINK.paths[w.id] || (w.temp ? '（临时画布：应用数据目录 links/__temp__.json）' : '（应用数据目录 links/ 下，按链路 id 命名）');
+  const vp = VER.paths[w.id];
   return [
     `【这条链路的状态 · 只读】第 ${w.version || 1} 版｜执行方：${execName(w.agent)}｜${w.nodes.length} 张卡 / ${w.edges.length} 条连线`,
     `状态文件（可以直接打开读；卡片、模块、内部实现、连线都在里面）：${p}`,
+    vp ? `版本记录（最近 ${VER.max} 版，含每次改动与回滚）：${vp}` : '',
     LINK_RULE,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
+}
+// 「现在是第几版、刚才回滚到哪一版」——只走「叫 agent 的那一下把上下文写进提示词」，不改任何岗位配置、不动 SOUL.md
+function verHead(w) {
+  const v = w.version || 1, rb = w.rollback;
+  if (!rb) return [`【当前链路版本 v${v}】`];
+  if (!rb.settled) return [`【版本状态 · 必须出现在你回答的第一句话里】当前链路版本 v${v}；用户在 ${hhmm(rb.at)} 把它回滚到了 v${rb.to}，v${rb.to} 之后的改动已作废。`];
+  return [`【版本状态】当前链路版本 v${v}；用户曾在 ${hhmm(rb.at)} 把它回滚到 v${rb.to}，之后又改过（已记为新版本）。`];
 }
 async function askFlow() {
   const w = flow();
@@ -1142,7 +1386,8 @@ async function askFlow() {
   if (!$('#agentOut')) { panelOpen = true; panelCardId = null; render(); }
   const out = $('#agentOut');
   const desc = chainOrder(w).map(cardLine).join('\n');
-  const prompt = ['你是这条工作流的执行方。只做评审：不执行、不发请求、不改文件、不付费。',
+  const prompt = [...verHead(w),
+    '你是这条工作流的执行方。只做评审：不执行、不发请求、不改文件、不付费。',
     PLAIN_RULE,
     `工作流：${w.name}`, desc, '',
     linkBrief(w), '',
@@ -1278,6 +1523,7 @@ function buildChatPrompt(n, text) {
   const hist = (n.chat || []).slice(-7, -1)
     .map(m => (m.role === 'me' ? '我：' : '你：') + m.text).join('\n');
   return [
+    ...verHead(w),
     '我们在工作流开发平台里聊一条工作流，你作为执行方只做建议：不执行、不发请求、不改文件、不付费。',
     PLAIN_RULE,
     `工作流：${w.name}`,
@@ -1304,6 +1550,9 @@ function stepLabel(name) { return (STEP_ICON[name] || '⚙') + ' ' + name; }
 
 async function runStream({ msgs, rerender, profile, prompt, toolsets, cards = true, runId, timeoutMs }) {
   runId = runId || ('r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
+  const flowId = (flow() || {}).id || '';
+  const me = { flowId, cancelled: false };
+  RUNS.set(runId, me);                                  // 回滚时按链路把正在跑的这次停掉
   const live = { role: 'agent', text: '', think: '', steps: [], secs: '', live: true, startedAt: Date.now() };
   msgs.push(live);
   rerender();
@@ -1338,13 +1587,23 @@ async function runStream({ msgs, rerender, profile, prompt, toolsets, cards = tr
     live.text = p.answer || ''; live.think = p.think || ''; live.steps = p.steps || []; live.secs = p.secs || String(Math.round((Date.now() - t0) / 1000));
   }
   off();
+  RUNS.delete(runId);
   live.live = false;
+  live.cancelled = !!me.cancelled;
   live.secs = String(Math.max(1, Math.round((Date.now() - live.startedAt) / 1000)));
   live.ok = !!(r && r.ok);
   live.error = (r && r.error) || '';
   live.timedOut = !!(r && r.timedOut);          // 主进程到点杀的：界面按「到点了」收场，不说成「中途断了」
   live.steps.forEach(st => { if (st.state === 'running') { st.state = 'error'; st.time = ''; } });
   if (!live.text && r && r.text) live.text = r.text;
+  // 这次运行跑到一半链路被回滚了：停掉的运行不能在作废的链路上继续产出（候选卡一张都不收）
+  if (live.cancelled) {
+    live.steps.forEach(st => { if (st.state !== 'error') { st.state = 'error'; } });
+    live.human = '这条链路被回滚了，这次运行已经停掉；下次带新版本重开。';
+    live.error = live.error || 'cancelled';
+    rerender();
+    return live;
+  }
   if (!live.ok && !live.timedOut && !live.text) live.text = '失败：' + ((r && (r.error || r.code)) || '未知错误');
   const opts = cards ? parseCardArray((r && r.text) || live.text || '') : [];
   // 候选卡只加一句提示，**不覆盖原回答**：原回答留在 live.text（气泡里「看原话」能看到），
@@ -1391,6 +1650,7 @@ function dockPrompt(text) {
   const w = flow();
   const hist = (w.chat || []).slice(-7, -1).map(m => (m.role === 'me' ? '我：' : '你：') + m.text).join('\n');
   return [
+    ...verHead(w),
     '你是平台主管（阶段B的那个主管）：负责规划与派工、跨部门一次复核，不代做部门专业交付。',
     '这里只做建议：不执行、不发请求、不改文件、不付费。',
     PLAIN_RULE,
@@ -1470,7 +1730,7 @@ function addFromDock(mi, oi) {
     title: o.title, body: o.body, impl: o.impl || '', mods: normMods(o.mods, o.kind),
     x: spot.x, y: spot.y,
   }, false);
-  selId = n.id; panelCardId = n.id; panelOpen = false; saveStore(); render();
+  selId = n.id; panelCardId = n.id; panelOpen = false; saveAs('agent'); render();   // agent 给的候选卡，人按了「确认添加」
 }
 
 // 把聊天里的候选卡点进流程
@@ -1483,7 +1743,7 @@ function addFromOption(fromNode, mi, oi) {
   const spot = dockSpot({ id: '' }, fromNode, 'out');   // 放在它右边，避开别的卡
   const n = addNode(o.kind, { title: o.title, body: o.body, impl: o.impl || '', mods: normMods(o.mods, o.kind), x: spot.x, y: spot.y }, false);
   connect(fromNode.id, n.id, false);
-  selId = n.id; panelCardId = n.id; panelOpen = false; saveStore(); render();
+  selId = n.id; panelCardId = n.id; panelOpen = false; saveAs('agent'); render();   // agent 候选卡 + 人确认
   drawIn(`${fromNode.id}>${n.id}`);
   const inEl = $('#chatIn'); if (inEl) inEl.focus();
 }
@@ -1582,7 +1842,8 @@ async function validateAll() {
   let firstFail = null;
   for (const n of chainOrder(w)) {
     selId = n.id; panelCardId = n.id; panelOpen = false; n.status = 'running'; render();
-    const prompt = ['只做评审，不执行、不发请求、不改文件。',
+    const prompt = [...verHead(w),
+      '只做评审，不执行、不发请求、不改文件。',
       linkBrief(w),
       `[${KINDS[n.kind].label}] ${n.title}｜内容（人话）：${n.body || '(空)'}｜内部实现：${implOf(n) || '(未写)'}｜校验：${(n.checks || []).join(',') || '无'}`,
       '2 行：可执行 / 需补；需补就写缺哪个字段或校验（补的字段和命令算内部实现，别塞进卡片人话里）。'].join('\n');
@@ -2120,7 +2381,7 @@ function placeChain() {
     text: `${p.summary ? p.summary + '\n\n' : ''}读的是「${c.name}」${d(c.stats.first)}–${d(c.stats.last)} 的 ${c.stats.sessions} 次干活记录，拆成 ${w.nodes.length} 张卡、${w.edges.length} 条连线。` }]).slice(-30);
   store.current = w.id; selId = null; panelCardId = null; panelOpen = false;
   layoutChain(w);
-  saveStore(); renderWorkflowList(); fitView(true);
+  saveAs('agent'); renderWorkflowList(); fitView(true);     // 卡是 agent 拆出来的、人按了「放进画布」
   const keyOf = new Map([...idOf].map(([k, id]) => [id, k]));
   playArrival(w, n => tiles.get(keyOf.get(n.id)));
   Object.assign(rd, { plan: null, msgs: [], error: '' });
@@ -2203,7 +2464,7 @@ function promoteTemp() {
   tempFlow = null; delete LINK.paths[TEMP_ID];
   try { window.tcflow.linkDrop(TEMP_ID); } catch (e) { }
   selId = null; panelCardId = null; panelOpen = false;
-  renderTempBar(); saveStore(); renderWorkflowList(); render(); fitView(true);
+  renderTempBar(); saveAs('agent'); renderWorkflowList(); render(); fitView(true);   // 草稿是对话里长出来的，人按了「存成正式」
 }
 function renderTempBar() {
   const bar = $('#tempBar');
@@ -2237,7 +2498,7 @@ function seedDraft(msg) {
   };
   w.nodes.push(n); paintOne(n); drawEdges();
   w.version = (w.version || 1) + 1; w.updated_at = Date.now();
-  $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+  $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线 · v${w.version || 1}`;
   renderTempBar(); queueLinkWrite(w);
   return n;
 }
@@ -2327,7 +2588,7 @@ function growTempFrom(text) {
   if (added || touched) {
     drawEdges();
     w.version = (w.version || 1) + 1; w.updated_at = Date.now();
-    $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+    $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线 · v${w.version || 1}`;
     renderTempBar(); queueLinkWrite(w);
   }
   if (added && anyCardOutOfView()) fitView(false);                 // 长出来的卡看不见（或被对话框盖住）就把视野调过去
@@ -2356,7 +2617,7 @@ function finishTemp(text) {
   w.version = (w.version || 1) + 1; w.updated_at = Date.now();
   drawEdges();
   $('#flowName').value = w.name;
-  $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+  $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线 · v${w.version || 1}`;
   renderTempBar(); queueLinkWrite(w);
   if (w.nodes.length && anyCardOutOfView()) fitView(false);     // 不折对话框：人正在对话框里跟它聊；但卡不能被它盖住
 }

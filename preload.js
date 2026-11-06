@@ -21,6 +21,10 @@ contextBridge.exposeInMainWorld('tcflow', {
   linkWrite: (payload) => ipcRenderer.invoke('link:write', payload),
   linkRead: (id) => ipcRenderer.invoke('link:read', id),
   linkDrop: (id) => ipcRenderer.invoke('link:drop', id),
+  // 版本记录：最近 20 版（推一条 → 主进程裁到 20 条再把整份列表返回来）
+  versionList: (id) => ipcRenderer.invoke('version:list', id),
+  versionPush: (payload) => ipcRenderer.invoke('version:push', payload),
+  versionDrop: (id) => ipcRenderer.invoke('version:drop', id),
   onLinkExternal: (cb) => {
     const h = (_e, data) => cb(data);
     ipcRenderer.on('link:external', h);

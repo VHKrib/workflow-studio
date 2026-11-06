@@ -24,6 +24,7 @@ node skills/workflow-studio/scripts/cdp-await.js probe.js         # 要 await �
 node skills/workflow-studio/scripts/cdp-canvas.js                 # 平移/缩放/拖动/贴边自动滚/重叠（自己还原位置）
 node skills/workflow-studio/scripts/cdp-dock.js                   # 拖卡进插槽：悬停/接入/拒绝成圈/拔出/成果槽 + 动画收干净
 node skills/workflow-studio/scripts/cdp-dock.js --record docs/dock.gif   # 同时录演示（.gif / .mp4，ffmpeg）
+node skills/workflow-studio/scripts/cdp-version.js                # 版本与回滚：5 改 5 版 / 并版 / 只留 20 / 回滚 / 拖动不出新版本（不调 agent）
 ```
 
 `tools/eval.js` 只是同步求值（没有 `awaitPromise`），等不到 `chatSend` / agent 回答。要断言异步结果
@@ -394,6 +395,8 @@ node skills/workflow-studio/scripts/check-fixtures.js <目录>   # 把样本改�
 - 画布改动 → `saveStore()`（350ms 防抖）→ 文件，实测 **515ms**（要求 1s 内）。
 - **只有链路结构变了才算新版本**：聊天、逐卡验证的「已读」状态用 `saveStore(false)`——不涨版本、不写文件。
   踩过的坑：发一条消息也涨版本，agent 读文件答「第 20 版」而画布是 19，验收判定不一致。
+- **版本号只由「一次完整改动」涨**（见「版本与回滚」）：`saveStore(true)` 只是排队，300ms 后由
+  `commitVersion()` 真正 +1；拖动卡片位置用 `saveStore(false)`（位置不算内容改动）。
 - 文件被外面改（版本 ≥ 当前）→ `applyLinkDoc()` 认领回来，`patchNodesDiff()` 只换变了的那张卡；别的卡 DOM 不动（拖拽顺）；
   正在拖卡时推迟 400ms 再认领。版本号只由画布涨，外部改要自己写更大的 `version`。
 - **状态文件只带结构**（卡片 / 模块 / 正文 / 内部实现 / 坐标 / 执行方 / 版本）。卡片自己的 `chat / checks / status`
@@ -441,6 +444,61 @@ node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加两次真实 
 # chat-cards-clear-of-dock 卡压对话框面积 0、chat-bubble-humane 气泡里没有原始 JSON、
 # agent-sees-facts / agent-facts-kept = 问事实答得对且原回答没被「给你 N 个候选卡」顶掉
 ```
+
+## 版本与回滚（最近 20 版）
+
+用户口径：只留最近 **20** 版（不要全量历史）；连续打字 / 连着拖按一次算；拖动卡片位置**不算**内容改动。
+三处一起看：`versions.js`（主进程存快照）/ `main.js` 的 `version:*` IPC / `renderer/app.js` 的
+`verSnapshot / verContent / verWhat / scheduleVersion / commitVersion / rollbackTo / verHead`。
+
+### 一版是什么
+
+- 快照 `verSnapshot(w)` = 链路名 + 执行方 + 卡片（id / 类型 / 名字 / 正文 / 内部实现 / 模块 / 校验 / 坐标）+ 连线。
+  **能整条带回去**，不只正文。
+- 内容指纹 `verContent()` **不含坐标**：只挪位置 → 指纹一样 → 不产生版本（`saveStore(false)` 也走这条）。
+- `saveStore(true)` 只 `scheduleVersion()` 排队：300ms 内的连续改动并成一版（`commitVersion()` 才 `w.version+1`）；
+  一批里「加了卡 + 连线 + 改正文」也只算一版；`what` 由 `verWhat()` 对比上一版算出人话
+  （加了/删了哪张卡、改了哪张卡的哪个环节、几条线、执行方、链路名）。
+- 谁改的：`by: 'me' | 'agent'`。agent 提议、人点确认后落地的那几处（`addFromOption` / `addFromDock` /
+  `placeChain` / `promoteTemp`）用 `saveAs('agent')`，其余是人。改这些入口时别漏 `saveAs`。
+- 落地文件：`<userData>/versions/<链路 id>.json`，`list` 升序、主进程 `trim()` 统一裁到 20 条（同一个版号再推覆盖）。
+  链路删掉时 `deleteWorkflow()` 一起 `versionDrop()`。临时画布不记版本（不进列表、没有回滚）。
+
+### 回滚
+
+- 入口只有 `rollbackTo(v)` 一处，UI 在**左栏「概览」面板底部的版本列表**（一条一行：第几版 / 时间 / 改了什么 / 人|agent，
+  点一行就回滚）。别在别处再造入口。
+- 带回的内容：卡片 / 连线 / 模块 / 正文 / 内部实现 / 校验 / 执行方 / 链路名。**坐标不回到旧版**：现在还在的卡留在原地，
+  被回滚带回来的卡用快照里的坐标（位置本来就不算改动）。
+- 回滚**也记一版**（`what: 回滚到 vX`，带 `rollback:{to}`），不删后面的版本 → 回得去、也再回得来。
+- 回滚时把这条链路上正在跑的对话停掉：`cancelRunsFor(flowId)` → `window.tcflow.cancelAgent(runId)`
+  （主进程 `SIGTERM` + 日志 `[取消] …`）。被停的那次 `live.cancelled = true`，气泡只留一句
+  「这条链路被回滚了，这次运行已经停掉」，**不再解析候选卡**、不往画布写东西。
+- 回滚后只 `centerView()`，不改缩放（`fitView` 会把画面缩掉，别在这里用）。
+
+### agent 怎么知道（只注入上下文，不改任何岗位配置）
+
+- `verHead(w)` 放在五条提示词（`buildChatPrompt` / `dockPrompt` / `askFlow` / `validateAll`；
+  临时画布 `tempPrompt` 不带）的**第一行**：
+  `【版本状态 · 必须出现在你回答的第一句话里】当前链路版本 vN；用户在 HH:MM 把它回滚到了 vX，vX 之后的改动已作废。`
+- `w.rollback = {at, from, to, v, settled}` 存在工作流上（随 localStorage 走）；回滚之后又有新改动时
+  `commitVersion()` 把它标成 `settled`，提示词改成「曾在 HH:MM 回滚到 vX，之后又改过」。
+- `linkBrief()` 多一行版本记录文件路径，状态文件里也有 `rollback` / `versions_path`（agent 想核查可以直接读）。
+
+### 跑验收
+
+```bash
+export CDP_PORT=9333                                     # 隔离实例先起来（见「启动与验证」）
+node skills/workflow-studio/scripts/cdp-version.js       # 不花钱：5 改 5 版 / 并版 / 只留 20 / 回滚/再回来 / 拖动不出新版本
+node skills/workflow-studio/scripts/cdp-version.js --chat  # 加一次真实调用：回滚后 agent 复述「现在第几版、回滚到哪版」
+# 验「对话跑着的时候回滚，运行被停掉」：实例用 WF_CHAT_FAKE=hang 起，再跑
+./node_modules/.bin/electron . --remote-debugging-port=9333 --user-data-dir=$TMPDIR/wf-9333 &   # 前面加 WF_CHAT_FAKE=hang
+node skills/workflow-studio/scripts/cdp-version.js --fake
+```
+
+`--fake` 靠主进程的 `WF_CHAT_FAKE=hang`（`agent:stream` 起 `/bin/sleep 600` 冒充对话，平时不设就照常调 agent）；
+断言 `RUNS` 里这次运行被摘掉、消息打了 `cancelled`、最新一版写「回滚到 vX（停掉 1 个正在跑的对话）」，
+主进程日志有 `[取消] 停掉正在跑的运行 …`。
 
 ## 视觉规范（不要自创）
 
@@ -503,7 +561,7 @@ node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加两次真实 
 
 ## 开源
 
-本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `cdp-dock.js` / `parse-agent-output.js`）就在仓库里：
+本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `cdp-dock.js` / `cdp-version.js` / `parse-agent-output.js`）就在仓库里：
 `skills/workflow-studio/`。新增验证脚本直接放这里（`scripts/` 是可直接重跑的采集/断言，不要写成一次性探针），
 并在 `git status` 里确认它们不是 `??` 漏提。
 
