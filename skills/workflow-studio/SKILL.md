@@ -330,6 +330,47 @@ node skills/workflow-studio/scripts/cdp-dock.js          # 老功能回归：拖
 node skills/workflow-studio/scripts/cdp-click.js --card "<卡片标题>" --mode double   # 老功能回归：单击只选中、双击开卡
 ```
 
+## 实时链路：共享状态文件 + 临时对话画布
+
+让画布跟着 agent 的动作实时长出来，而且这条链路是「人和 agent 共用的一份状态」。三处要一起看：
+`linkstore.js`（主进程）/ `main.js` 的 `link:*` IPC / `renderer/app.js` 的 `linkDoc/queueLinkWrite/applyLinkDoc/patchNodesDiff`。
+
+### 状态文件（`<userData>/links/<链路 id>.json`，临时画布固定 `__temp__.json`）
+
+- 一条链路的完整状态：卡片、连线、每张卡的模块、正文（输入元素/加工方式）、内部实现、执行方、版本号 + `summary`（几卡几线、按类计数、执行方、链路清单）。
+- 写：`writeFileSync` 临时文件 + `renameSync` 原子换名；记内容 hash，**自己写的不当成外部改动**（否则画布和文件互相推）。
+- 读：解析不了就退回 `lastGood`（上一份好的），坏文件绝不推给画布；`mtime:size` 变了才读，`fs.watch` + 400ms 轮询两条腿。
+- 画布改动 → `saveStore()`（350ms 防抖）→ 文件，实测 **515ms**（要求 1s 内）。
+- **只有链路结构变了才算新版本**：聊天、逐卡验证的「已读」状态用 `saveStore(false)`——不涨版本、不写文件。
+  踩过的坑：发一条消息也涨版本，agent 读文件答「第 20 版」而画布是 19，验收判定不一致。
+- 文件被外面改（版本 ≥ 当前）→ `applyLinkDoc()` 认领回来，`patchNodesDiff()` 只换变了的那张卡；别的卡 DOM 不动（拖拽顺）；
+  正在拖卡时推迟 400ms 再认领。版本号只由画布涨，外部改要自己写更大的 `version`。
+
+### agent 看得到、但改不了
+
+- 四条链路都带 `linkBrief(w)`：卡片对话 `buildChatPrompt`、右下角 `dockPrompt`、临时画布 `tempPrompt`，
+  以及概览的 `askFlow`、`validateAll`。内容 = 第几版 / 执行方（`execName()`，`default` 显示成「平台主管」）/ 几卡几线 / 状态文件绝对路径 / `LINK_RULE`。
+- `LINK_RULE` 明确：画布只读，想改就在回答里写「提议：…」，人点了才生效；**连状态文件也不许用工具改**。
+- **硬不变量没破**：agent 仍然不能往画布写东西，落卡只在人点「确认添加 / 存成正式」之后。
+
+### 临时对话画布
+
+- 顶栏「对话建链路」→ `startTempCanvas()`：`tempFlow` 只在内存，`store.current='__temp__'`，不进列表、不写 localStorage。
+- 流里每写完一张卡就长一张：`partialCardObjects()` 扫出完整 JSON 对象（跳过没写完的），`growTempFrom()` 只追加/替换单张卡
+  （`paintOne()`），自动和上一张连线；**画布这一侧 1ms 内上屏**（同一帧）。结束时 `finishTemp()` 用完整计划再对齐一次。
+- 右栏 `.tempbar` 只在临时画布上出现：「存成正式」→ `promoteTemp()`（进列表、id 换新、文件跟着走）；`✕` → `dropTemp()`（删文件、回原工作流）。
+  切工作流 / 新建 / 存成正式都会 `dropTemp()`；进程启动时 `links().drop('__temp__')` 抹掉上次没清干净的。
+- 临时画布不写 localStorage：`saveStore()` 里 `current` 会写成列表第一条，重启不会把临时画布带回来。
+- **「2 秒内出第一张卡」做不到**：实测模型首次出字 5.8–8.1s（provider 思考时间），首卡 6.6–9.1s；画布拿到完整卡到上屏 1ms。
+  要压到 2s 得换更快的档案/模型，属于产品口径（见交接「未解决」）。
+
+```bash
+export CDP_PORT=9333
+node skills/workflow-studio/scripts/cdp-live.js            # 不花钱：临时画布/状态文件/外部认领/坏文件/存成正式
+node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加两次真实 agent 调用（首卡时间/agent 看得到/改不了）
+# chat-first-card-2s 会 FAIL（模型首次出字就不是 2s），其余应全 PASS
+```
+
 ## 视觉规范（不要自创）
 
 要「跟 Hermes 一样」时先读 `references/hermes-chat-visual.md`（源码路径 + 具体 token 数值 + 搬运规则），

@@ -28,6 +28,7 @@
       </div>
     </div>
     <button id="btnValidate">逐卡验证</button>
+    <button id="btnTempChat">对话建链路</button>
     <button id="btnNew">新建工作流</button>
     <button id="btnOpen">导入</button>
     <button id="btnSave">导出</button>
@@ -70,6 +71,12 @@
 
     <!-- 右边：工作流列表 -->
     <aside class="side">
+      <div class="tempbar" id="tempBar">
+        <span class="tb-name">临时画布</span>
+        <span class="sp"></span>
+        <button id="tempSave" class="primary">存成正式</button>
+        <span id="tempClose" title="关掉临时画布（不进列表）">✕</span>
+      </div>
       <h3>工作流 · 一块画布</h3>
       <div id="wfList"></div>
     </aside>
