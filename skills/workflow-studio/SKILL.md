@@ -12,15 +12,17 @@ description: Use when changing the TC 工作流台 Electron app (画布/卡片/a
 ## 启动与验证（每次改完都要做）
 
 ```bash
-cd <REPO>
+cd <仓库根目录>                                   # 研发帮手在 dev 工作副本里改；用户在用的那份不在里面改
 node --check renderer/app.js && node --check main.js      # 语法
-pkill -f "工作流台/node_modules/electron"; sleep 1       # 关旧实例
-./node_modules/.bin/electron . --remote-debugging-port=9222 &   # 起新实例
-sleep 6
-node tools/shot.js                                        # 存 preview.png（CDP 截图）
-node tools/eval.js "document.querySelectorAll('.node').length"   # 无头查 DOM（同步）
+export CDP_PORT=9333                               # 研发实现 9333 / 研发验收 9334 / 研发主管 9335；9222 是用户的窗口：不连、不关
+pkill -f "remote-debugging-port=$CDP_PORT"; sleep 1        # 只关自己端口的实例——不带端口的 pkill 会把用户的窗口一起关掉
+./node_modules/.bin/electron . --remote-debugging-port=$CDP_PORT --user-data-dir=$TMPDIR/wf-$CDP_PORT &   # 隔离实例：独立端口 + 独立数据
+sleep 8
+# tools/shot.js、tools/eval.js 目前写死 9222（用户的窗口）：改成读 CDP_PORT 之前别用；有的 scripts/ 不设 CDP_PORT 也默认连 9222，所以先 export
 node skills/workflow-studio/scripts/cdp-await.js probe.js         # 要 await 页面异步函数时
 node skills/workflow-studio/scripts/cdp-canvas.js                 # 平移/缩放/拖动/贴边自动滚/重叠（自己还原位置）
+node skills/workflow-studio/scripts/cdp-dock.js                   # 拖卡进插槽：悬停/接入/拒绝成圈/拔出/成果槽 + 动画收干净
+node skills/workflow-studio/scripts/cdp-dock.js --record docs/dock.gif   # 同时录演示（.gif / .mp4，ffmpeg）
 ```
 
 `tools/eval.js` 只是同步求值（没有 `awaitPromise`），等不到 `chatSend` / agent 回答。要断言异步结果
@@ -126,9 +128,49 @@ msg   = { role: 'me'|'agent', text, at, think?, steps?: [{label,time}], secs?, o
 - 图例/缩放条不能放在滚动容器里（会跟着画布滚走，滚到 6000 就看不见了）。结构是
   `.canvaswrap`（`position:relative;overflow:hidden`，只做定位）> `#wrap`（真正的滚动/平移层）,
   浮层与 `#wrap` 平级。
-- 画板一大就必须 `centerView()`：首屏和 `switchWorkflow()` 都把视口挪到 `ORIGIN` 附近，否则打开就看到
-  scroll 0 处的空地（卡片在 6000px 外）。`applyZoom()` 里**只在缩放值真变了时才写 scrollLeft/Top**，
+- 画板一大就必须 `centerView()`：首屏和 `switchWorkflow()` 都把视口对准**这条流程的卡片包围盒**（放得下就居中，
+  放不下从左上角开始；没卡才回 `ORIGIN`），否则打开就看到 scroll 0 处的空地（卡片在 6000px 外）。`applyZoom()` 里**只在缩放值真变了时才写 scrollLeft/Top**，
   否则每次 `render()` 都会把视野拉回中心。改完用 `scripts/cdp-canvas.js` 跑一遍（pan / anchor / drag / edge / layout 五条）。
+
+## 模块与插槽（拖卡连线）
+
+用户要的口径：卡片里用到的东西拆成模块——**输入卡 = 素材、加工卡 = 工具、输出卡 = 成果**，每块是一个人话短词
+（≤8 字左右，`.mod.t-mat/t-tool/t-res` 三色同卡片色）；**连线方式 = 把卡拖进加工卡的插槽**。
+
+- 数据：`node.mods = [{id, type:'mat'|'tool'|'res', name}]`，type 跟卡片 kind 走（`KIND_MOD`），改卡片类型时
+  一起改 type。**插槽里显示什么不单独存**，由 `edges` 推出来（`modsHTML()`：上游卡的模块进「素材」槽、下游卡的
+  模块进「成果」槽；加工卡接加工卡时没有模块，用卡名、按成果色）。别再造一份「插槽内容」字段，两份数据迟早对不上。
+- 老卡补模块走 `MODS_SEED`（按 body 逐字匹配、只补没有 `mods` 的卡，`loadStore()` 末尾跑），和 `LEGACY_PLAIN`
+  同一套规矩：要给一批现有卡补模块就往表里加一行。新卡在左栏「素材/工具/成果」里加（回车加、点字改、✕ 删），
+  编辑时只调 `paintNodes()` 重画画布，**不要 `render()`**（会重建左栏、抢走输入框焦点）。
+- 协议：候选卡多一个 `mods` 字段，提示词里的 `MODS_RULE` 与解析器 `normMods()` 成对改；示例占位 `模块短词` 会被滤掉。
+- 拖卡接入（`dragCard` → `findDock` → `dockInto/denyDock`）：只有输入/输出卡能插；输入卡只插「素材」，输出卡看离哪个
+  槽近；已经接着的当普通拖动；**会绕成圈就拒绝**——用 `reaches(b, a)` 做整条链的可达判断，只查直接反向边会漏掉
+  长环（卖点卡→找证据包这种）。拒绝时卡片回到拖起的位置。
+- 接入后卡片落点 `dockSpot()`：素材在加工卡左边、成果在右边，撞到别的卡就往下挪；候选卡「确认添加」也用它，
+  不再是固定的 `+40/+200`（那样会压在别的卡上）。
+- 拔出：在插槽里按住模块拖出加工卡外松手 = 删那条边（`unplugDrag`）；没拖出卡就飞回原位；只是点一下不拦截，
+  双击照常开卡片信息。
+
+### 接入动画（顺序与时长都量过，别随手拉长）
+
+1 悬停：卡片缩成 0.46 的小块、**浮在指针正上方**（`--dx/--dy` 在拖起时按抓取点算好），加工卡亮起，目标槽高亮并放
+  虚线预览块，另一个槽变淡；接不了的槽标红写「会绕成圈，接不了」。小块不能盖住插槽——曾经以指针为中心缩放，
+  预览块全被挡住，`cdp-dock.js` 的 hover 断言现在会查 `被小块挡住 0`。
+2 松手：小块弹回原大落到旁边（480ms 回弹曲线）；模块从小块的位置一块块飞进插槽（480ms，间隔 60ms，落地放大
+  1.22 再回弹）；连线从起点「描」出来（`drawIn`，stroke-dashoffset 480ms）→ 光点沿线跑（`pulseAlong`，按线长
+  280–560ms）→ 终点涟漪 + 插槽闪一圈（520ms）。全套约 1.6s，测试等 2.1s 后断言「动画 0 个、#fx 空、飞行块 0」。
+3 拔出：模块替身跟手、离开卡片变红划线、那根线变红虚线；松手线往拔出的方向缩回去（300ms）再删边。
+
+实现要点（踩过）：
+- CSS 里 `.node{transition:transform …}` 会**压过** WAAPI 的 transform 动画：松手前先 `el.style.transition='none'`，
+  拒绝回弹结束后再清掉（`denyDock` 的 onfinish/oncancel）。
+- 飞行块挂在 `body` 上（`makeFlyer`），画布在缩放层里，替身要 `scale(zoom)` 才和原块一样大。
+- 动画期间 `render()` 会换掉连线 DOM：`pulseAlong(key)` 每帧按 `data-k` 重新取 path，线没了就收，别拿旧 path 引用跑。
+- 每个动画都配 `setTimeout` 兜底收尾（onfinish 在窗口隐藏时可能不触发），否则会留下透明块/光点。
+- `prefers-reduced-motion` 时全部跳过动画，结果一样。
+- 光点/涟漪画在 `#fx`（`#canvas` 里、盖在卡片上面的第二个 SVG），连线仍在 `#edges` 底层；`drawEdges()` 给每条线
+  标 `class="edge" data-k="a>b"`，悬停插槽里的模块会高亮那条线和来源卡（`.peer`）。
 
 ## 三条交互不变量
 
@@ -264,7 +306,7 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
 真要解释就写 README。新功能不要顺手加引导文案或「点这里」气泡。
 
 删完用 DOM 断言收口：`.brand-sub / .legend / .sidehint / .thin` 应该一个都查不到；
-`pkill` 重启后再断言一次（页面缓存会让你以为删了其实没生效）。
+重启（只关自己端口的实例）后再断言一次（页面缓存会让你以为删了其实没生效）。
 
 ## 常见坑
 
@@ -286,13 +328,17 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
   测完写回（`scripts/cdp-canvas.js` 已经这么做）；不要顺手改用户的卡片正文/对话，真需要恢复
   （比如某张卡正文空了）先说明再动手。用户可能同时在窗口里操作，看到的状态变化未必是你的 bug——
   按「启动与验证」里的隔离实例复测再下结论。
+- **探针在 `render()` 之后要重新取元素**：`render()` 会换掉所有 `.node`，之前拿到的引用量出来全是 0（曾因此把
+  插槽坐标量成 (0,0)，误以为「拖进插槽没反应」）。
+- **缩放后先把目标卡滚进视口再点**：缩放锚在视口中心，1.5 倍时靠左的卡会滑到视口外，`getBoundingClientRect`
+  给出负坐标，点下去是空气（`cdp-canvas.js` 的 drag 曾因此误报）。
 - **刚 render 完不要立刻量 layout**：列宽折叠、缩放、字体都会晚一帧生效，量到的 `getBoundingClientRect`
   是中间态（曾因此误报“双击失效”：实测点落到了已经移位的列表上）。探针里先 `wait(200~300)` 再量。
 
 - **画板尺寸写在两处**：`CANVAS = {w:12000,h:8000}`（JS，拖动夹边界用）和 `#canvas{width/height}`（CSS，
   决定滚多远）必须同步改；只改一处会出现“能拖到的地方和能滚到的地方不一致”。同理 `ORIGIN` 必须
   是画板正中，否则某一侧能拖的距离会明显短。
-- **不重启等于没改**：主进程和 `renderer/*` 都不会热加载。改完先 `pkill` 再起，否则 9222 连到旧进程、截图和 DOM 断言都是上一版。
+- **不重启等于没改**：主进程和 `renderer/*` 都不会热加载。改完先关掉自己端口的实例再起（`pkill -f "remote-debugging-port=$CDP_PORT"`），否则连到的是旧进程、截图和 DOM 断言都是上一版。
 - 节点宽度变了要同步 `chainOrder` 之外的两处：连线的 `x1` 偏移、插入按钮定位。
 - 不要把 `localStorage` 里的旧 schema 直接读进新代码；升 key 版本（v4）。
 - 左栏宽度/收起状态一变，卡片屏幕坐标就变，必须重新 `drawEdges()`；面板状态统一走
@@ -301,7 +347,7 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
 
 ## 开源
 
-本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `parse-agent-output.js`）就在仓库里：
+本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `cdp-dock.js` / `parse-agent-output.js`）就在仓库里：
 `skills/workflow-studio/`。新增验证脚本直接放这里（`scripts/` 是可直接重跑的采集/断言，不要写成一次性探针），
 并在 `git status` 里确认它们不是 `??` 漏提。
 

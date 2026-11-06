@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('tcflow', {
     ipcRenderer.on('agent:event', h);
     return () => ipcRenderer.removeListener('agent:event', h);
   },
+  // 只读：读一个 agent 的工作链路原料
+  readAgentChain: (id) => ipcRenderer.invoke('agent:chain', id),
   saveFlow: (flow) => ipcRenderer.invoke('flow:save', flow),
   openFlow: () => ipcRenderer.invoke('flow:open'),
 });

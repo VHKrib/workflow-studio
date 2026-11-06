@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 
 const PROFILES_DIR = path.join(os.homedir(), '.hermes', 'profiles');
+const { readChain } = require('./chain');
 const HERMES = path.join(os.homedir(), '.hermes', 'hermes-agent', '.hermes', 'bin', 'hermes');
 
 /** 读本机 profile 列表：id + 显示名 + 所属部门 + 描述 */
@@ -44,10 +45,14 @@ function listAgents() {
 }
 
 /** 只读：跑一次 agent，问它对某个环节的意见（不触发任何付费动作） */
-function askAgent({ profile, prompt, timeoutMs = 120000 }) {
+// toolsets：只给分析用的那几样（如 'todo,no_mcp'），agent 就碰不到终端、文件、发消息、MCP 接口——真正的只读
+function askAgent({ profile, prompt, timeoutMs = 120000, toolsets }) {
   return new Promise((resolve) => {
     if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES });
-    const child = execFile(HERMES, ['-p', profile, 'chat', '-q', prompt],
+    const args = ['-p', profile, 'chat'];
+    if (toolsets) args.push('-t', String(toolsets));
+    args.push('-q', prompt);
+    const child = execFile(HERMES, args,
       { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, env: { ...process.env } },
       (err, stdout, stderr) => {
         resolve({ ok: !err, code: err ? (err.code || 'err') : 0, text: (stdout || stderr || '').slice(-20000) });
@@ -58,9 +63,12 @@ function askAgent({ profile, prompt, timeoutMs = 120000 }) {
 
 /** 流式：边跑边把事件推给渲染层（Hermes 的对话框效果靠它） */
 const runs = new Map();
-ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000 }) => new Promise((resolve) => {
+ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000, toolsets }) => new Promise((resolve) => {
   if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES });
-  const child = spawn(HERMES, ['-p', profile, 'chat', '--format', 'stream-json', '-q', prompt], { env: { ...process.env } });
+  const args = ['-p', profile, 'chat', '--format', 'stream-json'];
+  if (toolsets) args.push('-t', String(toolsets));     // 只给指定工具组（分析链路时 todo,no_mcp：不能跑命令、不能写文件、不碰 MCP 接口）
+  args.push('-q', prompt);
+  const child = spawn(HERMES, args, { env: { ...process.env } });
   runs.set(runId, child);
   let buf = '', finalText = '', tokens = null, err = '';
   const send = ev => { try { if (!e.sender.isDestroyed()) e.sender.send('agent:event', { runId, ev }); } catch (_) { } };
@@ -93,7 +101,7 @@ ipcMain.handle('agent:cancel', (_e, runId) => {
 function createWindow() {
   const win = new BrowserWindow({
     width: 1320, height: 880, minWidth: 1000, minHeight: 640,
-    title: 'TC 工作流台',
+    title: '工作流开发平台',
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#f5f3ef',
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
@@ -114,6 +122,8 @@ app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(
 
 ipcMain.handle('agents:list', () => listAgents());
 ipcMain.handle('agent:ask', (_e, payload) => askAgent(payload));
+// 只读：读一个 agent 的工作链路原料（身份 / 技能 / 最近干的活 / 上下游 / 读写的目录）
+ipcMain.handle('agent:chain', (_e, id) => readChain(id).catch(err => ({ ok: false, error: String(err && err.message || err) })));
 ipcMain.handle('flow:save', async (_e, flow) => {
   const r = await dialog.showSaveDialog({ title: '保存工作流', defaultPath: path.join(os.homedir(), '工作流-' + (flow.name || 'untitled') + '.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return { ok: false };

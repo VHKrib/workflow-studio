@@ -1,6 +1,6 @@
 'use strict';
 const $ = (s, r = document) => r.querySelector(s);
-const canvas = $('#canvas'), edgesSvg = $('#edges'), wrap = $('#wrap');
+const canvas = $('#canvas'), edgesSvg = $('#edges'), fxSvg = $('#fx'), wrap = $('#wrap');
 const LS_KEY = 'tcflow.v4';
 const LEGACY_KEYS = ['tcflow.v3'];
 
@@ -11,6 +11,13 @@ const KINDS = {
   proc: { label: '加工', cls: 'proc', ph: '这一步让人做什么（说人话，例：找到这个商品最新最全的那份证据）' },
   out:  { label: '输出', cls: 'out',  ph: '最后交出什么（说人话，例：一份能直接拿去用的证据目录）' },
 };
+// 模块：卡片里用到的东西拆成一块一块——输入卡带「素材」，加工卡带「工具」，输出卡带「成果」。
+// 加工卡有两个插槽：「素材」接输入（或上一步的成果），「成果」接输出。把卡片拖进插槽就连上了。
+const MOD_T = { mat: '素材', tool: '工具', res: '成果' };
+const KIND_MOD = { in: 'mat', proc: 'tool', out: 'res' };
+const modsOf = n => (n && Array.isArray(n.mods) ? n.mods : []);
+const SVGNS = 'http://www.w3.org/2000/svg';
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 let agents = [];
 const USE_STREAM = true;   // true：真流式（Hermes 的边跑边出，但 CLI 流里没有思考正文）
@@ -52,7 +59,9 @@ function splitTech(text) {
 }
 // 卡片 → 给 agent 的上下文：人话在前，内部实现在后并标明「不进卡片」
 function cardLine(n, i) {
+  const ms = modsOf(n);
   return `${i + 1}. [${KINDS[n.kind].label}] ${n.title}：${n.body || '(空)'}` +
+    (ms.length ? `\n   ${MOD_T[KIND_MOD[n.kind]] || '模块'}：${ms.map(m => m.name).join('、')}` : '') +
     (implOf(n) ? `\n   ↳ 内部实现（不进卡片，只给你看）：${implOf(n)}` : '');
 }
 
@@ -75,6 +84,11 @@ function bindUI() {
   $('#btnOpen').onclick = importFlow;
   $('#btnValidate').onclick = () => validateAll();
   $('#btnRun').onclick = openRunModal;
+  $('#btnRead').onclick = openRead;
+  $('#emptyRead').onclick = openRead;
+  $('#rClose').onclick = closeRead;
+  $('#rAgain').onclick = () => analyzeChain();
+  $('#rPlace').onclick = placeChain;
   $('#mClose').onclick = $('#mCancel').onclick = closeRunModal;
   $('#panelTab').onclick = togglePanel;
   $('#flowAgent').addEventListener('change', e => { flow().agent = e.target.value; renderWorkflowList(); render(); });
@@ -134,10 +148,18 @@ function applyZoom() {
   lastZoom = zoom;
   const el = $('#zoom'); if (el) el.textContent = Math.round(zoom * 100) + '%';
 }
-// 把视口挪到逻辑原点附近（首屏 / 切换工作流时）
+// 首屏 / 切换工作流：视口对准这条流程的卡片（放得下就居中，放不下就从左上角开始），没有卡片才回原点
 function centerView() {
-  wrap.scrollLeft = ORIGIN.x - 120;
-  wrap.scrollTop = ORIGIN.y - 90;
+  const w = flow(), ns = (w && w.nodes) || [];
+  if (!ns.length) { wrap.scrollLeft = (ORIGIN.x - 120) * zoom; wrap.scrollTop = (ORIGIN.y - 90) * zoom; return; }
+  const size = n => { const e = canvas.querySelector(`.node[data-id="${n.id}"]`); return [e ? e.offsetWidth : 244, e ? e.offsetHeight : 160]; };
+  const x0 = Math.min(...ns.map(n => n.x)), y0 = Math.min(...ns.map(n => n.y));
+  const x1 = Math.max(...ns.map(n => n.x + size(n)[0])), y1 = Math.max(...ns.map(n => n.y + size(n)[1]));
+  const cw = wrap.clientWidth / zoom, ch = wrap.clientHeight / zoom, pad = 60;
+  const vx = x1 - x0 + 2 * pad <= cw ? (x0 + x1 - cw) / 2 : x0 - pad;
+  const vy = y1 - y0 + 2 * pad <= ch ? (y0 + y1 - ch) / 2 : y0 - pad;
+  wrap.scrollLeft = (vx + ORIGIN.x) * zoom;
+  wrap.scrollTop = (vy + ORIGIN.y) * zoom;
 }
 
 // ---------- 存储 ----------
@@ -177,6 +199,32 @@ function plainifyLegacy(w) {
   return hit;
 }
 
+// 老卡拆模块：按 body 逐字匹配，只补还没有 mods 的卡（可重复执行）；新卡在左栏里自己加。
+// 要给一批现有卡补模块，往这张表里加一行，不要手改 localStorage。
+const MODS_SEED = [
+  ['隔板这款商品（1688 货号 4729546689005），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。',
+    ['1688 货号', '主图 5 张', '详情长图 3 张', '标题·价格·规格']],
+  ['翻这件商品的采集记录，拿最近一次那份：图是不是齐的、页面字段有没有缺，缺就标出来。',
+    ['按货号翻采集记录', '图片清点', '字段缺项检查']],
+  ['一份资料清单：一共几张图、每张是主图还是详情图、页面上的标题/价格/规格各是什么值。',
+    ['图片清单 8 张', '标题·价格·规格取值']],
+  ['对着这些图和页面文字，挑出 3–5 条能打广告的卖点、和同类隔板的不同点，再列 3 条绝对不能写的话。',
+    ['卖点筛选', '同类隔板对比', '禁写话核对']],
+  ['一张卖点卡：每条卖点写了什么、用的是哪张图、能不能直接拿去用。',
+    ['卖点 3–5 条·配图', '同类差异点', '禁写 3 条', '能否直接用']],
+];
+function modsFor(kind, body) {
+  const row = MODS_SEED.find(r => String(body || '').trim() === r[0]);
+  return row ? row[1].map(name => ({ id: uid(), type: KIND_MOD[kind] || 'tool', name })) : [];
+}
+function seedMods(w) {
+  let hit = 0;
+  for (const n of (w.nodes || [])) {
+    if (Array.isArray(n.mods)) continue;
+    n.mods = modsFor(n.kind, n.body); hit++;
+  }
+  return hit;
+}
 function loadStore() {
   try {
     const raw = localStorage.getItem(LS_KEY);
@@ -199,7 +247,7 @@ function loadStore() {
   if (!store.workflows.length) store = { workflows: [], current: null };
   else {                                              // 老文案就地改成人话（技术串进 impl）
     let hit = 0;
-    store.workflows.forEach(w => { hit += plainifyLegacy(w); hit += plainifySpecific(w); });
+    store.workflows.forEach(w => { hit += plainifyLegacy(w); hit += plainifySpecific(w); hit += seedMods(w); });
     if (hit) saveStore();
   }
 }
@@ -210,16 +258,17 @@ function createWorkflow(name, seed = false) {
   const w = { id: 'w' + Date.now().toString(36), name, agent: '', nodes: [], edges: [], chat: [] };
   if (seed) {
     const a = { id: uid(), kind: 'in',   title: '商品编号', body: '隔板这款商品（1688 货号 4729546689005），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。', checks: [],
-                impl: 'offer_id = 4729546689005（1688 隔板）；evidence/<包>/images + page-fields', x: 24,  y: 70, status: 'idle' };
+                impl: 'offer_id = 4729546689005（1688 隔板）；evidence/<包>/images + page-fields', x: 0,   y: 70, status: 'idle' };
     const b = { id: uid(), kind: 'proc', title: '找证据包', body: '翻这件商品的采集记录，拿最近一次那份：图是不是齐的、页面字段有没有缺，缺就标出来。', checks: [],
-                impl: 'evidence/_INDEX-BY-OFFER.json 反查 offer_id，取最新最全目录', x: 286, y: 70, status: 'idle' };
+                impl: 'evidence/_INDEX-BY-OFFER.json 反查 offer_id，取最新最全目录', x: 330, y: 70, status: 'idle' };
     const c = { id: uid(), kind: 'out',  title: '证据目录', body: '一份资料清单：一共几张图、每张是主图还是详情图、页面上的标题/价格/规格各是什么值。', checks: ['sha256'],
-                impl: 'evidence/<包>/ + images 清单 + page-fields，校验 sha256', x: 548, y: 70, status: 'idle' };
+                impl: 'evidence/<包>/ + images 清单 + page-fields，校验 sha256', x: 660, y: 70, status: 'idle' };
     const d = { id: uid(), kind: 'proc', title: '出卖点卡', body: '对着这些图和页面文字，挑出 3–5 条能打广告的卖点、和同类隔板的不同点，再列 3 条绝对不能写的话。', checks: ['schema', 'policy'],
-                impl: '出 selling_points / differentiation / must_not_claim 三段', x: 286, y: 320, status: 'idle' };
+                impl: '出 selling_points / differentiation / must_not_claim 三段', x: 330, y: 420, status: 'idle' };
     const e = { id: uid(), kind: 'out',  title: '卖点卡', body: '一张卖点卡：每条卖点写了什么、用的是哪张图、能不能直接拿去用。', checks: ['schema'],
-                impl: 'cards/<capture>.sellpoint.json（含 usable_in_ad），校验 schema', x: 548, y: 320, status: 'idle' };
+                impl: 'cards/<capture>.sellpoint.json（含 usable_in_ad），校验 schema', x: 660, y: 420, status: 'idle' };
     w.nodes.push(a, b, c, d, e);
+    w.nodes.forEach(n => { n.mods = modsFor(n.kind, n.body); });
     w.edges.push([a.id, b.id], [b.id, c.id], [c.id, d.id], [d.id, e.id]);
   }
   store.workflows.push(w); store.current = w.id; selId = null; panelCardId = null;
@@ -268,7 +317,7 @@ function agentOptionsHTML(sel) {
 
 // ---------- 卡片 ----------
 function addNode(kind, props = {}, select = true) {
-  const base = { id: uid(), kind, title: KINDS[kind].label + '卡', body: '', impl: '', checks: [], chat: [], status: 'idle' };
+  const base = { id: uid(), kind, title: KINDS[kind].label + '卡', body: '', impl: '', mods: [], checks: [], chat: [], status: 'idle' };
   const offset = flow().nodes.filter(n => n.kind === kind).length * 28;
   const n = Object.assign(base, { x: 60 + offset, y: 520 + offset }, props);
   flow().nodes.push(n);
@@ -283,11 +332,12 @@ function delNode(id) {
   if (panelCardId === id) { panelCardId = null; panelOpen = false; }
   saveStore(); render();
 }
-function connect(aId, bId) {
+function connect(aId, bId, animate = true) {
   if (aId === bId) return;
   const w = flow();
   if (w.edges.some(([a, b]) => a === aId && b === bId)) return;
   w.edges.push([aId, bId]); saveStore(); render();
+  if (animate) drawIn(`${aId}>${bId}`);          // 新连线都「画」出来
 }
 
 // ---------- 渲染 ----------
@@ -296,8 +346,7 @@ function render() {
   $('#flowName').value = w.name;
   $('#flowAgent').innerHTML = agentOptionsHTML(w.agent);
 
-  for (const el of [...canvas.querySelectorAll('.node')]) el.remove();
-  for (const n of w.nodes) canvas.appendChild(nodeEl(n));
+  rebuildNodes();
 
   // 概览自动隐藏：没选卡片就把右栏收起来，画布变大
   applyPanelState();
@@ -307,7 +356,14 @@ function render() {
   renderPanel();
   renderDock();
   $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+  $('#emptyRead').classList.toggle('on', !w.nodes.length);
 }
+function rebuildNodes() {
+  for (const el of [...canvas.querySelectorAll('.node')]) el.remove();
+  for (const n of flow().nodes) canvas.appendChild(nodeEl(n));
+}
+// 只重画画布上的卡（左栏里正在编辑时用：不重建面板、不抢焦点）
+function paintNodes() { rebuildNodes(); drawEdges(); }
 function applyPanelState() {
   const n = find(panelCardId);
   const collapsed = !n && !panelOpen;
@@ -342,6 +398,7 @@ function nodeEl(n) {
       <div class="st ${n.status}">${statusDot(n)}</div>
     </div>
     <div class="body" data-ph="${esc(k.ph)}">${esc(n.body)}</div>
+    ${modsHTML(n)}
     <div class="ft">
       <div class="checks">${(n.checks || []).map(c => `<span class="chip">${esc(c)}</span>`).join('')}</div>
       ${implOf(n) ? '<span class="gar" data-act="impl" title="内部实现已封装：卡片上不显示，点开看">⚙</span>' : ''}
@@ -363,11 +420,49 @@ function nodeEl(n) {
     if (e.target.closest('.mini') || e.target.closest('.gar')) return;
     openCard(n); const i = $('#chatIn'); if (i) i.focus();
   });
+  // 插在加工卡里的模块：悬停 = 亮出它是从哪张卡接进来的；按住拖出这张卡 = 断开
+  el.querySelectorAll('.mod.plug').forEach(c => {
+    const key = plugKey(n.id, c);
+    c.addEventListener('mouseenter', () => peer(c.dataset.src, key, true));
+    c.addEventListener('mouseleave', () => peer(c.dataset.src, key, false));
+  });
   el.addEventListener('pointerdown', e => {
     if (e.target.closest('.mini') || e.target.closest('.gar')) return;   // 卡片正文不可编辑：整张卡都能拖
-    if (e.button === 0) { selId = n.id; markSel(); dragCard(e, n, el); }   // 单击/拖动只选中，双击才开卡片信息
+    if (e.button !== 0) return;
+    selId = n.id; markSel();                                             // 单击/拖动只选中，双击才开卡片信息
+    const plug = e.target.closest('.mod.plug');
+    if (plug) unplugDrag(e, n, el, plug); else dragCard(e, n, el);
   });
   return el;
+}
+
+// 卡片上的模块区。输入/输出卡：自己的素材/成果；加工卡：素材插槽 + 自带的工具 + 成果插槽
+function chipHTML(m) { return `<span class="mod t-${m.type}" title="${esc(m.name)}">${esc(m.name)}</span>`; }
+// 接进插槽的卡：它带的模块就是插在槽里的东西（没有模块就用卡名）
+function plugChips(src, dir) {
+  const ms = src.kind === 'proc' ? [] : modsOf(src);
+  // 加工卡直接接加工卡：上一步交过来的是它的成果；没有模块就用卡名
+  const list = ms.length ? ms : [{ type: src.kind === 'proc' ? 'res' : (KIND_MOD[src.kind] || 'mat'), name: src.title }];
+  return list.map(m => `<span class="mod t-${m.type} plug" data-src="${src.id}" data-dir="${dir}" title="来自「${esc(src.title)}」：${esc(m.name)}">${esc(m.name)}</span>`).join('');
+}
+function modsHTML(n) {
+  const line = (lab, inner, cls = '') => `<div class="mline${cls}"><span class="mlab">${lab}</span><span class="mchips">${inner}</span></div>`;
+  if (n.kind !== 'proc') {
+    const ms = modsOf(n);
+    return ms.length ? `<div class="mods">${line(MOD_T[KIND_MOD[n.kind]], ms.map(chipHTML).join(''))}</div>` : '';
+  }
+  const w = flow();
+  const ups = w.edges.filter(([, b]) => b === n.id).map(([a]) => find(a)).filter(Boolean);
+  const downs = w.edges.filter(([a]) => a === n.id).map(([, b]) => find(b)).filter(Boolean);
+  const sock = (key, list, ph) => `<div class="sock ${list.length ? 'on' : 'empty'}" data-sock="${key}">` +
+    `<div class="mline"><span class="mlab">${key === 'in' ? '素材' : '成果'}</span><span class="mchips" data-ph="${ph}">${list.map(s => plugChips(s, key)).join('')}</span></div></div>`;
+  const tools = modsOf(n);
+  return `<div class="mods">${sock('in', ups, '拖输入卡进来')}${tools.length ? line('工具', tools.map(chipHTML).join(''), ' tools') : ''}${sock('out', downs, '拖输出卡进来')}</div>`;
+}
+function plugKey(procId, chip) { return chip.dataset.dir === 'in' ? `${chip.dataset.src}>${procId}` : `${procId}>${chip.dataset.src}`; }
+function peer(srcId, key, on) {
+  const s = canvas.querySelector(`.node[data-id="${srcId}"]`); if (s) s.classList.toggle('peer', on);
+  const p = edgesSvg.querySelector(`path[data-k="${key}"]`); if (p) p.classList.toggle('hl', on);
 }
 
 function markSel() {
@@ -379,17 +474,23 @@ function statusDot(n) { return ({ running: '●', ok: '✓', warn: '!', fail: '�
 function drawEdges() {
   const w = flow(); if (!w) return;
   const cr = canvas.getBoundingClientRect();
-  edgesSvg.innerHTML = `<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="rgba(17,17,17,.42)"/></marker></defs>`;
+  const P = (x, y) => [(x - cr.left) / zoom, (y - cr.top) / zoom];
+  // 端点：加工卡接在插槽上（素材在左、成果在右）；输入/输出卡接在自己的模块行上
+  const end = (el, n, side) => {
+    const r = el.getBoundingClientRect();
+    const ref = n && n.kind === 'proc' ? el.querySelector(`.sock[data-sock="${side}"]`) : el.querySelector('.mods');
+    const rr = ref ? ref.getBoundingClientRect() : r;
+    return P(side === 'out' ? r.right : r.left, rr.top + rr.height / 2);
+  };
+  let h = `<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="rgba(17,17,17,.42)"/></marker></defs>`;
   for (const [a, b] of w.edges) {
-    const ea = document.querySelector(`.node[data-id="${a}"]`), eb = document.querySelector(`.node[data-id="${b}"]`);
+    const ea = canvas.querySelector(`.node[data-id="${a}"]`), eb = canvas.querySelector(`.node[data-id="${b}"]`);
     if (!ea || !eb) continue;
-    const ra = ea.getBoundingClientRect(), rb = eb.getBoundingClientRect();
-    const x1 = (ra.right - cr.left) / zoom, y1 = (ra.top - cr.top + ra.height / 2) / zoom;
-    const x2 = (rb.left - cr.left) / zoom, y2 = (rb.top - cr.top + rb.height / 2) / zoom;
+    const [x1, y1] = end(ea, find(a), 'out'), [x2, y2] = end(eb, find(b), 'in');
     const mx = (x1 + x2) / 2;
-    edgesSvg.insertAdjacentHTML('beforeend',
-      `<path d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="rgba(17,17,17,.30)" stroke-width="1.6" marker-end="url(#ar)"/>`);
+    h += `<path class="edge" data-k="${a}>${b}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="rgba(17,17,17,.30)" stroke-width="1.6" marker-end="url(#ar)"/>`;
   }
+  edgesSvg.innerHTML = h;
 }
 
 function dragCard(e, n, el) {
@@ -399,15 +500,45 @@ function dragCard(e, n, el) {
   const clampX = v => Math.max(-ORIGIN.x + 8, Math.min(CANVAS.w - ORIGIN.x - el.offsetWidth - 8, v));
   const clampY = v => Math.max(-ORIGIN.y + 8, Math.min(CANVAS.h - ORIGIN.y - el.offsetHeight - 8, v));
   const start = toCanvas(e);
+  const from = { x: n.x, y: n.y };
   const grab = { x: n.x - (start.x - ORIGIN.x), y: n.y - (start.y - ORIGIN.y) };
+  el.style.transformOrigin = `${-grab.x}px ${-grab.y}px`;   // 靠近插槽时以指针为中心缩成一个小块
+  // 小块浮在指针正上方（水平居中、底边离指针 14px），不挡住插槽里预览的模块
+  const S = 0.46;
+  el.style.setProperty('--dx', ((-grab.x - el.offsetWidth / 2) * S) + 'px');
+  el.style.setProperty('--dy', (-((el.offsetHeight + grab.y) * S + 14)) + 'px');
   let last = { clientX: e.clientX, clientY: e.clientY };
-  let raf = 0;
+  let raf = 0, moved = false, dock = null;
+  // 插槽反馈：加工卡亮起，目标插槽高亮并预览要插进去的模块，另一个插槽变淡
+  const clearDock = () => {
+    if (!dock) return;
+    el.classList.remove('docking');
+    dock.pe.classList.remove('dock-target');
+    dock.pe.querySelectorAll('.sock').forEach(s => s.classList.remove('hot', 'dim', 'nope'));
+    dock.pe.querySelectorAll('.mod.ghost').forEach(g => g.remove());
+    dock = null;
+  };
+  const setDock = d => {
+    if (d && dock && d.pn.id === dock.pn.id && d.sock === dock.sock && d.ok === dock.ok) return;
+    clearDock();
+    if (!d) return;
+    dock = d;
+    el.classList.add('docking');
+    d.pe.classList.add('dock-target');
+    d.pe.querySelectorAll('.sock').forEach(s => {
+      if (s.dataset.sock !== d.sock) { s.classList.add('dim'); return; }
+      s.classList.add(d.ok ? 'hot' : 'nope');
+      if (d.ok) s.querySelector('.mchips').insertAdjacentHTML('beforeend', ghostChips(n));
+    });
+  };
   const place = ev => {
     last = { clientX: ev.clientX, clientY: ev.clientY };
     const c = toCanvas(last);
     n.x = clampX(c.x - ORIGIN.x + grab.x);
     n.y = clampY(c.y - ORIGIN.y + grab.y);
     el.style.left = (n.x + OX) + 'px'; el.style.top = (n.y + OY) + 'px';
+    if (!moved && Math.hypot(last.clientX - e.clientX, last.clientY - e.clientY) > 3) { moved = true; el.classList.add('dragging'); }
+    if (moved) setDock(findDock(n, el, last.clientX, last.clientY));
     drawEdges();
   };
   // 贴住视口边框时自动滚，卡片就不会被「看不见的框」挡住
@@ -440,6 +571,14 @@ function dragCard(e, n, el) {
   const up = () => {
     removeEventListener('pointermove', move); removeEventListener('pointerup', up);
     if (raf) cancelAnimationFrame(raf);
+    el.classList.remove('dragging');
+    if (dock) {                                  // 松手在插槽上：接进去；接不了就回到拖起的地方
+      const d = dock, token = el.getBoundingClientRect();
+      el.style.transition = 'none';              // CSS 过渡会压过 WAAPI，先关掉
+      clearDock();
+      if (d.ok) dockInto(n, d, token); else denyDock(n, el, d, from, token);
+      return;
+    }
     keepInView();
     saveStore();
   };
@@ -471,6 +610,244 @@ function startLink(from, fromEl) {
   addEventListener('pointermove', move); addEventListener('pointerup', up);
 }
 function hit(el, x, y) { const r = el.getBoundingClientRect(); return x >= r.left && x <= r.right && y >= r.top && y <= r.bottom; }
+
+// ---------- 拖卡接入：把卡片拖进加工卡的插槽 = 连线 ----------
+// 输入卡只插「素材」；输出卡看离哪个插槽近：插「素材」= 它交出的东西给这一步当素材，插「成果」= 这一步交出它
+function findDock(n, el, x, y) {
+  if (n.kind !== 'in' && n.kind !== 'out') return null;
+  const w = flow();
+  for (const pe of canvas.querySelectorAll('.node.k-proc')) {
+    if (pe === el) continue;
+    const r = pe.getBoundingClientRect(), m = 14 * zoom;
+    if (x < r.left - m || x > r.right + m || y < r.top - m || y > r.bottom + m) continue;
+    const pn = find(pe.dataset.id); if (!pn) continue;
+    let sock = 'in';
+    if (n.kind === 'out') {
+      const dist = k => { const s = pe.querySelector(`.sock[data-sock="${k}"]`); if (!s) return Infinity; const b = s.getBoundingClientRect(); return Math.abs(y - (b.top + b.height / 2)); };
+      sock = dist('in') <= dist('out') ? 'in' : 'out';
+    }
+    const [a, b] = sock === 'in' ? [n.id, pn.id] : [pn.id, n.id];
+    if (w.edges.some(([p, q]) => p === a && q === b)) return null;      // 已经接着：当普通拖动
+    return { pn, pe, sock, a, b, ok: !reaches(b, a) };                  // b 能走回 a，再接就绕成圈了
+  }
+  return null;
+}
+// 顺着连线从 from 走，能不能走到 to
+function reaches(from, to) {
+  const edges = flow().edges, seen = new Set([from]), todo = [from];
+  while (todo.length) {
+    const cur = todo.pop();
+    if (cur === to) return true;
+    for (const [p, q] of edges) if (p === cur && !seen.has(q)) { seen.add(q); todo.push(q); }
+  }
+  return false;
+}
+function ghostChips(n) {
+  const ms = modsOf(n);
+  const list = ms.length ? ms : [{ type: KIND_MOD[n.kind] || 'mat', name: n.title }];
+  return list.map(m => `<span class="mod t-${m.type} ghost">${esc(m.name)}</span>`).join('');
+}
+// 接上以后卡片放哪：素材在加工卡左边、成果在右边；和别的卡撞了就往下挪
+function dockSpot(n, pn, sock) {
+  const size = id => { const e = id && canvas.querySelector(`.node[data-id="${id}"]`); return { w: e ? e.offsetWidth : 244, h: e ? e.offsetHeight : 160 }; };
+  const me = size(n.id), pz = size(pn.id), GAP = 64, PAD = 14;
+  const x = sock === 'in' ? pn.x - me.w - GAP : pn.x + pz.w + GAP;
+  const others = flow().nodes.filter(o => o.id !== n.id).map(o => Object.assign({ x: o.x, y: o.y }, size(o.id)));
+  const clash = y => others.some(b => x < b.x + b.w + PAD && b.x < x + me.w + PAD && y < b.y + b.h + PAD && b.y < y + me.h + PAD);
+  let y = pn.y, i = 0;
+  while (clash(y) && i++ < 60) y += 36;
+  return { x: Math.round(x), y: Math.round(y) };
+}
+function dockInto(n, d, token) {
+  const w = flow();
+  const spot = dockSpot(n, d.pn, d.sock);
+  n.x = spot.x; n.y = spot.y;
+  if (!w.edges.some(([a, b]) => a === d.a && b === d.b)) w.edges.push([d.a, d.b]);
+  saveStore(); render();
+  playDock(n, d, token);
+}
+// 接入动画：① 小块弹回原大、落到加工卡旁边 ② 模块一块块飞进插槽、落地弹一下
+//           ③ 连线从起点画到插槽，光点沿线跑一遍，插槽一圈涟漪
+function playDock(n, d, token) {
+  if (reducedMotion()) return;
+  const el = canvas.querySelector(`.node[data-id="${n.id}"]`);
+  const pe = canvas.querySelector(`.node[data-id="${d.pn.id}"]`);
+  if (!el || !pe) return;
+  const r = el.getBoundingClientRect();
+  el.style.transformOrigin = '0 0';
+  el.animate([
+    { transform: `translate(${(token.left - r.left) / zoom}px, ${(token.top - r.top) / zoom}px) scale(${token.width / r.width})`, opacity: .85 },
+    { transform: 'none', opacity: 1 },
+  ], { duration: 480, easing: 'cubic-bezier(.2,1.25,.35,1)' }).onfinish = () => { el.style.transformOrigin = ''; };
+  const sock = pe.querySelector(`.sock[data-sock="${d.sock}"]`);
+  const cx = token.left + token.width / 2, cy = token.top + token.height / 2;
+  const chips = sock ? [...sock.querySelectorAll(`.mod.plug[data-src="${n.id}"]`)] : [];
+  chips.forEach((c, i) => {
+    const cr = c.getBoundingClientRect();
+    const f = makeFlyer(c);
+    c.style.opacity = '0';
+    const sx = cx - cr.left - cr.width * .2, sy = cy - cr.top - cr.height * .2;
+    const a = f.animate([
+      { transform: `translate(${sx}px, ${sy}px) scale(${zoom * .4})`, opacity: 0 },
+      { transform: `translate(${sx * .4}px, ${sy * .4 - 22 * zoom}px) scale(${zoom * 1.1})`, opacity: 1, offset: .55 },
+      { transform: `translate(0px, 0px) scale(${zoom})`, opacity: 1 },
+    ], { duration: 480, delay: 60 + i * 60, easing: 'cubic-bezier(.3,.7,.2,1)', fill: 'backwards' });
+    let landed = false;
+    const land = () => {
+      if (landed) return; landed = true;
+      f.remove(); c.style.opacity = '';
+      c.animate([{ transform: 'scale(1.22)' }, { transform: 'scale(1)' }], { duration: 220, easing: 'cubic-bezier(.2,1.5,.4,1)' });
+    };
+    a.onfinish = land; setTimeout(land, 900 + i * 60);
+  });
+  pe.animate([{ transform: 'scale(1)' }, { transform: 'scale(1.02)' }, { transform: 'scale(1)' }], { duration: 340, delay: 360, easing: 'ease-out' });
+  drawIn(`${d.a}>${d.b}`, () => { if (sock && sock.isConnected) flashSock(sock); }, 200);
+}
+// 接不了（会绕成圈）：插槽摇一下头，卡片弹回拖起的地方
+function denyDock(n, el, d, from, token) {
+  const sock = d.pe.querySelector(`.sock[data-sock="${d.sock}"]`);
+  n.x = from.x; n.y = from.y;
+  el.style.left = (n.x + OX) + 'px'; el.style.top = (n.y + OY) + 'px';
+  drawEdges(); saveStore();
+  if (reducedMotion()) { el.style.transition = ''; return; }
+  if (sock) sock.animate([{ transform: 'translateX(0)' }, { transform: 'translateX(-6px)' }, { transform: 'translateX(5px)' },
+    { transform: 'translateX(-3px)' }, { transform: 'translateX(0)' }], { duration: 340, easing: 'ease-in-out' });
+  const r = el.getBoundingClientRect();
+  el.style.transformOrigin = '0 0';
+  const a = el.animate([
+    { transform: `translate(${(token.left - r.left) / zoom}px, ${(token.top - r.top) / zoom}px) scale(${token.width / r.width})`, opacity: .85 },
+    { transform: 'none', opacity: 1 },
+  ], { duration: 480, easing: 'cubic-bezier(.2,1.1,.35,1)' });
+  const done = () => { el.style.transition = ''; el.style.transformOrigin = ''; };
+  a.onfinish = done; a.oncancel = done;
+}
+// 模块的替身：挂在 body 上飞（画布在缩放层里，替身要乘回 zoom 才和原块一样大）
+function makeFlyer(chip) {
+  const r = chip.getBoundingClientRect();
+  const f = chip.cloneNode(true);
+  f.classList.remove('ghost', 'lifting');
+  f.classList.add('flyer');
+  Object.assign(f.style, {
+    position: 'fixed', left: r.left + 'px', top: r.top + 'px', width: (r.width / zoom) + 'px', margin: '0', opacity: '',
+    transformOrigin: '0 0', transform: `scale(${zoom})`, zIndex: '300', pointerEvents: 'none',
+  });
+  document.body.appendChild(f);
+  return f;
+}
+// 新连线自己画出来：从起点描到终点，然后光点沿线跑到头，终点一圈涟漪
+function drawIn(key, done, delay = 0) {
+  const fin = () => { if (done) done(); };
+  if (reducedMotion()) return fin();
+  const p = edgesSvg.querySelector(`path[data-k="${key}"]`);
+  if (!p) return fin();
+  const len = p.getTotalLength();
+  const mk = p.getAttribute('marker-end');
+  p.removeAttribute('marker-end');
+  p.classList.add('drawing');
+  p.style.strokeDasharray = `${len} ${len}`;
+  const a = p.animate([{ strokeDashoffset: len }, { strokeDashoffset: 0 }],
+    { duration: 480, delay, easing: 'cubic-bezier(.3,.6,.2,1)', fill: 'backwards' });
+  let fired = false;
+  const end = () => {
+    if (fired) return; fired = true;
+    p.style.strokeDasharray = ''; p.classList.remove('drawing');
+    if (mk) p.setAttribute('marker-end', mk);
+    pulseAlong(key, pt => { if (pt) ripple(pt.x, pt.y); fin(); });
+  };
+  a.onfinish = end; setTimeout(end, delay + 800);
+}
+// 断开：连线往拔出的那一头缩回去（sign 1 = 缩向起点，-1 = 缩向终点）
+function retractEdge(key, sign, done) {
+  const p = edgesSvg.querySelector(`path[data-k="${key}"]`);
+  if (!p || reducedMotion()) return done();
+  const len = p.getTotalLength();
+  p.removeAttribute('marker-end');
+  p.style.strokeDasharray = `${len} ${len}`;
+  const a = p.animate([{ strokeDashoffset: 0 }, { strokeDashoffset: sign * len }], { duration: 300, easing: 'cubic-bezier(.5,0,.75,0)', fill: 'forwards' });
+  let fired = false;
+  const fin = () => { if (fired) return; fired = true; done(); };
+  a.onfinish = fin; setTimeout(fin, 520);
+}
+// 光点沿线跑一遍。每帧按 key 重新取线：中途画布重绘了也跟着新线走，线没了就收
+function pulseAlong(key, done) {
+  const cur = () => edgesSvg.querySelector(`path[data-k="${key}"]`);
+  const p = cur();
+  if (!p) return done && done(null);
+  const p0 = p.getPointAtLength(0);
+  const dot = document.createElementNS(SVGNS, 'circle');
+  dot.setAttribute('r', '4.5'); dot.setAttribute('class', 'pulse');
+  dot.setAttribute('cx', p0.x); dot.setAttribute('cy', p0.y);
+  fxSvg.appendChild(dot);
+  const t0 = performance.now(), dur = Math.max(280, Math.min(560, p.getTotalLength() * 1.3));   // 短线跑得快，长线不拖沓
+  const step = now => {
+    const q = cur();
+    if (!q) { dot.remove(); return done && done(null); }
+    const t = Math.min(1, (now - t0) / dur), k = t < .5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    const pt = q.getPointAtLength(q.getTotalLength() * k);
+    dot.setAttribute('cx', pt.x); dot.setAttribute('cy', pt.y);
+    if (t < 1) requestAnimationFrame(step); else { dot.remove(); if (done) done(pt); }
+  };
+  requestAnimationFrame(step);
+}
+function ripple(x, y) {
+  const c = document.createElementNS(SVGNS, 'circle');
+  c.setAttribute('cx', x); c.setAttribute('cy', y); c.setAttribute('r', '18'); c.setAttribute('class', 'ripple');
+  fxSvg.appendChild(c);
+  const a = c.animate([{ transform: 'scale(.15)', opacity: .9 }, { transform: 'scale(1)', opacity: 0 }],
+    { duration: 560, easing: 'cubic-bezier(.2,.7,.3,1)', fill: 'forwards' });
+  a.onfinish = () => c.remove(); setTimeout(() => c.remove(), 900);
+}
+function flashSock(sock) {
+  sock.animate([
+    { boxShadow: '0 0 0 0 rgba(255,90,31,.5)', backgroundColor: 'rgba(255,90,31,.16)' },
+    { boxShadow: '0 0 0 10px rgba(255,90,31,0)', backgroundColor: 'rgba(255,90,31,0)' },
+  ], { duration: 520, easing: 'ease-out' });
+}
+// 从加工卡的插槽里把模块拖出去：出了这张卡松手 = 断开；没出去就飞回原位
+function unplugDrag(e, pn, pe, chip) {
+  const src = chip.dataset.src, dir = chip.dataset.dir, key = plugKey(pn.id, chip);
+  const sx = e.clientX, sy = e.clientY;
+  const same = [...pe.querySelectorAll(`.mod.plug[data-src="${src}"][data-dir="${dir}"]`)];
+  const path = () => edgesSvg.querySelector(`path[data-k="${key}"]`);
+  let ghost = null, out = false;
+  const move = ev => {
+    if (!ghost) {
+      if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+      ghost = makeFlyer(chip);
+      same.forEach(c => c.classList.add('lifting'));
+      document.body.classList.add('grabbing');
+    }
+    ghost.style.transform = `translate(${ev.clientX - sx}px, ${ev.clientY - sy}px) scale(${zoom})`;
+    const r = pe.getBoundingClientRect();
+    out = ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom;
+    ghost.classList.toggle('cut', out);
+    const p = path(); if (p) p.classList.toggle('cutting', out);
+  };
+  const up = () => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+    document.body.classList.remove('grabbing');
+    if (!ghost) return;                                  // 只是点了一下：什么都不做（双击照常打开卡片）
+    const g = ghost, at = g.style.transform;
+    if (!out) {                                          // 没拖出这张卡：飞回原位
+      const back = () => { g.remove(); same.forEach(c => c.classList.remove('lifting')); const p = path(); if (p) p.classList.remove('cutting'); };
+      if (reducedMotion()) return back();
+      g.animate([{ transform: at }, { transform: `translate(0px, 0px) scale(${zoom})` }], { duration: 200, easing: 'cubic-bezier(.3,.7,.2,1)' }).onfinish = back;
+      return;
+    }
+    if (!reducedMotion()) {
+      g.animate([{ transform: at, opacity: 1 }, { transform: `${at} scale(.5)`, opacity: 0 }], { duration: 240, easing: 'ease-in', fill: 'forwards' });
+      same.forEach(c => c.animate([{ opacity: .28 }, { opacity: 0, transform: 'scale(.6)' }], { duration: 220, fill: 'forwards' }));
+    }
+    retractEdge(key, dir === 'in' ? 1 : -1, () => {
+      g.remove();
+      const [a, b] = key.split('>');
+      const w = flow();
+      w.edges = w.edges.filter(([x, y]) => !(x === a && y === b));
+      saveStore(); render();
+    });
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up);
+}
 
 // ---------- 右栏 ----------
 function renderPanel() {
@@ -508,6 +885,9 @@ function renderPanel() {
     <div class="pgroup ${k.cls}"><span class="lab">${k.label}内容</span>
       <textarea id="pBody" placeholder="${esc(k.ph)}">${esc(n.body)}</textarea>
 </div>
+    <div class="pmods"><span class="lab">${MOD_T[KIND_MOD[n.kind]]}</span>
+      <div class="pm-list" id="pMods">${modsOf(n).map((m, i) => `<span class="mod t-${m.type} ed"><span class="mn" contenteditable="plaintext-only" spellcheck="false" data-i="${i}">${esc(m.name)}</span><b class="mx" data-x="${i}" title="删掉这块">✕</b></span>`).join('')}<input id="pModAdd" class="pm-add" placeholder="+ ${MOD_T[KIND_MOD[n.kind]]}（回车添加）"></div>
+    </div>
 
     <div class="chat">
       <div class="chat-hd"><b>和 ${esc(w.agent ? agentName(w.agent) : 'agent')} 聊这张卡</b><span class="kbd">Enter 发送</span></div>
@@ -530,12 +910,34 @@ function renderPanel() {
     </details>`;
 
   $('#pTitle').oninput = e => { n.title = e.target.value.trim() || k.label + '卡'; syncCard(n); };
-  $('#pTitle').onchange = () => { saveStore(); t.textContent = `${KINDS[n.kind].label}卡 · ${n.title}`; renderWorkflowList(); };
-  $('#pKind').onchange = e => { n.kind = e.target.value; saveStore(); render(); };
+  $('#pTitle').onchange = () => { saveStore(); t.textContent = `${KINDS[n.kind].label}卡 · ${n.title}`; renderWorkflowList(); paintNodes(); };
+  $('#pKind').onchange = e => { n.kind = e.target.value; n.mods = modsOf(n).map(m => ({ ...m, type: KIND_MOD[n.kind] })); saveStore(); render(); };
   $('#pBody').oninput = e => { n.body = e.target.value.replace(/\u00a0/g, ' '); syncCard(n); };
   $('#pBody').onchange = () => saveStore();
   $('#pChecks').onchange = e => { n.checks = e.target.value.split(',').map(s => s.trim()).filter(Boolean); saveStore(); render(); };
   $('#pImpl').onchange = e => { n.impl = e.target.value.replace(/\u00a0/g, ' ').trim(); saveStore(); render(); };
+  // 模块：直接改名、清空即删，✕ 删，回车加一块；只重画画布，不重建面板（不抢焦点）
+  b.querySelectorAll('#pMods .mn').forEach(sp => {
+    sp.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); sp.blur(); } });
+    sp.addEventListener('blur', () => {
+      const i = +sp.dataset.i, v = sp.textContent.replace(/\s+/g, ' ').trim().slice(0, 24);
+      if (!n.mods || !n.mods[i]) return;
+      if (!v) { n.mods.splice(i, 1); saveStore(); paintNodes(); renderPanel(); return; }
+      if (v !== n.mods[i].name) { n.mods[i].name = v; saveStore(); paintNodes(); }
+    });
+  });
+  b.querySelectorAll('#pMods .mx').forEach(x => x.addEventListener('click', () => {
+    if (!n.mods) return;
+    n.mods.splice(+x.dataset.x, 1); saveStore(); paintNodes(); renderPanel();
+  }));
+  $('#pModAdd').addEventListener('keydown', ev => {
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    const v = ev.target.value.replace(/\s+/g, ' ').trim().slice(0, 24); if (!v) return;
+    n.mods = modsOf(n).concat([{ id: uid(), type: KIND_MOD[n.kind] || 'tool', name: v }]);
+    saveStore(); paintNodes(); renderPanel();
+    const i = $('#pModAdd'); if (i) i.focus();
+  });
 
   b.querySelectorAll('.qchip').forEach(c => c.onclick = () => chatAsk(c.dataset.q));
   $('#chatSend').onclick = () => chatSend($('#chatIn').value);
@@ -570,6 +972,8 @@ const PLAIN_RULE = [
   '③ 交出什么——什么文件/清单，里面每条写什么。',
   '不要写「处理数据」「整理一下」这种空话。命令、脚本、文件路径、字段名一律只放「内部实现」，不进卡片正文。',
 ].join('');
+// 候选卡的模块：和卡片上的素材/工具/成果同一套口径
+const MODS_RULE = 'mods 把这张卡用到的东西拆成短词模块（每块 8 个字以内，说人话）：输入卡写素材（哪几张图、哪些数据），加工卡写工具（怎么挑、怎么比、怎么查），输出卡写成果（交出的文件里有哪几样）。';
 async function askFlow() {
   const w = flow();
   if (!w.agent) { alert('先给整条工作流指派一个 agent'); return; }
@@ -650,6 +1054,7 @@ function bubblesHTML(msgs, conf, emptyText, waiting, whoLabel) {
         if (!on) return btn;
         return btn + `<div class="optconfirm">
           <div class="cf-row"><span class="lab">内容</span><span>${esc(o.body)}</span></div>
+          <div class="cf-row"><span class="lab">${esc(MOD_T[KIND_MOD[o.kind]] || '模块')}</span><span>${(o.mods || []).map(m => esc(m.name)).join('、') || '（无）'}</span></div>
           <div class="cf-row"><span class="lab">⚙ 内部实现</span><span>${esc(o.impl || '（无）')}</span></div>
           <div class="cf-ask">确认要加进流程吗？</div>
           <div class="cf-btns"><button class="primary" data-yes="1">确认添加</button><button data-no="1">取消</button></div>
@@ -716,7 +1121,8 @@ function buildChatPrompt(n, text) {
     hist ? `上文对话：\n${hist}` : '',
     `我说：${text}`,
     '回答用大白话、短一点。如果我要的是「下一步」候选卡，只输出 JSON 数组，不要解释：',
-    '[{"kind":"proc","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"命令/脚本/路径/字段"}]',
+    MODS_RULE,
+    '[{"kind":"proc","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"命令/脚本/路径/字段","mods":["模块短词"]}]',
   ].filter(Boolean).join('\n');
 }
 
@@ -729,8 +1135,8 @@ const STEP_ICON = {
 };
 function stepLabel(name) { return (STEP_ICON[name] || '⚙') + ' ' + name; }
 
-async function runStream({ msgs, rerender, profile, prompt }) {
-  const runId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+async function runStream({ msgs, rerender, profile, prompt, toolsets, cards = true, runId, timeoutMs }) {
+  runId = runId || ('r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
   const live = { role: 'agent', text: '', think: '', steps: [], secs: '', live: true, startedAt: Date.now() };
   msgs.push(live);
   rerender();
@@ -756,11 +1162,11 @@ async function runStream({ msgs, rerender, profile, prompt }) {
   });
   let r;
   if (USE_STREAM) {
-    try { r = await window.tcflow.askAgentStream({ profile, prompt, runId }); }
+    try { r = await window.tcflow.askAgentStream({ profile, prompt, runId, toolsets, timeoutMs }); }
     catch (e) { r = { ok: false, error: String(e) }; }
   } else {
     const t0 = Date.now();
-    r = await window.tcflow.askAgent({ profile, prompt });
+    r = await window.tcflow.askAgent({ profile, prompt, toolsets, timeoutMs });
     const p = r.ok ? parseAgentOutput(r.text) : { answer: '失败：' + agentAnswer(r.error || r.text || r.code), think: '', steps: [], secs: '' };
     live.text = p.answer || ''; live.think = p.think || ''; live.steps = p.steps || []; live.secs = p.secs || String(Math.round((Date.now() - t0) / 1000));
   }
@@ -770,7 +1176,7 @@ async function runStream({ msgs, rerender, profile, prompt }) {
   live.steps.forEach(st => { if (st.state === 'running') { st.state = 'error'; st.time = ''; } });
   if (!live.text && r.text) live.text = r.text;
   if (!r.ok && !live.text) live.text = '失败：' + (r.error || r.code || '未知错误');
-  const opts = parseCardArray(r.text || live.text || '');
+  const opts = cards ? parseCardArray(r.text || live.text || '') : [];
   if (opts.length) { live.opts = opts; live.text = `给你 ${opts.length} 个候选卡：点一下看细节，按「确认添加」才会进流程。`; }
   rerender();
   return live;
@@ -823,7 +1229,8 @@ function dockPrompt(text) {
     `我说：${text}`,
     '从平台主管的角度回答：这条链路该谁干、缺哪一步、要不要加人/换人；说人话、短一点。',
     '如果我要的是「下一步」候选卡，只输出 JSON 数组，不要解释：',
-    '[{"kind":"proc","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"命令/脚本/路径/字段"}]',
+    MODS_RULE,
+    '[{"kind":"proc","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"命令/脚本/路径/字段","mods":["模块短词"]}]',
   ].filter(Boolean).join('\n');
 }
 async function dockSend(text) {
@@ -845,9 +1252,10 @@ function addFromDock(mi, oi) {
   const o = opt[oi]; if (!o) return;
   if (w.nodes.some(x => (x.title || '').trim() === o.title.trim())) { alert('已经有一张同名卡片了'); return; }
   const ref = chainOrder(w).slice(-1)[0];
+  const spot = ref ? dockSpot({ id: '' }, ref, 'out') : { x: 300, y: 340 };   // 放在流程最后一张卡右边，避开别的卡
   const n = addNode(o.kind, {
-    title: o.title, body: o.body, impl: o.impl || '',
-    x: ref ? ref.x + 40 : 300, y: ref ? ref.y + 260 : 340,
+    title: o.title, body: o.body, impl: o.impl || '', mods: normMods(o.mods, o.kind),
+    x: spot.x, y: spot.y,
   }, false);
   selId = n.id; panelCardId = n.id; panelOpen = false; saveStore(); render();
 }
@@ -859,15 +1267,17 @@ function addFromOption(fromNode, mi, oi) {
   const opt = ((fromNode.chat || [])[mi] || {}).opts || [];
   const o = opt[oi]; if (!o) return;
   if (flow().nodes.some(x => (x.title || '').trim() === o.title.trim())) { alert('已经有一张同名卡片了'); return; }
-  const n = addNode(o.kind, { title: o.title, body: o.body, impl: o.impl || '', x: fromNode.x + 40, y: fromNode.y + 200 }, false);
-  connect(fromNode.id, n.id);
+  const spot = dockSpot({ id: '' }, fromNode, 'out');   // 放在它右边，避开别的卡
+  const n = addNode(o.kind, { title: o.title, body: o.body, impl: o.impl || '', mods: normMods(o.mods, o.kind), x: spot.x, y: spot.y }, false);
+  connect(fromNode.id, n.id, false);
   selId = n.id; panelCardId = n.id; panelOpen = false; saveStore(); render();
+  drawIn(`${fromNode.id}>${n.id}`);
   const inEl = $('#chatIn'); if (inEl) inEl.focus();
 }
 function parseCardArray(text) {
   for (const arr of jsonArrays(text)) {
     const ok = arr.filter(validOpt)
-      .map(x => cleanCard({ kind: x.kind, title: String(x.title).slice(0, 24), body: String(x.body || ''), impl: String(x.impl || x.internal || '') }));
+      .map(x => cleanCard({ kind: x.kind, title: String(x.title).slice(0, 24), body: String(x.body || ''), impl: String(x.impl || x.internal || ''), mods: x.mods }));
     if (ok.length) return ok.slice(0, 4);
   }
   return [];
@@ -936,14 +1346,22 @@ function parseAgentOutput(raw) {
 // 只要「正式回答」的场景（验证结果、概览评审）用这个
 function agentAnswer(text) { return parseAgentOutput(text).answer; }
 // agent 万一在人话里夹了命令，这里再兜一次：能拆就搬进内部实现
-function cleanCard(o) {
+function cleanCard(o, max = 160) {
   const cut = splitTech(o.body);
   return {
     kind: o.kind,
     title: o.title,
-    body: cut.body.slice(0, 160),
-    impl: [String(o.impl || '').trim(), cut.impl].filter(Boolean).join(' ').slice(0, 220),
+    body: cut.body.slice(0, max),
+    impl: [String(o.impl || '').trim(), cut.impl].filter(Boolean).join(' ').slice(0, max + 100),
+    mods: normMods(o.mods, o.kind),
   };
+}
+// 候选卡带来的模块：字符串或 {name} 都收；滤掉提示词里的占位
+function normMods(list, kind) {
+  if (!Array.isArray(list)) return [];
+  return list.map(m => (typeof m === 'string' ? m : (m && (m.name || m.title)) || ''))
+    .map(x => String(x).replace(/\s+/g, ' ').trim()).filter(x => x && !/^(模块短词|短词)$/.test(x))
+    .slice(0, 6).map(x => ({ id: uid(), type: KIND_MOD[kind] || 'tool', name: x.slice(0, 16) }));
 }
 async function validateAll() {
   const w = flow();
@@ -1000,18 +1418,476 @@ function startRun() {
     `\n\n（v0.3 只到"就绪"；真实执行要接现有闸门与账本）`;
 }
 
+// ---------- 读取 agent 的工作链路 → 分析成卡片 → 放进画布 ----------
+// 读：主进程只读它的配置、技能和干活记录（chain.js，state.db 只读打开）。
+// 分析：交给平台主管，只给 todo 工具组、并关掉它挂的 MCP 连接（-t todo,no_mcp）——
+//       跑不了命令、读写不了文件、发不了消息，也碰不到店铺后台的数据接口。
+// 落盘：先在窗里预览，按「放进画布」才建卡（agent 不能自己往画布上加东西）。
+const READ_TOOLSETS = 'todo,no_mcp';
+const SRC_LABEL = { kanban: '看板派单', oneshot: '单次指令', subagent: '别的 agent 调用', local: '直接对话', cron: '定时任务', cli: '命令行', desktop: '桌面对话' };
+const KIND_ALIAS = { in: 'in', input: 'in', '输入': 'in', proc: 'proc', process: 'proc', '加工': 'proc', out: 'out', output: 'out', '输出': 'out' };
+const rd = { pick: null, chain: null, msgs: [], plan: null, busy: false, runId: null, token: 0, error: '' };
+
+function openRead() { $('#readModal').classList.add('on'); paintRead(); }
+function closeRead() { cancelRead(); $('#readModal').classList.remove('on'); }
+function cancelRead() {
+  rd.token++;
+  if (rd.runId) { try { window.tcflow.cancelAgent(rd.runId); } catch (e) { } }
+  rd.runId = null; rd.busy = false;
+}
+// 平台主管不在 profiles 目录里，单独放进来
+function readAgents() {
+  return [{ id: 'default', name: '平台主管', section: '主管团队', desc: '规划与派工、跨部门一次复核', stopped: false }]
+    .concat(agents.map(a => Object.assign({}, a, { name: a.name === '主管' && a.section ? a.section + '主管' : a.name })));
+}
+function readPickHTML() {
+  const groups = new Map(), old = [];
+  for (const a of readAgents()) {
+    if (a.stopped) { old.push(a); continue; }
+    const k = a.section || '其他';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(a);
+  }
+  const item = a => `<div class="ritem${rd.pick === a.id ? ' on' : ''}" data-id="${esc(a.id)}" title="${esc(a.desc || '')}">${esc(a.name)}</div>`;
+  let h = [...groups].map(([k, list]) => `<div class="rgroup"><div class="rgl">${esc(k)}</div>${list.map(item).join('')}</div>`).join('');
+  if (old.length) h += `<details class="rgroup old"${old.some(a => a.id === rd.pick) ? ' open' : ''}><summary class="rgl">已停用 · ${old.length}</summary>${old.map(item).join('')}</details>`;
+  return h;
+}
+function readSummaryHTML(c) {
+  const d = t => t ? new Date(t * 1000).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '—';
+  const pill = (name, n, old) => `<span class="rp${old ? ' old' : ''}">${esc(name)}<i>${n}</i></span>`;
+  const people = list => list.length ? list.map(x => pill(x.name, x.count, x.old)).join('') : '<span class="rnone">—</span>';
+  const skills = c.skills.filter(s => s.used).slice(0, 8);
+  const row = (k, v) => `<div class="rrow"><span class="rk">${k}</span><div class="rv">${v}</div></div>`;
+  const src = Object.entries(c.stats.bySource || {}).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${SRC_LABEL[k] || k} ${v}`).join('、');
+  const dirs = list => list.map(([p, n]) => `${esc(p)}（${n}）`).join('<br>') || '—';
+  return `<div class="rhead"><b>${esc(c.name)}</b><span>${esc(c.section || '')}</span><span class="rstat">${c.stats.sessions} 次活 · ${d(c.stats.first)} → ${d(c.stats.last)}</span></div>` +
+    row('干的活', c.tasks.slice(0, 5).map(t => `<div class="rtask">${esc(t.title)}</div>`).join('') || '<span class="rnone">还没有干活记录</span>') +
+    row('用的技能', skills.map(s => pill(s.title || s.name, s.used)).join('') || '<span class="rnone">—</span>') +
+    row('谁派活', people(c.upstream)) +
+    row('交给谁', people(c.downstream)) +
+    `<details class="internal rraw"><summary>⚙ 读到的线索</summary>
+      <div class="rraw-g"><b>活从哪来</b>${esc(src || '—')}</div>
+      <div class="rraw-g"><b>常读</b>${dirs(c.reads)}</div>
+      <div class="rraw-g"><b>常写</b>${dirs(c.writes)}</div>
+      <div class="rraw-g"><b>常用工具</b>${c.tools.slice(0, 10).map(([n, k]) => `${esc(n)} ${k}`).join('、') || '—'}</div>
+      <div class="rraw-g"><b>技能</b>${c.skills.map(s => esc(s.name) + (s.used ? ' ' + s.used : '')).join('、') || '—'}</div>
+    </details>`;
+}
+function paintRead() {
+  const pk = $('#rPick');
+  pk.innerHTML = readPickHTML();
+  pk.querySelectorAll('.ritem').forEach(el => el.onclick = () => pickRead(el.dataset.id));
+  const m = $('#rMain');
+  if (!rd.pick) m.innerHTML = '<div class="rempty">选一个 agent</div>';
+  else if (!rd.chain) m.innerHTML = `<div class="rempty${rd.error ? ' bad' : ''}">${esc(rd.error || '正在读…')}</div>`;
+  else {
+    m.innerHTML = readSummaryHTML(rd.chain) + '<div class="rlog" id="rLog"></div><div class="rprev" id="rPrev"></div>';
+    paintReadLog();
+    if (rd.plan) paintPlan(rd.plan);
+  }
+  paintReadFoot();
+}
+function paintReadFoot() {
+  $('#rAgain').disabled = !rd.chain || rd.busy;
+  $('#rPlace').disabled = !rd.plan || rd.busy;
+  $('#rHint').textContent = rd.busy ? '平台主管在分析…' : (rd.chain && !rd.plan && rd.error ? rd.error : '');
+}
+// 流式时不把一串 JSON 打在气泡里：换成「已拆出 N 张」，卡片在下面一张张冒出来
+function liveView(m) {
+  if (!m.live) return m;
+  const t = String(m.text || '');
+  const n = partialCards(t).length;
+  return Object.assign({}, m, { text: !t ? '' : (t.indexOf('{') < 0 ? t : (n ? `正在拆卡… 已拆出 ${n} 张` : '正在拆卡…')) });
+}
+function paintReadLog() {
+  const log = $('#rLog'); if (!log) return;
+  const view = rd.msgs.map(liveView);
+  const last = view[view.length - 1];
+  const liveEl = log.querySelector('[data-live="1"]');
+  if (last && last.live && liveEl) { patchLive(liveEl, last, '平台主管'); }
+  else keepDetails(log, () => { log.innerHTML = view.length ? bubblesHTML(view, null, '', false, '平台主管') : ''; });
+  // 还没出字：交给全局 1s 定时器显示「正在想… Ns」；出字了就撤掉，免得盖住正文
+  const el = log.querySelector('[data-live="1"]');
+  if (el) { if (last && last.live && !last.text) { if (!el.dataset.since) el.dataset.since = last.startedAt || Date.now(); } else delete el.dataset.since; }
+  log.scrollTop = log.scrollHeight;
+}
+function paintReadLive() {
+  paintReadLog();
+  const last = rd.msgs[rd.msgs.length - 1];
+  paintPartial(partialCards(last && last.text));
+}
+// 还没写完的 JSON 里，已经写完整的卡（kind + title 都有了）
+function partialCards(text) {
+  const t = String(text || ''), i = t.indexOf('"cards"');
+  if (i < 0) return [];
+  const out = [];
+  for (const chunk of t.slice(i).split('{').slice(1)) {
+    const k = (chunk.match(/"kind"\s*:\s*"([^"]+)"/) || [])[1] || '';
+    const title = (chunk.match(/"title"\s*:\s*"([^"]+)"/) || [])[1];
+    const kind = KIND_ALIAS[k.trim().toLowerCase()] || KIND_ALIAS[k.trim()];
+    if (!kind || !title) continue;
+    const mm = chunk.match(/"mods"\s*:\s*\[([^\]]*)\]/);
+    const mods = mm ? (mm[1].match(/"([^"]+)"/g) || []).map(s => s.slice(1, -1)) : null;
+    out.push({ kind, title: title.slice(0, 24), mods });
+  }
+  return out;
+}
+function prevSkeleton(box) {
+  box.innerHTML = ['in', 'proc', 'out'].map(k => `<div class="rcol k-${k}"><div class="rch">${KINDS[k].label}</div><div class="rtiles" data-k="${k}"></div></div>`).join('');
+}
+function tileHTML(c, i, key) {
+  const mods = (c.mods || []).map(m => typeof m === 'string' ? { type: KIND_MOD[c.kind], name: m } : m);
+  return `<div class="rtile k-${c.kind}" data-i="${i}"${key ? ` data-key="${esc(key)}"` : ''}><b>${esc(c.title)}</b>` +
+    `<div class="rmods">${mods.map(m => `<span class="mod t-${m.type}">${esc(m.name)}</span>`).join('')}</div></div>`;
+}
+// 流式中：只追加新冒出来的卡，已有的不重建（不然动画每帧重放）
+function paintPartial(cards) {
+  const box = $('#rPrev'); if (!box) return;
+  if (!box.querySelector('.rcol')) prevSkeleton(box);
+  box.classList.remove('done');
+  const have = box.querySelectorAll('.rtile').length;
+  cards.forEach((c, i) => {
+    if (i < have) {
+      const t = box.querySelector(`.rtile[data-i="${i}"]`);
+      if (t && c.mods && !t.dataset.m) { t.dataset.m = '1'; t.querySelector('.rmods').innerHTML = c.mods.map(n => `<span class="mod t-${KIND_MOD[c.kind]}">${esc(n)}</span>`).join(''); }
+      return;
+    }
+    box.querySelector(`.rtiles[data-k="${c.kind}"]`).insertAdjacentHTML('beforeend', tileHTML(c, i));
+    if (c.mods) box.querySelector(`.rtile[data-i="${i}"]`).dataset.m = '1';
+  });
+}
+function paintPlan(plan) {
+  const box = $('#rPrev'); if (!box) return;
+  prevSkeleton(box);
+  box.classList.add('done');
+  plan.cards.forEach((c, i) => box.querySelector(`.rtiles[data-k="${c.kind}"]`).insertAdjacentHTML('beforeend', tileHTML(c, i, c.key)));
+}
+async function pickRead(id) {
+  cancelRead();
+  const token = rd.token;
+  Object.assign(rd, { pick: id, chain: null, plan: null, msgs: [], error: '' });
+  paintRead();
+  let r;
+  try { r = await window.tcflow.readAgentChain(id); } catch (e) { r = { ok: false, error: String(e) }; }
+  if (token !== rd.token) return;                                 // 读的时候又换了一个
+  if (!r || !r.ok) { rd.error = (r && r.error) || '读不到'; paintRead(); return; }
+  rd.chain = r;
+  paintRead();
+  if (!r.stats.sessions && !r.skills.length && !r.soul) { rd.error = '它还没有能读的东西'; paintReadFoot(); return; }
+  analyzeChain();
+}
+function chainPrompt(c) {
+  const d = t => t ? new Date(t * 1000).toISOString().slice(0, 10) : '?';
+  const ppl = list => list.map(x => `${x.name}${x.old ? '（已停用）' : ''} ${x.count} 次`).join('、') || '（没有记录）';
+  const skills = c.skills.slice(0, 10).map(s => `- ${s.title || s.name}（${s.name}）${s.used ? `用了 ${s.used} 次` : '装着、最近没用'}：${String(s.desc || '').slice(0, 110)}` +
+    (s.heads.length ? '；要点：' + s.heads.slice(0, 4).join(' / ') : '')).join('\n') || '（没有自己的技能）';
+  const tasks = c.tasks.slice(0, 14).map(t => `- ${t.title}（${SRC_LABEL[t.src] || t.src}，${t.calls} 次工具调用）`).join('\n') || '（没有记录）';
+  const samples = c.samples.slice(0, 5).map((s, i) => `${i + 1}. 派活：${s.ask.slice(0, 260)}\n   它的交付：${s.done.slice(0, 200) || '（没写）'}`).join('\n') || '（没有）';
+  const dirs = list => list.slice(0, 6).map(([p, n]) => `${p}（${n} 次）`).join('、') || '（没有）';
+  return [
+    '【读取链路】你是平台主管，在帮用户把一个 agent 平时真正在干的活，画成工作流开发平台里的卡片。',
+    '只做分析：不执行、不跑命令、不读写文件、不发消息、不付费。下面的材料是从它的配置和干活记录里只读出来的。',
+    '',
+    `agent：${c.name}（${c.id}）｜部门：${c.section || '—'}`,
+    `职责：${c.desc || '—'}`,
+    `干活记录：${c.stats.sessions} 次（${d(c.stats.first)} → ${d(c.stats.last)}），工具调用 ${c.stats.toolCalls} 次`,
+    '',
+    '岗位说明（节选）：', String(c.soul || '（没有）').slice(0, 2400),
+    '',
+    '技能（按实际用的次数）：', skills,
+    '',
+    '最近干的活（新→旧）：', tasks,
+    '',
+    '典型的派活原文和它的交付（节选）：', samples,
+    '',
+    `谁派活给它：${ppl(c.upstream)}`,
+    `它交给谁：${ppl(c.downstream)}`,
+    `常读的地方：${dirs(c.reads)}`,
+    `常写的地方：${dirs(c.writes)}`,
+    `常用工具：${c.tools.slice(0, 10).map(([n, k]) => `${n} ${k}`).join('、') || '（没有）'}`,
+    '',
+    '请这样画：',
+    '1. 只画它反复在做的主线，4–9 张卡；一次性的杂活、测试、自我介绍类对话不画。',
+    '2. 输入卡：它从谁那里拿到什么（派活的人、上游交来的资料）；加工卡：它具体怎么干；输出卡：它交出什么、交给谁。',
+    '3. 连线只按这条路走：输入 → 加工 → 输出（输出也可以再喂给下一张加工）。输入卡只往外连，什么都不连进输入卡；',
+    '   每张加工卡至少有一个来源（输入卡、上一张加工或输出卡），至少交出一张输出卡；整条连成一片，不能断成几截。',
+    PLAIN_RULE,
+    MODS_RULE,
+    '4. impl 写执行时真正用到的：技能名、目录、工具、字段名（这些不进卡片正文）。',
+    '5. 只输出一个 JSON 对象，不要解释，不要代码块标记。格式：',
+    '{"name":"工作流名（12 字内）","summary":"一句话说清这条链路","cards":[{"key":"c1","kind":"in","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"技能/目录/工具/字段","mods":["模块短词"]}],"edges":[["c1","c2"]]}',
+  ].join('\n');
+}
+async function analyzeChain() {
+  const c = rd.chain;
+  if (!c || rd.busy) return;
+  const token = ++rd.token;
+  Object.assign(rd, { busy: true, plan: null, msgs: [], error: '' });
+  paintReadLog(); paintReadFoot();
+  let plan = null, why = '', live = null;
+  for (let attempt = 0; attempt < 2 && !plan; attempt++) {         // 拆坏了自动重来一次，不用人去点
+    rd.runId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const box = $('#rPrev'); if (box) { box.innerHTML = ''; box.classList.remove('done'); }
+    live = await runStream({
+      msgs: rd.msgs, rerender: () => { if (token === rd.token) paintReadLive(); },
+      profile: DOCK_AGENT, prompt: chainPrompt(c), toolsets: READ_TOOLSETS, cards: false, runId: rd.runId, timeoutMs: 240000,
+    });
+    if (token !== rd.token) return;                               // 中途换了 agent 或关了窗：这次的结果不要了
+    const p = parseChainPlan(live.text);
+    why = /^失败/.test(live.text || '') ? live.text : planProblem(p);
+    if (!why) { plan = p; break; }
+    if (attempt === 0 && !/^失败/.test(live.text || '')) live.text = `第一次没拆好（${why}），重新分析一次。`;
+  }
+  rd.busy = false; rd.runId = null;
+  if (plan) {
+    rd.plan = plan;
+    live.text = `${plan.summary ? plan.summary + '\n\n' : ''}拆成 ${plan.cards.length} 张卡、${plan.edges.length} 条连线。`;
+  } else {
+    rd.error = (why || '没拆出卡片') + '，可以重新分析';
+    if (!/^失败/.test(live.text || '')) live.text = `还是没拆好（${why}）。它的原话：\n\n` + String(live.text || '（空）').slice(0, 1500);
+  }
+  paintReadLog();
+  if (plan) paintPlan(plan); else { const b = $('#rPrev'); if (b) b.innerHTML = ''; }
+  paintReadFoot();
+}
+// 文本里所有完整的 JSON 对象（跳过字符串里的花括号）
+function jsonObjects(text) {
+  const t = String(text || ''), out = [];
+  let depth = 0, start = -1, inStr = false, bs = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (inStr) { if (bs) bs = false; else if (ch === '\\') bs = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') { if (depth > 0) inStr = true; continue; }
+    if (ch === '{') { if (depth === 0) start = i; depth++; }
+    else if (ch === '}' && depth > 0 && --depth === 0) { try { out.push(JSON.parse(t.slice(start, i + 1))); } catch (e) { } start = -1; }
+  }
+  return out;
+}
+function reachIn(edges, from, to) {
+  const seen = new Set([from]), todo = [from];
+  while (todo.length) { const cur = todo.pop(); if (cur === to) return true; for (const [a, b] of edges) if (a === cur && !seen.has(b)) { seen.add(b); todo.push(b); } }
+  return false;
+}
+// 没给连线时按顺序推：输入 → 后面最近的加工 → 加工后面的输出
+function inferEdges(cards) {
+  const edges = [];
+  let ins = [], outs = [], proc = null;
+  for (const c of cards) {
+    if (c.kind === 'in') ins.push(c.key);
+    else if (c.kind === 'proc') {
+      const from = ins.length ? ins : (outs.length ? outs : (proc ? [proc] : []));
+      from.forEach(k => edges.push([k, c.key]));
+      proc = c.key; ins = []; outs = [];
+    } else { if (proc) edges.push([proc, c.key]); else ins.forEach(k => edges.push([k, c.key])); outs.push(c.key); }
+  }
+  return edges;
+}
+function parseChainPlan(text) {
+  const o = jsonObjects(text).filter(x => x && Array.isArray(x.cards)).pop();
+  if (!o) return null;
+  const cards = [], byKey = new Map(), byTitle = new Map();
+  o.cards.forEach((x, i) => {
+    if (!x || cards.length >= 12) return;
+    const k = String(x.kind || '').trim();
+    const kind = KIND_ALIAS[k.toLowerCase()] || KIND_ALIAS[k];
+    const title = String(x.title || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    if (!kind || !title || /^(短标题|标题|卡名|示例)$/.test(title)) return;
+    if (!String(x.body || '').trim()) return;                        // 写了一半的空卡不要
+    const c = cleanCard({ kind, title, body: String(x.body || ''), impl: String(x.impl || ''), mods: x.mods }, 260);
+    let key = String(x.key || 'c' + (i + 1));
+    if (byKey.has(key)) key += '_' + i;
+    c.key = key;
+    cards.push(c); byKey.set(key, c); if (!byTitle.has(title)) byTitle.set(title, c);
+  });
+  if (!cards.length) return null;
+  const ref = v => byKey.get(String(v)) || byTitle.get(String(v == null ? '' : v).trim());
+  const edges = [];
+  const add = (a, b) => {
+    if (!a || !b || a === b || b.kind === 'in') return;                // 什么都不能连进输入卡：它是源头
+    if (a.kind === 'in' && b.kind === 'in') return;
+    if (edges.some(([x, y]) => x === a.key && y === b.key) || reachIn(edges, b.key, a.key)) return;
+    edges.push([a.key, b.key]);
+  };
+  for (const e of (Array.isArray(o.edges) ? o.edges : [])) {
+    add(ref(Array.isArray(e) ? e[0] : e && (e.from || e.source)), ref(Array.isArray(e) ? e[1] : e && (e.to || e.target)));
+  }
+  if (!edges.length) inferEdges(cards).forEach(([a, b]) => add(byKey.get(a), byKey.get(b)));
+  // 加工卡没人喂：接上前面最近的输入卡（或上一张加工卡）；没人接手：交给后面最近的输出卡（或下一张加工卡）
+  cards.forEach((c, i) => {
+    if (c.kind !== 'proc') return;
+    if (!edges.some(([, b]) => b === c.key)) {
+      const prev = cards.slice(0, i).reverse();
+      add(prev.find(x => x.kind === 'in') || prev.find(x => x.kind === 'proc') || cards.find(x => x.kind === 'in'), c);
+    }
+    if (!edges.some(([a]) => a === c.key)) {
+      const next = cards.slice(i + 1);
+      add(c, next.find(x => x.kind === 'out') || next.find(x => x.kind === 'proc') || cards.filter(x => x.kind === 'out').pop());
+    }
+  });
+  // 落单的卡：输入挂到后面最近的加工卡，输出挂到前面最近的加工卡
+  cards.forEach((c, i) => {
+    if (edges.some(([a, b]) => a === c.key || b === c.key)) return;
+    const procs = cards.filter(x => x.kind === 'proc' && x !== c);
+    if (!procs.length) return;
+    if (c.kind === 'in') { const p = cards.slice(i + 1).find(x => x.kind === 'proc') || procs[0]; if (!reachIn(edges, p.key, c.key)) edges.push([c.key, p.key]); }
+    else if (c.kind === 'out') { const p = cards.slice(0, i).reverse().find(x => x.kind === 'proc') || procs[procs.length - 1]; if (!reachIn(edges, c.key, p.key)) edges.push([p.key, c.key]); }
+  });
+  return { name: String(o.name || '').trim().slice(0, 20), summary: String(o.summary || '').trim().slice(0, 160), cards, edges };
+}
+// 拆得像样才算数：输入、加工、输出都有，至少 3 张，每张加工卡都接上了
+function planProblem(p) {
+  if (!p) return '没拆出卡片';
+  const has = k => p.cards.some(c => c.kind === k);
+  if (p.cards.length < 3 || !has('in') || !has('proc') || !has('out')) return '拆出来的卡不全（输入、加工、输出得都有）';
+  const inn = k => p.edges.some(([, b]) => b === k), outt = k => p.edges.some(([a]) => a === k);
+  const bad = p.cards.filter(c => (c.kind === 'proc' && (!inn(c.key) || !outt(c.key))) || (c.kind === 'in' && !outt(c.key)) || (c.kind === 'out' && !inn(c.key)));
+  if (bad.length) return '有卡没接上：' + bad.map(c => c.title).join('、');
+  // 整条得连成一片（不分方向数连通块）
+  const seen = new Set([p.cards[0].key]), todo = [p.cards[0].key];
+  while (todo.length) { const k = todo.pop(); for (const [a, b] of p.edges) { const o = a === k ? b : b === k ? a : null; if (o && !seen.has(o)) { seen.add(o); todo.push(o); } } }
+  if (seen.size < p.cards.length) return '链路断成了几截';
+  return '';
+}
+function uniqueFlowName(base, selfId) {
+  let name = base, i = 2;
+  while (store.workflows.some(w => w.id !== selfId && w.name === name)) name = base + ' ' + (i++);
+  return name;
+}
+// 缩放到整条流程都看得见（0.4–1），摆在右下角对话框的左边；
+// fold=true 时，挨着对话框放不下（要缩到 0.5 以下）就把对话框收成药丸，别让卡片压在它底下
+function fitView(fold = false) {
+  const ns = (flow() || {}).nodes || [];
+  if (!ns.length) return centerView();
+  const size = n => { const e = canvas.querySelector(`.node[data-id="${n.id}"]`); return [e ? e.offsetWidth : 244, e ? e.offsetHeight : 160]; };
+  const x0 = Math.min(...ns.map(n => n.x)), y0 = Math.min(...ns.map(n => n.y));
+  const x1 = Math.max(...ns.map(n => n.x + size(n)[0])), y1 = Math.max(...ns.map(n => n.y + size(n)[1]));
+  const pad = 48, need = (w, h) => Math.min(w / (x1 - x0 + 2 * pad), h / (y1 - y0 + 2 * pad));
+  let dock = dockOpen ? ($('#dock').offsetWidth || 392) + 28 : 0;
+  if (fold && dock && need(wrap.clientWidth - dock, wrap.clientHeight) < 0.5) { dockOpen = false; renderDock(); dock = 0; }
+  const W = Math.max(320, wrap.clientWidth - dock), H = wrap.clientHeight;
+  const fit = need(W, H);
+  zoom = Math.max(0.4, Math.min(1, Math.floor(fit * 20) / 20));     // 0.4 是缩放条的下限
+  applyZoom();
+  // 放得下就居中；还是放不下就从左上角开始（先看见输入卡），往右拖着看
+  const wide = (x1 - x0 + 2 * pad) * zoom > W, tall = (y1 - y0 + 2 * pad) * zoom > H;
+  wrap.scrollLeft = wide ? (x0 - pad + ORIGIN.x) * zoom : ((x0 + x1) / 2 + ORIGIN.x) * zoom - W / 2;
+  wrap.scrollTop = tall ? (y0 - pad + ORIGIN.y) * zoom : ((y0 + y1) / 2 + ORIGIN.y) * zoom - H / 2;
+  drawEdges();
+}
+// 按层排：最长路径定列（输入卡贴着它喂的那一列），列内按上游位置排（少交叉），量了真实高度再码
+function layoutChain(w) {
+  const depth = new Map(w.nodes.map(n => [n.id, 0]));
+  for (let it = 0; it < w.nodes.length; it++) {
+    let ch = false;
+    for (const [a, b] of w.edges) { const d = depth.get(a) + 1; if (d > depth.get(b)) { depth.set(b, d); ch = true; } }
+    if (!ch) break;
+  }
+  for (const n of w.nodes) {
+    if (n.kind !== 'in') continue;
+    const outs = w.edges.filter(([a]) => a === n.id).map(([, b]) => depth.get(b));
+    if (outs.length) depth.set(n.id, Math.max(0, Math.min(...outs) - 1));
+  }
+  const cols = [];
+  w.nodes.forEach((n, i) => { const d = depth.get(n.id); (cols[d] = cols[d] || []).push(n); n._i = i; });
+  const pos = new Map();
+  cols.forEach((col, d) => {
+    if (!col) return;
+    const bary = n => { const ps = w.edges.filter(([, b]) => b === n.id).map(([a]) => pos.get(a)).filter(v => v != null); return ps.length ? ps.reduce((s, v) => s + v, 0) / ps.length : 1e3 + n._i; };
+    if (d > 0) col.sort((a, b) => bary(a) - bary(b) || a._i - b._i);
+    col.forEach((n, i) => pos.set(n.id, i));
+  });
+  const COLW = 330, GAP = 40;
+  w.nodes.forEach(n => { n.x = depth.get(n.id) * COLW; n.y = 0; delete n._i; });
+  render();
+  const h = n => { const e = canvas.querySelector(`.node[data-id="${n.id}"]`); return e ? e.offsetHeight : 200; };
+  const heights = cols.map(col => col ? col.reduce((s, n) => s + h(n), 0) + GAP * (col.length - 1) : 0);
+  const tall = Math.max(0, ...heights);
+  cols.forEach((col, d) => {
+    if (!col) return;
+    let y = Math.round((tall - heights[d]) / 2);
+    col.forEach(n => {
+      n.y = y; y += h(n) + GAP;
+      const e = canvas.querySelector(`.node[data-id="${n.id}"]`); if (e) e.style.top = (n.y + OY) + 'px';
+    });
+  });
+  drawEdges();
+}
+function placeChain() {
+  const p = rd.plan, c = rd.chain;
+  if (!p || !c || rd.busy) return;
+  const tiles = new Map([...document.querySelectorAll('#rPrev .rtile[data-key]')].map(t => [t.dataset.key, t.getBoundingClientRect()]));
+  $('#readModal').classList.remove('on');
+  let w = flow();
+  if (!w || w.nodes.length) { w = { id: 'w' + Date.now().toString(36), name: '', agent: '', nodes: [], edges: [], chat: [] }; store.workflows.push(w); }
+  if (!w.name || /^(新工作流( \d+)?|未命名.*)$/.test(w.name)) w.name = uniqueFlowName(p.name || (c.name + ' · 工作链路'), w.id);   // 人起过名的空画布不改名
+  if (agents.some(a => a.id === c.id && !a.stopped)) w.agent = c.id;      // 链路是谁的，就由谁来执行
+  w.source = { kind: 'agent', agent: c.id, name: c.name, readAt: c.readAt, sessions: c.stats.sessions };
+  const idOf = new Map();
+  w.nodes = p.cards.map(x => {
+    const n = { id: uid(), kind: x.kind, title: x.title, body: x.body, impl: x.impl, mods: (x.mods || []).map(m => Object.assign({}, m, { id: uid() })),
+      checks: [], chat: [], status: 'idle', x: 0, y: 0 };
+    idOf.set(x.key, n.id);
+    return n;
+  });
+  w.edges = p.edges.map(([a, b]) => [idOf.get(a), idOf.get(b)]).filter(([a, b]) => a && b);
+  const d = t => t ? new Date(t * 1000).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }) : '';
+  w.chat = (w.chat || []).concat([{ role: 'agent', at: Date.now(),
+    text: `${p.summary ? p.summary + '\n\n' : ''}读的是「${c.name}」${d(c.stats.first)}–${d(c.stats.last)} 的 ${c.stats.sessions} 次干活记录，拆成 ${w.nodes.length} 张卡、${w.edges.length} 条连线。` }]).slice(-30);
+  store.current = w.id; selId = null; panelCardId = null; panelOpen = false;
+  layoutChain(w);
+  saveStore(); renderWorkflowList(); fitView(true);
+  const keyOf = new Map([...idOf].map(([k, id]) => [id, k]));
+  playArrival(w, n => tiles.get(keyOf.get(n.id)));
+  Object.assign(rd, { plan: null, msgs: [], error: '' });
+}
+// 放进画布的动画：预览里的卡「飞」到画布上的位置，落地后连线一条条画出来
+function playArrival(w, tileOf) {
+  if (reducedMotion()) return;
+  const FLY = 560, STEP = 70, landAt = new Map();
+  [...w.nodes].sort((a, b) => a.x - b.x || a.y - b.y).forEach((n, i) => {
+    const el = canvas.querySelector(`.node[data-id="${n.id}"]`); if (!el) return;
+    const delay = i * STEP, from = tileOf(n), r = el.getBoundingClientRect();
+    landAt.set(n.id, delay + FLY);
+    el.style.transition = 'none';
+    if (from && from.width) {
+      const f = el.cloneNode(true);
+      f.removeAttribute('data-id'); f.classList.add('arriving');
+      Object.assign(f.style, { position: 'fixed', left: r.left + 'px', top: r.top + 'px', margin: '0', width: el.offsetWidth + 'px',
+        transformOrigin: '0 0', transition: 'none', zIndex: '300', pointerEvents: 'none' });
+      document.body.appendChild(f);
+      el.style.opacity = '0';
+      const a = f.animate([
+        { transform: `translate(${from.left - r.left}px, ${from.top - r.top}px) scale(${from.width / el.offsetWidth})`, opacity: .75 },
+        { transform: `scale(${zoom})`, opacity: 1 },
+      ], { duration: FLY, delay, easing: 'cubic-bezier(.25,.9,.3,1.04)', fill: 'both' });
+      let done = false;
+      const land = () => { if (done) return; done = true; f.remove(); el.style.opacity = ''; el.style.transition = ''; };
+      a.onfinish = land; setTimeout(land, delay + FLY + 500);
+    } else {
+      const a = el.animate([{ opacity: 0, transform: 'translateY(14px) scale(.94)' }, { opacity: 1, transform: 'none' }],
+        { duration: 380, delay, easing: 'cubic-bezier(.2,.9,.3,1.15)', fill: 'backwards' });
+      const fin = () => { el.style.transition = ''; };
+      a.onfinish = fin; setTimeout(fin, delay + 900);
+    }
+  });
+  const when = ([a, b]) => Math.max(landAt.get(a) || 0, landAt.get(b) || 0);
+  [...w.edges].sort((x, y) => when(x) - when(y)).forEach((e, k) => drawIn(`${e[0]}>${e[1]}`, null, when(e) + 60 + k * 50));
+}
+
 // ---------- 导入导出 ----------
 async function exportFlow() { const r = await window.tcflow.saveFlow(flow()); $('#savePath').textContent = r.ok ? '已导出' : ''; }
 async function importFlow() {
   const r = await window.tcflow.openFlow();
   if (r.ok && r.flow) {
     const w = r.flow; w.id = 'w' + Date.now().toString(36); w.chat = w.chat || [];
-    w.nodes = (w.nodes || []).map(n => ({ ...n, kind: n.kind || 'proc', impl: n.impl || '', checks: n.checks || [] }));
+    w.nodes = (w.nodes || []).map(n => ({ ...n, kind: n.kind || 'proc', impl: n.impl || '', checks: n.checks || [], mods: Array.isArray(n.mods) ? n.mods : [] }));
     store.workflows.push(w); store.current = w.id; saveStore(); renderWorkflowList(); render();
   }
 }
 
 function onKey(e) {
+  if (document.querySelector('.modal.on')) { if (e.key === 'Escape' && $('#readModal').classList.contains('on')) closeRead(); return; }
   if (e.key === 'Delete' && selId && !e.target.isContentEditable && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) delNode(selId);
   if (e.key === 'Escape') { selId = null; panelCardId = null; panelOpen = false; render(); }
 }
@@ -1083,7 +1959,7 @@ wrap.addEventListener('pointerdown', e => {
 });
 addEventListener('pointermove', e => { if (!rOpen) return; const i = pick(e.clientX, e.clientY); if (i !== rHot) { rHot = i; paintRadial(); } });
 addEventListener('pointerup', () => { clearTimeout(rTimer); if (!rOpen) return; const i = rHot; hideRadial(); if (i >= 0) doAction(ACTIONS[i].id); });
-addEventListener('keydown', e => { if (e.code === 'Space' && !rOpen && !e.target.isContentEditable) { e.preventDefault(); showRadial(innerWidth / 2, innerHeight / 2); } });
+addEventListener('keydown', e => { if (e.code === 'Space' && !rOpen && !document.querySelector('.modal.on') && !e.target.isContentEditable && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) { e.preventDefault(); showRadial(innerWidth / 2, innerHeight / 2); } });
 function showRadial(x, y) { rOpen = true; rHot = -1; rC = { x, y }; radial.style.left = (x - R_OUT - 10) + 'px'; radial.style.top = (y - R_OUT - 10) + 'px'; radial.classList.add('on'); paintRadial(); }
 function hideRadial() { rOpen = false; radial.classList.remove('on'); }
 function paintRadial() {
@@ -1104,7 +1980,7 @@ function doAction(id) {
   if (id === 'out') addNode('out');
   if (id === 'ask') { if (n) { openCard(n); chatAsk('review'); } else { panelOpen = true; panelCardId = null; render(); askFlow(); } }
   if (id === 'del' && n) delNode(n.id);
-  if (id === 'dup' && n) { const c = { ...n, id: uid(), x: n.x + 40, y: n.y + 40, title: n.title + ' 副本' }; flow().nodes.push(c); selId = c.id; saveStore(); render(); }
+  if (id === 'dup' && n) { const c = { ...n, id: uid(), x: n.x + 40, y: n.y + 40, title: n.title + ' 副本', mods: modsOf(n).map(m => ({ ...m, id: uid() })) }; flow().nodes.push(c); selId = c.id; saveStore(); render(); }
   if (id === 'auto') validateAll();
   if (id === 'run') openRunModal();
 }

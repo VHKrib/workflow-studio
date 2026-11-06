@@ -399,3 +399,122 @@ details.internal textarea{font:11.8px/1.55 var(--mono);background:#fff;min-heigh
 /* 「思考过程」块里的步骤：与思考正文同样的细线缩进 */
 .msg details.think.process .steps{margin:2px 0 6px 2px;padding-left:12px;
   border-left:1px solid color-mix(in srgb,var(--ink) 12%,transparent)}
+
+/* ---------- 模块：素材（输入）/ 工具（加工）/ 成果（输出） ---------- */
+/* 正文贴着卡边是旧 bug：补回左右内边距；正文最多 3 行，具体的东西看下面的模块 */
+.node .body{margin:9px 12px 8px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;
+  overflow:hidden;min-height:0;max-height:none}
+.node .mods{display:flex;flex-direction:column;gap:6px;margin:0 12px 10px}
+.node .mline{display:flex;align-items:flex-start;gap:6px;min-width:0}
+.node .mline.tools{padding:0 7px}
+.node .mlab{flex:0 0 24px;font-size:10px;font-weight:700;letter-spacing:.04em;line-height:20px;color:var(--ink-3)}
+.node .mchips{flex:1;min-width:0;display:flex;flex-wrap:wrap;gap:4px}
+.mod{display:inline-block;vertical-align:top;max-width:100%;padding:0 6px;border:1px solid var(--line);border-radius:6px;
+  background:#fff;color:var(--ink-2);font-size:10.8px;font-weight:500;line-height:18px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;box-sizing:border-box}
+.mod.t-mat{color:var(--in);background:var(--in-soft);border-color:var(--in-line)}
+.mod.t-tool{color:var(--accent-ink);background:var(--accent-soft);border-color:var(--accent-line)}
+.mod.t-res{color:var(--out);background:var(--out-soft);border-color:var(--out-line)}
+.mod.plug{cursor:grab}
+.mod.plug:hover{box-shadow:0 0 0 2px var(--accent-soft);border-color:var(--accent-line)}
+.mod.ghost{opacity:.5;border-style:dashed;animation:ghostIn .18s ease-out}
+@keyframes ghostIn{from{opacity:0;transform:scale(.7)}to{opacity:.5;transform:none}}
+.mod.lifting{opacity:.28}
+.mod.flyer{box-shadow:0 8px 18px rgba(17,17,17,.18)}
+.mod.flyer.cut{color:var(--danger);background:var(--danger-soft);border-color:#e6c4c2;text-decoration:line-through}
+
+/* 加工卡的插槽：素材从左边插进来，成果从右边接出去 */
+.node .sock{border:1px dashed var(--line-strong);border-radius:10px;padding:4px 6px 5px;
+  transition:border-color .15s,background-color .15s,box-shadow .15s,opacity .15s}
+.node .sock.on{border-style:solid;border-color:var(--line)}
+.node .sock.empty .mchips:after{content:attr(data-ph);font-size:10.5px;line-height:20px;color:#a9a29a}
+.node .sock.hot{border:1px solid var(--accent);background:var(--accent-soft);box-shadow:0 0 0 3px var(--accent-soft)}
+.node .sock.hot .mlab{color:var(--accent-ink)}
+.node .sock.hot .mchips:after{content:none}
+.node .sock.nope{border:1px solid var(--danger);background:var(--danger-soft)}
+.node .sock.nope .mchips:after{content:'会绕成圈，接不了';font-size:10.5px;line-height:20px;color:var(--danger)}
+.node .sock.dim{opacity:.38}
+
+/* 拖动：抬起 → 靠近加工卡缩成一个小块 → 加工卡亮起 */
+.node{transition:transform .16s cubic-bezier(.2,.8,.2,1),opacity .16s,box-shadow .16s}
+.node.dragging{z-index:20;cursor:grabbing;box-shadow:0 18px 40px rgba(17,17,17,.18)}
+.node.docking{transform:translate(var(--dx,0px),var(--dy,0px)) scale(.46);opacity:.88}
+.node.dock-target{border-color:var(--accent-line);box-shadow:0 0 0 4px var(--accent-soft),var(--shadow-2)}
+.node.peer{border-color:var(--accent-line);box-shadow:0 0 0 3px var(--accent-soft),var(--shadow-1)}
+body.grabbing,body.grabbing *{cursor:grabbing!important}
+
+/* 连线：悬停模块时高亮、画出来时是橘色、要断开时变红虚线；光点与涟漪在 #fx 层（盖在卡片上面） */
+svg#edges path.edge{transition:stroke .15s,stroke-width .15s}
+svg#edges path.edge.hl,svg#edges path.edge.drawing{stroke:var(--accent);stroke-width:2.2}
+svg#edges path.edge.cutting{stroke:var(--danger);stroke-dasharray:5 4}
+svg#fx{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;overflow:visible;z-index:6}
+svg#fx .pulse{fill:var(--accent);filter:drop-shadow(0 0 5px rgba(255,90,31,.8))}
+svg#fx .ripple{fill:none;stroke:var(--accent);stroke-width:2;transform-box:fill-box;transform-origin:center}
+
+/* 左栏：编辑这张卡自己的模块 */
+.panel .pmods{margin-top:10px}
+.panel .pmods>.lab{display:block;font-size:11px;color:var(--ink-3);margin-bottom:6px;letter-spacing:.03em}
+.panel .pm-list{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.panel .mod.ed{display:inline-flex;align-items:center;gap:3px;padding:1px 3px 1px 8px;font-size:11.5px;line-height:20px;overflow:visible}
+.panel .mod.ed .mn{outline:none;min-width:1em;user-select:text;cursor:text;white-space:nowrap}
+.panel .mod.ed .mx{font-weight:400;font-size:10px;opacity:.45;cursor:pointer;padding:0 4px;border-radius:4px}
+.panel .mod.ed .mx:hover{opacity:1;background:rgba(17,17,17,.08)}
+.panel input.pm-add{width:auto;flex:1;min-width:130px;padding:3px 8px;font-size:11.5px;border-style:dashed}
+
+/* ---------- 读取 agent 链路 ---------- */
+button.readbtn{background:var(--accent-soft);border-color:var(--accent-line);color:var(--accent-ink);font-weight:600}
+button.readbtn:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+.emptyread{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);display:none;z-index:4;
+  padding:12px 22px;border-radius:999px;font-size:14px;font-weight:600;color:var(--accent-ink);
+  background:var(--surface);border:1px dashed var(--accent-line);box-shadow:var(--shadow-1)}
+.emptyread.on{display:inline-flex}
+.emptyread:hover{background:var(--accent);border-color:var(--accent);color:#fff}
+.rbox{width:min(1100px,94vw);height:min(760px,86vh);max-height:none}
+.rbody{flex:1;min-height:0;display:grid;grid-template-columns:200px 1fr}
+.rpick{overflow:auto;border-right:1px solid var(--line);padding:10px 8px 14px;background:#fbfbfd}
+.rgroup{margin-bottom:10px}
+.rgl{font-size:10.5px;letter-spacing:.06em;color:var(--ink-3);font-weight:600;padding:4px 8px;list-style:none;cursor:default}
+details.rgroup>summary.rgl{cursor:pointer}
+details.rgroup>summary::-webkit-details-marker{display:none}
+.ritem{padding:6px 10px;border-radius:8px;font-size:12.6px;color:var(--ink);cursor:pointer;line-height:1.4;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ritem:hover{background:var(--card)}
+.ritem.on{background:var(--accent);color:#fff}
+.rgroup.old .ritem{color:var(--ink-3)}
+.rgroup.old .ritem.on{color:#fff}
+.rmain{overflow:auto;padding:16px 20px 22px;user-select:text}
+.rempty{height:100%;display:grid;place-items:center;color:var(--ink-3);font-size:13px}
+.rempty.bad{color:var(--danger)}
+.rhead{display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+.rhead b{font-size:16px}
+.rhead span{font-size:12px;color:var(--ink-3)}
+.rhead .rstat{margin-left:auto;font-variant-numeric:tabular-nums}
+.rrow{display:grid;grid-template-columns:64px 1fr;gap:10px;padding:6px 0;border-top:1px solid var(--soft-line)}
+.rk{font-size:11px;color:var(--ink-3);padding-top:3px}
+.rv{display:flex;flex-wrap:wrap;gap:5px;min-width:0}
+.rtask{width:100%;font-size:12.4px;line-height:1.55;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.rp{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:1px 8px;border:1px solid var(--line);border-radius:999px;background:#fff}
+.rp i{font-style:normal;font-size:10px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.rp.old{color:var(--ink-3);border-style:dashed}
+.rnone{font-size:12px;color:var(--ink-3)}
+details.rraw{margin-top:10px}
+.rraw-g{font:11px/1.6 var(--mono);color:var(--ink-2);padding:3px 0;overflow-wrap:anywhere}
+.rraw-g b{display:block;font:600 10.5px var(--font);color:var(--ink-3);margin-bottom:1px}
+.rlog{display:flex;flex-direction:column;gap:14px;margin:16px 0 4px;max-height:200px;overflow:auto}
+.rlog:empty{display:none}
+.rprev{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:12px}
+.rprev:empty{display:none}
+.rch{font-size:10.5px;font-weight:700;letter-spacing:.06em;margin-bottom:7px}
+.rcol.k-in .rch{color:var(--in)} .rcol.k-proc .rch{color:var(--accent-ink)} .rcol.k-out .rch{color:var(--out)}
+.rtiles{display:flex;flex-direction:column;gap:8px}
+.rtile{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--line-strong);border-radius:10px;
+  padding:7px 9px 8px;box-shadow:var(--shadow-1);animation:tileIn .34s cubic-bezier(.2,.9,.3,1.25) both}
+.rtile.k-in{border-left-color:var(--in)} .rtile.k-proc{border-left-color:var(--accent)} .rtile.k-out{border-left-color:var(--out)}
+.rtile b{display:block;font-size:12.6px;margin-bottom:4px}
+.rmods{display:flex;flex-wrap:wrap;gap:4px}
+.rprev.done .rtile{animation:none}
+@keyframes tileIn{from{opacity:0;transform:translateY(10px) scale(.9)}to{opacity:1;transform:none}}
+.rhint{font-size:11.5px;color:var(--ink-3)}
+button:disabled{opacity:.45;cursor:default;pointer-events:none}
+.node.arriving{box-shadow:var(--shadow-2)}
+
