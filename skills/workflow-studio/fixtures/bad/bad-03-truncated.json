@@ -1,0 +1,16 @@
+{
+  "meta": {
+    "id": "bad-03-truncated",
+    "title": "写了一半的 JSON（自己造的坏样本）",
+    "from": "自造 · 对应现实现象：流被截断，第 2 张卡写到一半就断了",
+    "note": "答案只剩前半截（字符串，不是完整 JSON）。现有行为：完整计划解析不出来，质量闸判「没拆出卡片」；流式预览能先看到已经写全的卡。",
+    "stringAnswer": true
+  },
+  "expect": {
+    "cards": null,
+    "partial": 2,
+    "gate": "没拆出卡片",
+    "autoFix": false
+  },
+  "answer": "{\"name\":\"截断链路\",\"summary\":\"故意把 JSON 写到一半就断。\",\"cards\":[{\"key\":\"c1\",\"kind\":\"in\",\"title\":\"派活\",\"body\":\"上游派活：做哪件商品、交什么格式。\",\"impl\":\"\",\"mods\":[\"派活单\"]},{\"key\":\"c2\",\"kind\":\"proc\",\"title\":\"开工\",\"body\":\"按派活单"
+}

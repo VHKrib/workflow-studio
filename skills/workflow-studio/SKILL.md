@@ -365,6 +365,21 @@ node skills/workflow-studio/scripts/cdp-dock.js          # 老功能回归：拖
 node skills/workflow-studio/scripts/cdp-click.js --card "<卡片标题>" --mode double   # 老功能回归：单击只选中、双击开卡
 ```
 
+## 拆卡离线样本（不联网、不调模型查退步）
+
+真实拆卡回答钉在 `fixtures/`：三份好样本（商品资料标准化 / 分镜画板到成片 / 卖点卡出卡链路，来自第 1 张卡验收时
+真正落进画布的那几次）+ 五份自己写坏的（断成两截、输入连输入、半截 JSON、只有加工、没给连线）。一条命令跑完，几毫秒：
+
+```bash
+node skills/workflow-studio/scripts/check-fixtures.js         # 期望最后一行「全部通过」+ 用时远小于 2 秒
+node skills/workflow-studio/scripts/check-fixtures.js <目录>   # 把样本改坏成两截再跑：必须 FAIL、退出码 1
+```
+
+每份样本断言：卡片数 / 卡片顺序 / 输入加工输出三类都有 / 连线逐条 / 没有连进输入卡的线 / 每张卡都接上 /
+整条连成一片 / 质量闸结论 / 不含本机绝对路径与团队角色字样。坏样本按**现有行为**断言「被质量闸挡住」还是
+「被自动修好」——理由写在 `fixtures/README.md` 的表格里。改解析或改提示词之后先跑它；样本只用来查退步，
+**不许拿样本反推解析规则**。
+
 ## 实时链路：共享状态文件 + 临时对话画布
 
 让画布跟着 agent 的动作实时长出来，而且这条链路是「人和 agent 共用的一份状态」。三处要一起看：
