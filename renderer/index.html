@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>TC 工作流台</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">WF</div>
+      <div>
+        <input id="flowName" class="brand-title" spellcheck="false" value="未命名工作流">
+        <div class="brand-sub">一个工作流一块画布 · 输入 / 加工 / 输出</div>
+      </div>
+    </div>
+    <div class="flowagent">
+      <span class="lbl">执行 agent</span>
+      <select id="flowAgent"></select>
+    </div>
+    <span class="sp"></span>
+    <div class="menu-wrap">
+      <button id="btnAddCard" class="ghost">+ 加卡片</button>
+      <div class="menu" id="addMenu">
+        <div data-kind="in">输入卡</div>
+        <div data-kind="proc">加工卡</div>
+        <div data-kind="out">输出卡</div>
+      </div>
+    </div>
+    <button id="btnValidate">逐卡验证</button>
+    <button id="btnNew">新建工作流</button>
+    <button id="btnOpen">导入</button>
+    <button id="btnSave">导出</button>
+    <button id="btnRun" class="primary">▶ 开始运行</button>
+  </div>
+
+  <div class="layout">
+    <aside class="side">
+      <h3>工作流 · 一块画布</h3>
+      <div id="wfList"></div>
+      <div class="sidehint">每个工作流独立保存：环节、连线、执行 agent。点「新建画布」开新的。</div>
+    </aside>
+
+    <section class="canvaswrap" id="wrap">
+      <div id="canvas"><svg id="edges"></svg></div>
+      <div class="zoombar">
+        <span id="zoomOut" title="缩小">−</span>
+        <span id="zoom">100%</span>
+        <span id="zoomIn" title="放大">+</span>
+        <span id="zoomReset" title="复位">⌂</span>
+      </div>
+      <div class="legend">空白处拖动＝移动画板 · ⌘滚轮＝缩放 · 卡片可拖 · 卡片右下「↗ 连线」拖到另一张卡建立连接 · 右键按住出转盘</div>
+    </section>
+
+    <aside class="panel">
+      <div class="ph" id="panelTitle">工作流概览</div>
+      <div class="pb" id="panelBody"></div>
+      <div class="foot">
+        <span id="footStat">0 环节 / 0 连线</span>
+        <span class="sp" style="flex:1"></span>
+        <span id="savePath" style="color:#726d64"></span>
+      </div>
+    </aside>
+  </div>
+
+  <div id="radial"></div>
+
+  <div id="modal" class="modal">
+    <div class="mbox">
+      <div class="mhd"><b>开始前：确认执行 agent</b><span id="mClose">✕</span></div>
+      <div class="mbody" id="mBody"></div>
+      <div class="mfoot">
+        <span id="mHint" style="color:#726d64;font-size:11.5px"></span>
+        <span style="flex:1"></span>
+        <button id="mAdd">+ 再加一个环节</button>
+        <button id="mCancel">取消</button>
+        <button id="mGo" class="primary">确认并开始</button>
+      </div>
+    </div>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>

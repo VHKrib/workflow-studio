@@ -1,0 +1,15 @@
+{
+  "name": "workflow-studio",
+  "version": "0.3.0",
+  "description": "A desktop canvas for composing agent workflows out of input / process / output cards. One workflow = one canvas, one agent per workflow.",
+  "main": "main.js",
+  "license": "MIT",
+  "keywords": ["workflow", "electron", "agent", "canvas", "orchestration"],
+  "scripts": {
+    "start": "electron .",
+    "shot": "node tools/shot.js"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0"
+  }
+}
