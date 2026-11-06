@@ -92,7 +92,8 @@ CDP 不会连到用户那扇窗。`tools/shot.js` / `tools/eval.js` 把端口写
   怎么加工 / 交出什么文件里有什么）+ 技术细节只放 `impl`；改它等于改所有卡片与候选卡的产出质量；
 2 解析器 `cleanCard()` + `splitTech()` 兜底：正文里夹着的整句命令搬进 `impl`（句级、保守，
   拆不干净就原样保留，绝不硬改写中文）；
-3 加载时 `LEGACY_PLAIN`：机器话正文 → 人话，原技术串一字不丢进 `impl`；
+3 加载时 `LEGACY_PLAIN`：机器话正文 → 人话，技术要点写进 `impl`（**用中性说法写**，不把公开仓库里不该出现的
+  字段名 / 文件名搬出去；表里左边一列老正文只当匹配键，界面上不显示）；
 4 加载时 `PLAIN_SPECIFIC`：人话但空泛的正文 → 具体正文（图/数据/加工/产物）。
 
 两张表都按 `body` **逐字匹配**（只改没被人改过的卡）、可重复执行、在 `loadStore()` 末尾统一跑并
@@ -639,6 +640,9 @@ node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加 previ
 
 ## 常见坑
 
+- **卡片底部一行塞不下四个药丸**：`.ft` 是 `flex-wrap:wrap`，校验徽标（`.checks`）`flex:1 1 100%` 自己占一行、
+  `⚙ / ? 问 / ✦ 下一步 / ↗ 连线` 另起一行。以前徽标和药丸挤在一行（`.checks{flex:1}` + min-width:auto），
+  带去两个校验项的卡会把「↗ 连线」挤出卡片右边缘、被 `overflow:hidden` 裁掉。别再改回单行。
 - **折叠面板别用 `display:none`**：它会把自己从 grid 里摘掉，后面的列整体前移（画布被挤成 0 宽、
   点卡片命中的是别的元素，双击自然就"失效"了）。用 `grid-template-columns:0 …` + `overflow:hidden`
   + `visibility:hidden` 压成 0 宽，item 位置不动。
@@ -680,12 +684,16 @@ node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加 previ
 `skills/workflow-studio/`。新增验证脚本直接放这里（`scripts/` 是可直接重跑的采集/断言，不要写成一次性探针），
 并在 `git status` 里确认它们不是 `??` 漏提。
 
-仓库根有 `README.md` / `LICENSE(MIT)` / `.gitignore`。提交前跑：
+仓库根有 `README.md` / `LICENSE(MIT)` / `CHANGELOG.md` / `.gitignore`。提交前跑：
 
 ```bash
 git status --short && git diff --stat
-git grep -nEI "(ghp_[A-Za-z0-9]{20,}|github_pat_|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY|_API_KEY=)" -- . ':!node_modules' || echo "no secrets"
+git grep -nEI "(ghp_[A-Za-z0-9]{20,}|github_pat_|s[k]-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY|_API_KEY=)" -- . ':!node_modules' || echo "no secrets"
+node tools/scan-public.js          # 部门名 / 岗位名 / 本机路径 / 旧项目名：期望「0 命中」、退出码 0
 ```
+
+（`s[k]-` 和两字母前缀写法等价：字符类里的 k 一样能命中，但仓库里不会出现连续的那个前缀，
+于是这条命令不会自己命中自己。以后写防护正则和扫描命令都按这个写法。）
 
 不要提交 `node_modules/`、`preview.png`、任何 `.env` 或含密钥的文件。
 

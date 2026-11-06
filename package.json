@@ -1,6 +1,6 @@
 {
   "name": "workflow-studio",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "A desktop canvas for composing agent workflows out of input / process / output cards. One workflow = one canvas, one agent per workflow.",
   "main": "main.js",
   "license": "MIT",

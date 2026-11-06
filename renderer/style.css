@@ -130,8 +130,11 @@ svg#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .ovrow .kind.k-out{color:var(--out);border-color:var(--out-line);background:var(--out-soft)}
 .node .body{font-size:12.3px;line-height:1.55;color:var(--ink-2);outline:none;white-space:pre-wrap;word-break:break-word;
   min-height:40px;max-height:150px;overflow:auto;margin:2px 0 6px}
-.node .ft{display:flex;align-items:center;gap:6px;border-top:1px solid var(--soft-line);padding-top:6px}
-.node .ft .checks{display:flex;gap:4px;flex-wrap:wrap;flex:1}
+.node .ft{display:flex;align-items:center;gap:6px;border-top:1px solid var(--soft-line);padding-top:6px;flex-wrap:wrap;row-gap:5px}
+/* 校验徽标自己占一行、按钮另起一行：徽标多的卡（sha256 / schema / policy）四个药丸挤在一行会被卡片右边缘裁掉 */
+.node .ft .checks{display:flex;gap:4px;flex-wrap:wrap;flex:1 1 100%;margin:0}
+.node .ft .checks:empty{display:none}
+.node .ft .mini{flex:0 0 auto}
 .node .mini{font-size:10.5px;color:var(--accent-ink);border:1px solid var(--accent-line);border-radius:999px;
   padding:1px 7px;cursor:crosshair;background:#fff;white-space:nowrap}
 .node .mini:hover{background:var(--accent);color:#fff;border-color:var(--accent)}

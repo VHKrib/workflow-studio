@@ -194,13 +194,14 @@ function centerView() {
 }
 
 // ---------- 存储 ----------
-// 老示例卡的文案 → 人话。原技术串一字不丢，挪进 impl（内部实现）。
-// 按 body 精确匹配，命中就改；新数据不会再命中。
+// 老示例卡的文案 → 人话（内部实现换成中性说法，跟着卡片正面一起交出去）。
+// 按 body 精确匹配，命中就改；新数据不会再命中。左边一列是 0.3.0 老卡片的正文指纹（只用来认人，
+// 从不显示在界面上），右边两列才是界面上看到的正文与内部实现。
 const LEGACY_PLAIN = [
-  ['按 offer_id 在 evidence/_INDEX-BY-OFFER.json 反查，取最新最全的包', '找证据包', '按编号找到这件商品最新、最全的那一份证据', 'evidence/_INDEX-BY-OFFER.json 反查 offer_id，取最新最全目录'],
-  ['evidence/<包>/ + images 清单 + page-fields', '证据目录', '一份可以直接拿去用的证据目录：图片清单＋页面字段', 'evidence/<包>/ + images 清单 + page-fields，校验 sha256'],
-  ['出 selling_points / differentiation / must_not_claim', '出卖点卡', '从证据里挑出卖点、差异点和不能说的话', '出 selling_points / differentiation / must_not_claim'],
-  ['cards/<capture>.selling-points.json（含 usable_in_ad）', '卖点卡', '一张能直接交给做广告的人用的卖点卡', 'cards/<capture>.selling-points.json（含 usable_in_ad），校验 schema'],
+  ['按 offer_id 在 evidence/_INDEX-BY-OFFER.json 反查，取最新最全的包', '找证据包', '按编号找到这件商品最新、最全的那一份证据', '按编号查素材索引，取最近一次、图最全的那份目录'],
+  ['evidence/<包>/ + images 清单 + page-fields', '证据目录', '一份可以直接拿去用的证据目录：图片清单＋页面字段', '输出：图片清单（逐张）＋ 页面字段取值，逐项核对是否齐全'],
+  ['出 selling_points / differentiation / must_not_claim', '出卖点卡', '从证据里挑出卖点、差异点和不能说的话', '分三段产出：可用卖点 / 与他人不同的地方 / 不能说的话'],
+  ['cards/<capture>.selling-points.json（含 usable_in_ad）', '卖点卡', '一张能直接交给做广告的人用的卖点卡', '输出卖点卡文件：每条含配图与能否直接用，按约定格式校验'],
 ];
 // 卡片要具体：把原来写得空泛的种子正文换成具体的（用哪些图/数据、怎么加工、交出什么）
 const PLAIN_SPECIFIC = [
@@ -693,15 +694,15 @@ function createWorkflow(name, seed = false) {
   const w = { id: 'w' + Date.now().toString(36), name, agent: '', nodes: [], edges: [], chat: [], version: 1, updated_at: Date.now() };
   if (seed) {
     const a = { id: uid(), kind: 'in',   title: '商品编号', body: '一件示例商品（编号 A-1001），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。', checks: [],
-                impl: 'item_id = A-1001；evidence/<包>/images + page-fields', x: 0,   y: 70, status: 'idle' };
+                impl: '输入：商品编号（示例 A-1001）＋ 图片素材（主图 5 张、详情长图 3 张）＋ 页面字段', x: 0,   y: 70, status: 'idle' };
     const b = { id: uid(), kind: 'proc', title: '找证据包', body: '翻这件商品的采集记录，拿最近一次那份：图是不是齐的、页面字段有没有缺，缺就标出来。', checks: [],
-                impl: 'evidence/_INDEX-BY-OFFER.json 反查编号，取最新最全目录', x: 330, y: 70, status: 'idle' };
+                impl: '按编号查素材索引，取最近一次、图最全的那份目录', x: 330, y: 70, status: 'idle' };
     const c = { id: uid(), kind: 'out',  title: '证据目录', body: '一份资料清单：一共几张图、每张是主图还是详情图、页面上的标题/价格/规格各是什么值。', checks: ['sha256'],
-                impl: 'evidence/<包>/ + images 清单 + page-fields，校验 sha256', x: 660, y: 70, status: 'idle' };
+                impl: '输出：图片清单（逐张）＋ 页面字段取值，逐项核对是否齐全', x: 660, y: 70, status: 'idle' };
     const d = { id: uid(), kind: 'proc', title: '出卖点卡', body: '对着这些图和页面文字，挑出 3–5 条能打广告的卖点、和同类商品的不同点，再列 3 条绝对不能写的话。', checks: ['schema', 'policy'],
-                impl: '出 selling_points / differentiation / must_not_claim 三段', x: 330, y: 420, status: 'idle' };
+                impl: '分三段产出：可用卖点 / 与他人不同的地方 / 不能说的话', x: 330, y: 420, status: 'idle' };
     const e = { id: uid(), kind: 'out',  title: '卖点卡', body: '一张卖点卡：每条卖点写了什么、用的是哪张图、能不能直接拿去用。', checks: ['schema'],
-                impl: 'cards/<capture>.selling-points.json（含 usable_in_ad），校验 schema', x: 660, y: 420, status: 'idle' };
+                impl: '输出卖点卡文件：每条含配图与能否直接用，按约定格式校验', x: 660, y: 420, status: 'idle' };
     w.nodes.push(a, b, c, d, e);
     w.nodes.forEach(n => { n.mods = modsFor(n.kind, n.body); });
     w.edges.push([a.id, b.id], [b.id, c.id], [c.id, d.id], [d.id, e.id]);

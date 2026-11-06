@@ -21,8 +21,9 @@ const READ_LIMIT = 80, READ_LIMIT_MORE = 300, READ_WORK_SMALL = 30;
 const STUDIO_PROMPTS = ['我们在工作流%里聊%', '只做评审，不执行%', '你是这条工作流的执行方%', '你是平台主管%', '【读取链路】%'];
 const sq = s => "'" + String(s).replace(/'/g, "''") + "'";
 // 派活原文里万一贴过密钥，读出来先抹掉
+// （密钥前缀写成字符类 s[k]-：免得本仓库的推送前扫描 / 文档里的 grep 命令自己命中自己）
 const redact = s => String(s == null ? '' : s)
-  .replace(/\b(sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, '[已隐去]')
+  .replace(/\b(s[k]-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,})\b/g, '[已隐去]')
   .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]{16,}=*/gi, '$1[已隐去]')
   .replace(/((?:api[_-]?key|token|secret|password)\s*[=:]\s*)["']?[^\s"',;]{8,}/gi, '$1[已隐去]');
 

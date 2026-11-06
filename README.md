@@ -150,12 +150,16 @@ if you want the agent features. Without it the app still runs as a pure canvas.
 
 ### How the agent bridge works
 
-The renderer never touches a shell. It calls three IPC channels exposed by `preload.js`:
+The renderer never touches a shell. It talks to the main process through the channels exposed by `preload.js`:
 
 | Channel | Purpose |
 |---|---|
 | `agents:list` | scan `~/.hermes/profiles/*/profile.yaml` for available agents |
-| `agent:ask` | `hermes -p <profile> chat -q "<prompt>"` — **read-only Q&A, never executes tools** |
+| `agent:ask` | `hermes -p <profile> chat -q "<prompt>"` — one-shot, **read-only Q&A, never executes tools** |
+| `agent:stream` / `agent:cancel` | the real streaming run (`--format stream-json`), forwarded event by event; cancel really kills the child |
+| `agent:chain` | read-only scan of one agent's own records (`state.db` opened `?mode=ro`), used by 「读取 agent 链路」 |
+| `link:read` / `link:write` / `link:drop` | the shared per-workflow state file (`<userData>/links/<id>.json`, atomic write) |
+| `version:list` / `version:push` / `version:drop` | snapshots for the last 20 versions + rollback |
 | `flow:save` / `flow:open` | export / import a workflow as JSON |
 
 Because questions are one-shot `chat -q` calls with an explicit *"do not execute, do not write files,
@@ -202,6 +206,40 @@ Two things the parser has to survive:
 `agentAnswer()` strips the echo and the trailing session block, so what the panel shows is what the agent
 actually said.
 
+## Checks
+
+Two kinds, both run from the repo root. The full handbook (structure, invariants, pitfalls) is
+`skills/workflow-studio/SKILL.md`.
+
+**Offline — no app, no network, no model call:**
+
+```bash
+node --check renderer/app.js && node --check main.js && node --check chain.js
+node skills/workflow-studio/scripts/check-plan.js        # card-splitting rules, one PASS line per case
+node skills/workflow-studio/scripts/check-fixtures.js    # replay the archived real answers in fixtures/ (8 samples, a few ms)
+node tools/scan-public.js                                # public-repo hygiene scan, expects "0 命中"
+```
+
+**Against a running instance — CDP.** Start your own instance on its own port *and* its own data dir,
+then point the scripts at that port (they read `CDP_PORT`; never reuse a window that is already open):
+
+```bash
+./node_modules/.bin/electron . --remote-debugging-port=9333 --user-data-dir=$TMPDIR/wf-9333 &
+export CDP_PORT=9333
+node skills/workflow-studio/scripts/cdp-canvas.js    # pan / zoom anchor / drag / auto-scroll / layout
+node skills/workflow-studio/scripts/cdp-click.js --card "<card title>" --mode double
+node skills/workflow-studio/scripts/cdp-dock.js      # plug a card into a socket, reject a loop, unplug
+node skills/workflow-studio/scripts/cdp-version.js   # 5 edits = 5 versions, merges, keep 20, rollback
+node skills/workflow-studio/scripts/cdp-edit.js      # editing inside a card is a version too
+node skills/workflow-studio/scripts/cdp-copy.js      # duplicate / remembered selection / static check
+node skills/workflow-studio/scripts/cdp-live.js      # temp canvas + shared state file + external claim
+node skills/workflow-studio/scripts/cdp-read.js --agent <id>              # reads one real agent's records
+node skills/workflow-studio/scripts/cdp-read-stability.js --agent <id> --mode kill
+```
+
+Everything above is local except `cdp-read*`, `cdp-copy.js --preview` and the `--chat` flags, which call a
+real agent once each.
+
 ## Data model
 
 ```js
@@ -220,16 +258,21 @@ node with no incoming edge. Nothing is stored server-side; export the JSON if yo
 ## Project layout
 
 ```
-main.js            Electron main: window, agent list, chat -q bridge, file dialogs
+main.js            Electron main: window, agent list, chat bridge, file dialogs
 preload.js         contextBridge -> window.tcflow
+chain.js           read-only scan of another agent's own records (profile, skills, state.db)
+linkstore.js       the shared per-workflow state file (<userData>/links/<id>.json)
+versions.js        version snapshots, trimmed to the newest 20
 renderer/
   index.html       top bar, canvas, side panel, run dialog, radial menu
   app.js           state, card render, edges, pan/zoom, radial menu, option parsing
   style.css        design tokens (paper #f5f3ef / ink #111 / orange #ff5a1f)
-tools/shot.js      CDP screenshot helper (needs --remote-debugging-port=9222)
+tools/shot.js      CDP screenshot helper (reads CDP_PORT, defaults to 9222)
 tools/eval.js      CDP evaluate helper (headless DOM assertions)
+tools/scan-public.js  scans everything git tracks for names/paths that must not go public
 docs/              screenshot + the socket animation (dock.gif, recorded by cdp-dock.js --record)
-skills/            workflow-studio: development handbook + CDP checks (canvas, click, dock, parser)
+skills/            workflow-studio: development handbook, CDP checks, and fixtures/ with archived answers
+CHANGELOG.md       what changed, version by version
 ```
 
 ## Design notes
