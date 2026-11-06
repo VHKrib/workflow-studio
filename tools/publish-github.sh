@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 把「工作流台」推到 GitHub。登录一次之后，这条命令就够：
+# 把「工作流开发平台」推到 GitHub。登录一次之后，这条命令就够：
 #
 #   tools/publish-github.sh                     # 默认建私有仓库 workflow-studio
 #   tools/publish-github.sh my-repo public      # 指定名字 / 公开
@@ -45,7 +45,7 @@ if git remote get-url origin >/dev/null 2>&1; then
 fi
 
 gh repo create "$REPO" --"$VIS" --source=. --remote=origin \
-  --description "TC 工作流台：把业务链路拆成输入/加工/输出卡片，一条流程指派一个 agent，卡片能问 agent、让 agent 给下一步候选" \
+  --description "工作流开发平台：把业务链路拆成输入/加工/输出卡片，一条流程指派一个 agent，卡片能问 agent、让 agent 给下一步候选" \
   --push
 
 echo

@@ -1,5 +1,6 @@
 // 「读取 agent 链路」端到端验收（真鼠标点、真 agent 分析）。对着隔离实例跑：
-//   CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read.js [--agent sellpoint] [--switch creatoroutreach] [--shots DIR]
+//   CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read.js --agent <agent-id> [--switch <另一个-id>] [--shots DIR]
+// agent 必须显式传：没有默认值（默认一个真岗位名就等于把名字写进公开仓库）。
 // 期望全部 PASS：
 //   open    顶栏按钮打开读取窗；左边按部门列出 agent
 //   read    点一个 agent：读到干的活 / 技能 / 谁派活 / 交给谁
@@ -17,9 +18,10 @@ const path = require('path');
 const argv = process.argv.slice(2);
 const opt = (n, d) => { const i = argv.indexOf('--' + n); return i >= 0 ? argv[i + 1] : d; };
 const PORT = Number(opt('port', process.env.CDP_PORT || 9222));
-const AGENT = opt('agent', 'sellpoint');
+const AGENT = opt('agent', '');
 const SWITCH = opt('switch', '');
 const SHOTS = opt('shots', '');
+if (!AGENT) { console.error('usage: CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read.js --agent <agent-id> [--switch <id>] [--shots DIR]'); process.exit(1); }
 const get = u => new Promise((res, rej) => http.get(u, r => { let b = ''; r.on('data', d => b += d); r.on('end', () => res(JSON.parse(b))); }).on('error', rej));
 const wait = ms => new Promise(r => setTimeout(r, ms));
 

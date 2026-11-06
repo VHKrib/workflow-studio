@@ -1,4 +1,4 @@
-# Workflow Studio · 工作流台
+# Workflow Studio · 工作流开发平台
 
 > A desktop canvas for composing agent workflows out of **input / process / output** cards.
 > One workflow = one canvas. One agent per workflow. Cards can ask the agent for the next step and add it with one click.
@@ -81,6 +81,28 @@ Three ideas it is built around:
   writes the verdict into that card's chat so the history stays with the card.
 - **Multiple canvases** — left sidebar lists workflows; each has its own cards, edges and agent; export/import as JSON.
 - **Radial menu** — press and hold right mouse button (or `Space`) for add / ask / duplicate / delete / validate / run.
+
+## 读取一个 agent 的工作链路
+
+顶栏右边有一个「⇣ 读取 agent 链路」。点开它，左边按分组列出本机装着的 agent（停用的收在最后），选一个就开始。
+
+**它做什么。** 先把这个 agent 自己的说明、它装着的技能、最近实际干过的活翻一遍，再把这份材料交给平台主管，请它把这个人平时反复在做的事，画成一条能看懂的工作流。分析是边算边出：卡片会一张张冒出来。要等多久看它干的活有多少，一般几十秒到两三分钟。
+
+**出来的东西长什么样。** 一张预览，按三段摆开：
+
+- **输入**：它从谁那里拿到什么——谁派的活、上游交来的资料；
+- **加工**：它具体怎么干——用哪个本事、怎么挑、怎么比、怎么改；
+- **输出**：它交出什么、交给谁。
+
+每张卡下面挂着几个短词模块：输入卡挂素材（用哪些图、哪些数据），加工卡挂工具（拿什么做），输出卡挂成果（交出的文件里有什么）。在这一步不用改，搬进画布再改。
+
+**按「放进画布」之后。** 会新开一条工作流（不会盖掉手上这条），名字按它做的事取；这条流程的执行方自动设成刚读的那个 agent——这些活本来就是它干的；卡片按输入→加工→输出摆好、线也接好，位置摊开不重叠。落地之后就是你自己的一叠卡：改字、换类型、接别的卡、删掉，都和平时一样。
+
+**不满意怎么办。** 同一个窗口点「重新分析」再算一次；它自己也会在拆得不全、链路断了的时候自动重来一遍。中途想换人：直接在左边点另一个 agent，正在跑的那次会真的停下来，结果只属于新选的那个；关掉窗口也会停。
+
+**它读什么、不读什么。** 只读那个 agent 自己的说明、它装着的技能，和它最近干活的记录（派给它的活、它怎么干的、交出了什么）；不碰密钥、凭据和登录信息，也不改那些记录——全程只读打开。
+
+![读取窗](docs/read.png)
 
 ## Quickstart
 
@@ -173,13 +195,13 @@ renderer/
   style.css        design tokens (paper #f5f3ef / ink #111 / orange #ff5a1f)
 tools/shot.js      CDP screenshot helper (needs --remote-debugging-port=9222)
 tools/eval.js      CDP evaluate helper (headless DOM assertions)
-docs/              screenshot + the socket animation (dock.gif / dock.mp4, recorded by cdp-dock.js --record)
+docs/              screenshot + the socket animation (dock.gif, recorded by cdp-dock.js --record)
 skills/            workflow-studio: development handbook + CDP checks (canvas, click, dock, parser)
 ```
 
 ## Design notes
 
-The palette and radius come from the same design tokens as the rest of the TC tool suite
+The palette and radius come from the platform's shared design tokens
 (cream paper, near-black ink, one orange accent). Cards use three semantic colours on the header band
 only — the body stays paper-white so text keeps contrast. Nothing animates on hover except a 1px border
 and a soft ring; motion is saved for one moment — plugging a card into a socket. The canvas itself is a dot

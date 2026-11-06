@@ -68,7 +68,7 @@ function cardLine(n, i) {
 (async () => {
   agents = await window.tcflow.listAgents();
   loadStore();
-  if (!store.workflows.length) createWorkflow('隔板 UGC 链路', true);
+  if (!store.workflows.length) createWorkflow('商品卖点链路', true);
   bindUI();
   renderWorkflowList();
   render();
@@ -166,18 +166,16 @@ function centerView() {
 // 老示例卡的文案 → 人话。原技术串一字不丢，挪进 impl（内部实现）。
 // 按 body 精确匹配，命中就改；新数据不会再命中。
 const LEGACY_PLAIN = [
-  ['1688 offer：4729546689005（隔板）', '商品编号', '隔板这款商品的编号，加上它现成的证据资料', 'offer_id = 4729546689005（1688 隔板）'],
-  ['按 offer_id 在 evidence/_INDEX-BY-OFFER.json 反查，取最新最全的包', '找证据包', '按编号找到这个商品最新、最全的那一份证据', 'evidence/_INDEX-BY-OFFER.json 反查 offer_id，取最新最全目录'],
+  ['按 offer_id 在 evidence/_INDEX-BY-OFFER.json 反查，取最新最全的包', '找证据包', '按编号找到这件商品最新、最全的那一份证据', 'evidence/_INDEX-BY-OFFER.json 反查 offer_id，取最新最全目录'],
   ['evidence/<包>/ + images 清单 + page-fields', '证据目录', '一份可以直接拿去用的证据目录：图片清单＋页面字段', 'evidence/<包>/ + images 清单 + page-fields，校验 sha256'],
   ['出 selling_points / differentiation / must_not_claim', '出卖点卡', '从证据里挑出卖点、差异点和不能说的话', '出 selling_points / differentiation / must_not_claim'],
-  ['cards/<capture>.sellpoint.json（含 usable_in_ad）', '卖点卡', '一张能直接交给做广告的人用的卖点卡', 'cards/<capture>.sellpoint.json（含 usable_in_ad），校验 schema'],
+  ['cards/<capture>.selling-points.json（含 usable_in_ad）', '卖点卡', '一张能直接交给做广告的人用的卖点卡', 'cards/<capture>.selling-points.json（含 usable_in_ad），校验 schema'],
 ];
 // 卡片要具体：把原来写得空泛的种子正文换成具体的（用哪些图/数据、怎么加工、交出什么）
 const PLAIN_SPECIFIC = [
-  ['隔板这款商品的编号，加上它现成的证据资料', '隔板这款商品（1688 货号 4729546689005），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。'],
-  ['按编号找到这个商品最新、最全的那一份证据', '翻这件商品的采集记录，拿最近一次那份：图是不是齐的、页面字段有没有缺，缺就标出来。'],
+  ['按编号找到这件商品最新、最全的那一份证据', '翻这件商品的采集记录，拿最近一次那份：图是不是齐的、页面字段有没有缺，缺就标出来。'],
   ['一份可以直接拿去用的证据目录：图片清单＋页面字段', '一份资料清单：一共几张图、每张是主图还是详情图、页面上的标题/价格/规格各是什么值。'],
-  ['从证据里挑出卖点、差异点和不能说的话', '对着这些图和页面文字，挑出 3–5 条能打广告的卖点、和同类隔板的不同点，再列 3 条绝对不能写的话。'],
+  ['从证据里挑出卖点、差异点和不能说的话', '对着这些图和页面文字，挑出 3–5 条能打广告的卖点、和同类商品的不同点，再列 3 条绝对不能写的话。'],
   ['一张能直接交给做广告的人用的卖点卡', '一张卖点卡：每条卖点写了什么、用的是哪张图、能不能直接拿去用。'],
 ];
 function plainifySpecific(w) {
@@ -202,14 +200,14 @@ function plainifyLegacy(w) {
 // 老卡拆模块：按 body 逐字匹配，只补还没有 mods 的卡（可重复执行）；新卡在左栏里自己加。
 // 要给一批现有卡补模块，往这张表里加一行，不要手改 localStorage。
 const MODS_SEED = [
-  ['隔板这款商品（1688 货号 4729546689005），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。',
-    ['1688 货号', '主图 5 张', '详情长图 3 张', '标题·价格·规格']],
+  ['一件示例商品（编号 A-1001），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。',
+    ['示例商品 A-1001', '主图 5 张', '详情长图 3 张', '标题·价格·规格']],
   ['翻这件商品的采集记录，拿最近一次那份：图是不是齐的、页面字段有没有缺，缺就标出来。',
-    ['按货号翻采集记录', '图片清点', '字段缺项检查']],
+    ['按编号翻采集记录', '图片清点', '字段缺项检查']],
   ['一份资料清单：一共几张图、每张是主图还是详情图、页面上的标题/价格/规格各是什么值。',
     ['图片清单 8 张', '标题·价格·规格取值']],
-  ['对着这些图和页面文字，挑出 3–5 条能打广告的卖点、和同类隔板的不同点，再列 3 条绝对不能写的话。',
-    ['卖点筛选', '同类隔板对比', '禁写话核对']],
+  ['对着这些图和页面文字，挑出 3–5 条能打广告的卖点、和同类商品的不同点，再列 3 条绝对不能写的话。',
+    ['卖点筛选', '同类商品对比', '禁写话核对']],
   ['一张卖点卡：每条卖点写了什么、用的是哪张图、能不能直接拿去用。',
     ['卖点 3–5 条·配图', '同类差异点', '禁写 3 条', '能否直接用']],
 ];
@@ -257,16 +255,16 @@ function saveStore() { try { localStorage.setItem(LS_KEY, JSON.stringify(store))
 function createWorkflow(name, seed = false) {
   const w = { id: 'w' + Date.now().toString(36), name, agent: '', nodes: [], edges: [], chat: [] };
   if (seed) {
-    const a = { id: uid(), kind: 'in',   title: '商品编号', body: '隔板这款商品（1688 货号 4729546689005），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。', checks: [],
-                impl: 'offer_id = 4729546689005（1688 隔板）；evidence/<包>/images + page-fields', x: 0,   y: 70, status: 'idle' };
+    const a = { id: uid(), kind: 'in',   title: '商品编号', body: '一件示例商品（编号 A-1001），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。', checks: [],
+                impl: 'item_id = A-1001；evidence/<包>/images + page-fields', x: 0,   y: 70, status: 'idle' };
     const b = { id: uid(), kind: 'proc', title: '找证据包', body: '翻这件商品的采集记录，拿最近一次那份：图是不是齐的、页面字段有没有缺，缺就标出来。', checks: [],
-                impl: 'evidence/_INDEX-BY-OFFER.json 反查 offer_id，取最新最全目录', x: 330, y: 70, status: 'idle' };
+                impl: 'evidence/_INDEX-BY-OFFER.json 反查编号，取最新最全目录', x: 330, y: 70, status: 'idle' };
     const c = { id: uid(), kind: 'out',  title: '证据目录', body: '一份资料清单：一共几张图、每张是主图还是详情图、页面上的标题/价格/规格各是什么值。', checks: ['sha256'],
                 impl: 'evidence/<包>/ + images 清单 + page-fields，校验 sha256', x: 660, y: 70, status: 'idle' };
-    const d = { id: uid(), kind: 'proc', title: '出卖点卡', body: '对着这些图和页面文字，挑出 3–5 条能打广告的卖点、和同类隔板的不同点，再列 3 条绝对不能写的话。', checks: ['schema', 'policy'],
+    const d = { id: uid(), kind: 'proc', title: '出卖点卡', body: '对着这些图和页面文字，挑出 3–5 条能打广告的卖点、和同类商品的不同点，再列 3 条绝对不能写的话。', checks: ['schema', 'policy'],
                 impl: '出 selling_points / differentiation / must_not_claim 三段', x: 330, y: 420, status: 'idle' };
     const e = { id: uid(), kind: 'out',  title: '卖点卡', body: '一张卖点卡：每条卖点写了什么、用的是哪张图、能不能直接拿去用。', checks: ['schema'],
-                impl: 'cards/<capture>.sellpoint.json（含 usable_in_ad），校验 schema', x: 660, y: 420, status: 'idle' };
+                impl: 'cards/<capture>.selling-points.json（含 usable_in_ad），校验 schema', x: 660, y: 420, status: 'idle' };
     w.nodes.push(a, b, c, d, e);
     w.nodes.forEach(n => { n.mods = modsFor(n.kind, n.body); });
     w.edges.push([a.id, b.id], [b.id, c.id], [c.id, d.id], [d.id, e.id]);
@@ -905,7 +903,7 @@ function renderPanel() {
 
     <details class="internal">
       <summary>⚙ 内部实现 · 校验 · 卡片上不显示</summary>
-      <textarea id="pImpl" placeholder="执行时真正跑什么：命令 / 脚本 / 路径 / 字段名（例：hermes -p productweb chat -q …、evidence/&lt;包&gt;/page-fields）">${esc(implOf(n))}</textarea>
+      <textarea id="pImpl" placeholder="执行时真正跑什么：命令 / 脚本 / 路径 / 字段名（例：hermes -p &lt;agent&gt; chat -q …、evidence/&lt;包&gt;/page-fields）">${esc(implOf(n))}</textarea>
       <input id="pChecks" value="${esc((n.checks || []).join(', '))}" placeholder="校验项，逗号分隔（例：sha256, schema）">
     </details>`;
 
@@ -1112,7 +1110,7 @@ function buildChatPrompt(n, text) {
   const hist = (n.chat || []).slice(-7, -1)
     .map(m => (m.role === 'me' ? '我：' : '你：') + m.text).join('\n');
   return [
-    '我们在工作流台里聊一条工作流，你作为执行方只做建议：不执行、不发请求、不改文件、不付费。',
+    '我们在工作流开发平台里聊一条工作流，你作为执行方只做建议：不执行、不发请求、不改文件、不付费。',
     PLAIN_RULE,
     `工作流：${w.name}`,
     `整条流程：\n${chainOrder(w).map(cardLine).join('\n')}`,
@@ -1435,21 +1433,22 @@ function cancelRead() {
   if (rd.runId) { try { window.tcflow.cancelAgent(rd.runId); } catch (e) { } }
   rd.runId = null; rd.busy = false;
 }
-// 平台主管不在 profiles 目录里，单独放进来
+// 平台主管不在 profiles 目录里，单独放进来；它的分组名只在 agent 列表里真有这条时才用，取不到就不分组
 function readAgents() {
-  return [{ id: 'default', name: '平台主管', section: '主管团队', desc: '规划与派工、跨部门一次复核', stopped: false }]
+  const sup = agents.find(a => a.id === DOCK_AGENT) || {};
+  return [Object.assign({ id: DOCK_AGENT, name: '平台主管', section: sup.section || '', desc: sup.desc || '' }, { stopped: false })]
     .concat(agents.map(a => Object.assign({}, a, { name: a.name === '主管' && a.section ? a.section + '主管' : a.name })));
 }
 function readPickHTML() {
   const groups = new Map(), old = [];
   for (const a of readAgents()) {
     if (a.stopped) { old.push(a); continue; }
-    const k = a.section || '其他';
+    const k = a.section || '';                                        // 取不到分组名就放在最上面，不硬编一个
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(a);
   }
   const item = a => `<div class="ritem${rd.pick === a.id ? ' on' : ''}" data-id="${esc(a.id)}" title="${esc(a.desc || '')}">${esc(a.name)}</div>`;
-  let h = [...groups].map(([k, list]) => `<div class="rgroup"><div class="rgl">${esc(k)}</div>${list.map(item).join('')}</div>`).join('');
+  let h = [...groups].map(([k, list]) => `<div class="rgroup">${k ? `<div class="rgl">${esc(k)}</div>` : ''}${list.map(item).join('')}</div>`).join('');
   if (old.length) h += `<details class="rgroup old"${old.some(a => a.id === rd.pick) ? ' open' : ''}><summary class="rgl">已停用 · ${old.length}</summary>${old.map(item).join('')}</details>`;
   return h;
 }
