@@ -1340,10 +1340,13 @@ async function runStream({ msgs, rerender, profile, prompt, toolsets, cards = tr
   off();
   live.live = false;
   live.secs = String(Math.max(1, Math.round((Date.now() - live.startedAt) / 1000)));
+  live.ok = !!(r && r.ok);
+  live.error = (r && r.error) || '';
+  live.timedOut = !!(r && r.timedOut);          // 主进程到点杀的：界面按「到点了」收场，不说成「中途断了」
   live.steps.forEach(st => { if (st.state === 'running') { st.state = 'error'; st.time = ''; } });
-  if (!live.text && r.text) live.text = r.text;
-  if (!r.ok && !live.text) live.text = '失败：' + (r.error || r.code || '未知错误');
-  const opts = cards ? parseCardArray(r.text || live.text || '') : [];
+  if (!live.text && r && r.text) live.text = r.text;
+  if (!live.ok && !live.timedOut && !live.text) live.text = '失败：' + ((r && (r.error || r.code)) || '未知错误');
+  const opts = cards ? parseCardArray((r && r.text) || live.text || '') : [];
   // 候选卡只加一句提示，**不覆盖原回答**：原回答留在 live.text（气泡里「看原话」能看到），
   // 否则「问它这条链路第几版、几张卡」这种纯事实问答会被换掉，人看不到它答了什么。
   if (opts.length) live.human = `给你 ${opts.length} 个候选卡：点一下看细节，按「确认添加」才会进流程。`;
@@ -1635,16 +1638,37 @@ function startRun() {
 //       跑不了命令、读写不了文件、发不了消息，也碰不到店铺后台的数据接口。
 // 落盘：先在窗里预览，按「放进画布」才建卡（agent 不能自己往画布上加东西）。
 const READ_TOOLSETS = 'todo,no_mcp';
+// 一次分析的总预算（含自动重来一次）：默认 150 秒。实测正常 40–70 秒拆完；2 分半够慢一档的模型跑完，
+// 又不至于让人对着「正在拆卡」干等 4 分钟。WF_READ_TIMEOUT_MS 只给验收把上限调小，界面上没有开关。
+const READ_BUDGET_MS = Math.max(5000, Number((window.tcflow && window.tcflow.readTimeoutMs) || 0) || 150000);
+const READ_STALL_MS = 20000;          // 20 秒没有新内容：界面明说「它在等，不是我卡了」
 const SRC_LABEL = { kanban: '看板派单', oneshot: '单次指令', subagent: '别的 agent 调用', local: '直接对话', cron: '定时任务', cli: '命令行', desktop: '桌面对话' };
 const KIND_ALIAS = { in: 'in', input: 'in', '输入': 'in', proc: 'proc', process: 'proc', '加工': 'proc', out: 'out', output: 'out', '输出': 'out' };
-const rd = { pick: null, chain: null, msgs: [], plan: null, busy: false, runId: null, token: 0, error: '' };
+const rd = { pick: null, chain: null, msgs: [], plan: null, busy: false, runId: null, token: 0, error: '', startedAt: 0, lastProgress: 0 };
 
 function openRead() { $('#readModal').classList.add('on'); paintRead(); }
 function closeRead() { cancelRead(); $('#readModal').classList.remove('on'); }
+// 杀掉正在跑的分析进程（重来/换人/关窗都要走这里：一次只留一个进程往预览里写）
+function killReadRun() {
+  const id = rd.runId;
+  rd.runId = null;
+  if (id) { try { window.tcflow.cancelAgent(id); } catch (e) { } }
+}
+function clearReadPreview() {
+  const b = $('#rPrev'); if (b) { b.innerHTML = ''; b.classList.remove('done'); }
+}
 function cancelRead() {
+  const busy = rd.busy;
   rd.token++;
-  if (rd.runId) { try { window.tcflow.cancelAgent(rd.runId); } catch (e) { } }
-  rd.runId = null; rd.busy = false;
+  killReadRun();
+  rd.busy = false;
+  if (!busy) return;
+  // 只收正在跑的那次：半截的卡、半截的话都不留在预览里（已经拆好、人看过的那份不动）
+  rd.msgs = [];
+  rd.plan = null;
+  rd.error = '上次分析已取消，没留半成品。点「重来」重新分析';
+  clearReadPreview();
+  if ($('#readModal').classList.contains('on')) { paintReadLog(); paintReadFoot(); }
 }
 // 平台主管不在 profiles 目录里，单独放进来；它的分组名只在 agent 列表里真有这条时才用，取不到就不分组
 function readAgents() {
@@ -1679,6 +1703,7 @@ function readSummaryHTML(c) {
     row('谁派活', people(c.upstream)) +
     row('交给谁', people(c.downstream)) +
     `<details class="internal rraw"><summary>⚙ 读到的线索</summary>
+      <div class="rraw-g"><b>读了多少</b>这次读了 ${c.stats.readSessions || 0} 条会话 / 上限 ${c.stats.readLimit || 80}${c.stats.readLimit > 80 ? '（它干活记录少，往前多读一些）' : ''}</div>
       <div class="rraw-g"><b>活从哪来</b>${esc(src || '—')}</div>
       <div class="rraw-g"><b>常读</b>${dirs(c.reads)}</div>
       <div class="rraw-g"><b>常写</b>${dirs(c.writes)}</div>
@@ -1703,14 +1728,22 @@ function paintRead() {
 function paintReadFoot() {
   $('#rAgain').disabled = !rd.chain || rd.busy;
   $('#rPlace').disabled = !rd.plan || rd.busy;
-  $('#rHint').textContent = rd.busy ? '平台主管在分析…' : (rd.chain && !rd.plan && rd.error ? rd.error : '');
+  $('#rHint').textContent = rd.busy ? readProgress() : (rd.chain && !rd.plan && rd.error ? rd.error : '');
 }
-// 流式时不把一串 JSON 打在气泡里：换成「已拆出 N 张」，卡片在下面一张张冒出来
+// 说人话的进度：拆到第几张、等了多久；20 秒没新内容就明说「它在等，不是我卡了」
+function readProgress() {
+  const last = rd.msgs[rd.msgs.length - 1];
+  const n = partialCards(last && last.text).length;
+  const now = Date.now();
+  const waited = Math.max(0, Math.round((now - (rd.startedAt || now)) / 1000));
+  const idle = Math.max(0, Math.round((now - (rd.lastProgress || now)) / 1000));
+  if (idle * 1000 >= READ_STALL_MS) return `这一步有点慢：${idle} 秒没有新内容，它还在想，不是卡住了（已等 ${waited} 秒）`;
+  return (n ? `还在拆，已经理出 ${n} 张` : '还在拆，先等等') + `（已等 ${waited} 秒）`;
+}
+// 流式时不把一串 JSON 打在气泡里：换成「还在拆，已经理出 N 张」
 function liveView(m) {
   if (!m.live) return m;
-  const t = String(m.text || '');
-  const n = partialCards(t).length;
-  return Object.assign({}, m, { text: !t ? '' : (t.indexOf('{') < 0 ? t : (n ? `正在拆卡… 已拆出 ${n} 张` : '正在拆卡…')) });
+  return Object.assign({}, m, { text: readProgress() });
 }
 function paintReadLog() {
   const log = $('#rLog'); if (!log) return;
@@ -1719,9 +1752,9 @@ function paintReadLog() {
   const liveEl = log.querySelector('[data-live="1"]');
   if (last && last.live && liveEl) { patchLive(liveEl, last, '平台主管'); }
   else keepDetails(log, () => { log.innerHTML = view.length ? bubblesHTML(view, null, '', false, '平台主管') : ''; });
-  // 还没出字：交给全局 1s 定时器显示「正在想… Ns」；出字了就撤掉，免得盖住正文
+  // 进度由 tickRead 每秒刷新（正在拆几张 / 等了多久 / 是不是在等），不用「正在想… Ns」那套
   const el = log.querySelector('[data-live="1"]');
-  if (el) { if (last && last.live && !last.text) { if (!el.dataset.since) el.dataset.since = last.startedAt || Date.now(); } else delete el.dataset.since; }
+  if (el) delete el.dataset.since;
   log.scrollTop = log.scrollHeight;
 }
 function paintReadLive() {
@@ -1835,32 +1868,70 @@ async function analyzeChain() {
   const c = rd.chain;
   if (!c || rd.busy) return;
   const token = ++rd.token;
-  Object.assign(rd, { busy: true, plan: null, msgs: [], error: '' });
+  const budget = READ_BUDGET_MS;
+  const deadline = Date.now() + budget;
+  killReadRun();                                       // 重来之前先把上一个进程杀掉：不许两个进程往同一份预览里写
+  Object.assign(rd, { busy: true, plan: null, msgs: [], error: '', startedAt: Date.now(), lastProgress: Date.now() });
+  clearReadPreview();
   paintReadLog(); paintReadFoot();
-  let plan = null, why = '', live = null;
+  let plan = null, why = '', live = null, stopped = '';
   for (let attempt = 0; attempt < 2 && !plan; attempt++) {         // 拆坏了自动重来一次，不用人去点
-    rd.runId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const box = $('#rPrev'); if (box) { box.innerHTML = ''; box.classList.remove('done'); }
-    live = await runStream({
-      msgs: rd.msgs, rerender: () => { if (token === rd.token) paintReadLive(); },
-      profile: DOCK_AGENT, prompt: chainPrompt(c), toolsets: READ_TOOLSETS, cards: false, runId: rd.runId, timeoutMs: 240000,
+    const left = deadline - Date.now();
+    if (left < 8000) { stopped = 'timeout'; break; }               // 剩下的时间不够再拆一次，别再开进程
+    const runId = 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    rd.runId = runId;
+    rd.startedAt = rd.lastProgress = Date.now();
+    let active = true, lastSig = '', timer = 0, timedOut = false;
+    const msgs = rd.msgs;
+    const rerender = () => {
+      if (!active || token !== rd.token) return;                   // 这一轮已结束/已被换人：晚到的事件不往预览里写
+      const m = msgs[msgs.length - 1] || {};
+      const sig = String(m.text || '').length + ':' + ((m.steps || []).length) + ':' + String(m.think || '').length;
+      if (sig !== lastSig) { lastSig = sig; rd.lastProgress = Date.now(); }
+      paintReadLive();
+    };
+    const stream = runStream({
+      msgs, rerender, profile: DOCK_AGENT, prompt: chainPrompt(c), toolsets: READ_TOOLSETS, cards: false, runId, timeoutMs: left,
     });
-    if (token !== rd.token) return;                               // 中途换了 agent 或关了窗：这次的结果不要了
-    const p = parseChainPlan(live.text);
-    why = /^失败/.test(live.text || '') ? live.text : planProblem(p);
+    // 子进程到点由主进程 SIGTERM；这里再兜一层：万一 IPC 没回来，界面也不能一直转圈
+    const guard = new Promise(res => { timer = setTimeout(() => { timedOut = true; res({ ok: false, error: 'timeout' }); }, left + 3000); });
+    live = await Promise.race([stream, guard]);
+    clearTimeout(timer);
+    active = false;
+    const msg = msgs[msgs.length - 1] || { role: 'agent', text: '' };
+    msg.live = false;
+    const hardTimeout = timedOut || !!(live && live.timedOut);      // 主进程到点杀的 / 这里兜底的，都算「到点」
+    if (timedOut) {
+      try { window.tcflow.cancelAgent(runId); } catch (e) { }        // 兜底触发：把还在跑的子进程杀掉
+      msg.aborted = true;
+    }
+    if (rd.runId === runId) rd.runId = null;
+    if (token !== rd.token) return;                                 // 中途换了 agent 或关了窗：这次的结果不要了
+    const ok = !hardTimeout && !!(live && live.ok) && !msg.aborted;
+    const p = ok ? parseChainPlan(msg.text) : null;
+    why = hardTimeout ? `到点了，这次没拆完（最多等 ${Math.round(budget / 1000)} 秒）`
+      : ok ? planProblem(p) : '这次没拆全（分析中途断了）';
     if (!why) { plan = p; break; }
-    if (attempt === 0 && !/^失败/.test(live.text || '')) live.text = `第一次没拆好（${why}），重新分析一次。`;
+    if (!ok) { stopped = hardTimeout ? 'timeout' : 'aborted'; break; }   // 断了/到点：别自动重来，免得又白等一轮
+    if (deadline - Date.now() < 8000) { stopped = 'timeout'; break; }
+    if (attempt === 0) msg.human = `第一次没拆好（${why}），重新分析一次。`;   // 第一次的原话留在「看原话」里
   }
   rd.busy = false; rd.runId = null;
+  const last = rd.msgs[rd.msgs.length - 1];
   if (plan) {
     rd.plan = plan;
-    live.text = `${plan.summary ? plan.summary + '\n\n' : ''}拆成 ${plan.cards.length} 张卡、${plan.edges.length} 条连线。`;
+    const line = `${plan.summary ? plan.summary + '。' : ''}拆成 ${plan.cards.length} 张卡、${plan.edges.length} 条连线。`;
+    if (last) last.human = line; else rd.msgs.push({ role: 'agent', text: line, at: Date.now() });
   } else {
-    rd.error = (why || '没拆出卡片') + '，可以重新分析';
-    if (!/^失败/.test(live.text || '')) live.text = `还是没拆好（${why}）。它的原话：\n\n` + String(live.text || '（空）').slice(0, 1500);
+    const head = stopped === 'timeout' ? `到点了，这次没拆完（最多等 ${Math.round(budget / 1000)} 秒），已经把它停下`
+      : stopped === 'aborted' ? '这次没拆全（分析中途断了），已经停下'
+      : `还是没拆好（${why || '没拆出卡片'}）`;
+    rd.error = head + '。点「重来」再来一次';
+    if (last) { last.human = rd.error; if (!String(last.text || '').trim()) last.text = '（这次它没写出内容）'; }
+    else rd.msgs.push({ role: 'agent', text: rd.error, at: Date.now() });
   }
   paintReadLog();
-  if (plan) paintPlan(plan); else { const b = $('#rPrev'); if (b) b.innerHTML = ''; }
+  if (plan) paintPlan(plan); else clearReadPreview();               // 失败/超时/取消：预览里不留半张卡
   paintReadFoot();
 }
 // 文本里所有完整的 JSON 对象（跳过字符串里的花括号）
@@ -2306,12 +2377,20 @@ function onKey(e) {
   if (e.key === 'Delete' && selId && !e.target.isContentEditable && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) delNode(selId);
   if (e.key === 'Escape') { selId = null; panelCardId = null; panelOpen = false; render(); }
 }
-// 等回答时每秒刷新"正在想… Ns"
+// 等回答时每秒刷新「正在想… Ns」；读链路另有自己的进度（拆到第几张 / 等了多久 / 是不是在等）
+function tickRead() {
+  if (!rd.busy) return;
+  const line = readProgress();
+  const el = document.querySelector('#rLog [data-live="1"] .txt');
+  if (el) el.innerHTML = mdToHTML(line);
+  const hint = $('#rHint'); if (hint) hint.textContent = line;
+}
 setInterval(() => {
   document.querySelectorAll('[data-since]').forEach(el => {
     const n = Math.floor((Date.now() - Number(el.dataset.since)) / 1000);
     const t = el.querySelector('.txt'); if (t) t.textContent = `正在想… ${n}s`;
   });
+  tickRead();
 }, 1000);
 // 极简 markdown：转义后只支持 **粗体** / `code` / 标题 / 列表 / 代码块
 function mdInline(x) {

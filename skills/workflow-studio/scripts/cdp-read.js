@@ -115,7 +115,11 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   // ---------- plan ----------
   const pl = await J(`JSON.stringify(rd.plan ? { n: rd.plan.cards.length, e: rd.plan.edges.length, kinds: rd.plan.cards.map(c => c.kind).join(''), empty: rd.plan.cards.filter(c => !c.body).length,
     tiles: document.querySelectorAll('#rPrev .rtile').length, name: rd.plan.name, cards: rd.plan.cards.map(c => '[' + c.kind + ']' + c.title + '{' + c.mods.map(m => m.name).join('/') + '}') } : { err: rd.error })`);
-  if (pl.err !== undefined) { pass('plan', false, '没拆出来：' + pl.err); }
+  if (pl.err !== undefined) {
+    let raw = '';
+    try { raw = await J(`JSON.stringify(((rd.msgs[rd.msgs.length - 1] || {}).text) || '')`); } catch (e) { }
+    pass('plan', false, '没拆出来：' + pl.err + '｜它最后一段原话（尾部 300 字）：' + String(raw).slice(-300).replace(/\s+/g, ' '));
+  }
   else  pass('plan', /in/.test(pl.kinds) && /proc/.test(pl.kinds) && /out/.test(pl.kinds) && !pl.empty && pl.tiles === pl.n,
     `「${pl.name}」${pl.n} 张卡 / ${pl.e} 条线，预览 ${pl.tiles} 格：${pl.cards.join(' ')}`);
   if (pl.err === undefined) {
