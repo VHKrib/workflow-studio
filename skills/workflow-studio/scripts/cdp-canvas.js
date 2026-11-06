@@ -70,11 +70,15 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     `中心画布点 ${JSON.stringify(anchor.before)} → ${JSON.stringify(anchor.after)}，连线 ${anchor.edges} 条`);
 
   // 3) 拖动换算（1.5 倍下测），测完把坐标写回原处
+  //    缩放锚在视口中心：1.5 倍下靠边的卡会滑出视口，先把它滚到正中再量（否则点到的是空气）
   const target = CARD ? `flow().nodes.find(x => x.title === ${JSON.stringify(CARD)})`
                        : `chainOrder(flow())[0]`;
-  const d = JSON.parse(await ev(`(() => {
+  const d = JSON.parse(await ev(`(async () => {
     const n = ${target};
     const el = document.querySelector('.node[data-id="' + n.id + '"]');
+    wrap.scrollLeft = (n.x + ORIGIN.x + el.offsetWidth / 2) * zoom - wrap.clientWidth / 2;
+    wrap.scrollTop = (n.y + ORIGIN.y + el.offsetHeight / 2) * zoom - wrap.clientHeight / 2;
+    await new Promise(r => setTimeout(r, 120));
     const r = el.querySelector('.body').getBoundingClientRect();
     return JSON.stringify({ id: n.id, title: n.title, x0: n.x, y0: n.y, sx: Math.round(r.left + 24), sy: Math.round(r.top + 14), zoom });
   })()`));

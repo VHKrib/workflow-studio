@@ -33,10 +33,25 @@ Three ideas it is built around:
   while the board auto-scrolls; holding it near an edge keeps scrolling, and releasing scrolls the card
   back into view. No invisible boundary stops a card, and the legend strip no longer swallows drags.
 - **Three card types** with coloured header bands and per-card checks (`sha256`, `schema`, …).
+- **Cards break down into modules** — an input card lists its **materials** (素材: which images, which data),
+  a process card its **tools** (工具: how it picks, compares, checks), an output card its **results**
+  (成果: what the delivered file contains). Each module is a short plain-language chip; edit them in the left
+  panel (type + Enter to add, click to rename, ✕ to remove). Agents propose modules with every candidate card.
+- **Plug a card into a process card to connect it** — a process card has two sockets, 素材 (in) and 成果 (out).
+  Drag an input card onto it: the card shrinks into a token above the cursor, the process card lights up, the
+  target socket glows and previews the chips that will land there, the other socket dims. Let go: the card
+  springs back to size beside the process card (left for materials, right for results, nudged down to avoid
+  overlaps), its chips fly into the socket one by one, the edge draws itself in, a pulse runs along it and the
+  socket ripples. A drop that would close a loop shakes the socket red and the card springs back. Drag a chip
+  back out of a socket to disconnect — the edge retracts. With `prefers-reduced-motion` the result is the same,
+  just without the motion.
+
+  ![plugging a card into a socket](docs/dock.gif)
 - **Cards are read-only on the canvas** — nothing to click into, so the whole card is a drag handle.
   A single click only selects; **double-click opens that card's info + chat** in the left panel.
   Renaming, rewriting and re-typing happen there (left panel), never on the canvas.
-- **Drag-to-connect** — hit `↗ 连线` on a card and drop it on another to create an edge.
+- **Drag-to-connect** — plug an input/output card into a process card's socket (above), or hit `↗ 连线` on any
+  card and drop it on another (process → process, anything the sockets don't cover).
 - **Two different agents, on purpose** — every workflow picks *its own* executing agent (top bar, overview,
   run dialog). The bottom-right dock is different: it always talks to the **platform supervisor**
   (`default` profile, 平台主管) — planning, dispatch and cross-team review, never card-level work.
@@ -118,10 +133,12 @@ section, or edit `impl` in the right panel directly.
 Ask for cards, get strict JSON:
 
 ```json
-[{ "kind": "proc", "title": "短标题", "body": "这一步要什么/做什么/交出什么", "impl": "执行时真正跑什么：命令/脚本/路径/字段" }]
+[{ "kind": "proc", "title": "短标题", "body": "这一步要什么/做什么/交出什么", "impl": "执行时真正跑什么：命令/脚本/路径/字段", "mods": ["模块短词"] }]
 ```
 
-`kind` is `in` | `proc` | `out`. Two things the parser has to survive:
+`kind` is `in` | `proc` | `out`. `mods` are the card's modules in plain words (materials / tools / results,
+typed by the card's kind); strings or `{name}` objects are both accepted, the prompt's placeholder is dropped.
+Two things the parser has to survive:
 
 - **the CLI echoes the question first.** `hermes chat -q` prints `Query: <prompt>` before the answer, and
   the prompt itself contains a `[…]` example — so the parser searches for the **last** bracket span that
@@ -135,8 +152,9 @@ actually said.
 
 ```js
 store = { workflows: [{ id, name, agent, nodes: [], edges: [] }], current: workflowId }
-node  = { id, kind: 'in'|'proc'|'out', title, body, impl, checks: [], chat: [], x, y, status }
-edge  = [fromId, toId]
+node  = { id, kind: 'in'|'proc'|'out', title, body, impl, mods: [], checks: [], chat: [], x, y, status }
+mod   = { id, type: 'mat'|'tool'|'res', name }      // 素材 / 工具 / 成果，跟着卡片类型走
+edge  = [fromId, toId]                               // 插槽里显示什么由连线推出来，不单独存
 chat  = [{ role: 'me'|'agent', text, at, opts? }]   // 每张卡自己的对话，opts 是那次回答里的候选卡
 ```
 
@@ -155,7 +173,8 @@ renderer/
   style.css        design tokens (paper #f5f3ef / ink #111 / orange #ff5a1f)
 tools/shot.js      CDP screenshot helper (needs --remote-debugging-port=9222)
 tools/eval.js      CDP evaluate helper (headless DOM assertions)
-skills/            workflow-studio: development handbook for agent contributors
+docs/              screenshot + the socket animation (dock.gif / dock.mp4, recorded by cdp-dock.js --record)
+skills/            workflow-studio: development handbook + CDP checks (canvas, click, dock, parser)
 ```
 
 ## Design notes
@@ -163,7 +182,8 @@ skills/            workflow-studio: development handbook for agent contributors
 The palette and radius come from the same design tokens as the rest of the TC tool suite
 (cream paper, near-black ink, one orange accent). Cards use three semantic colours on the header band
 only — the body stays paper-white so text keeps contrast. Nothing animates on hover except a 1px border
-and a soft ring; the canvas itself is a dot grid at 22px.
+and a soft ring; motion is saved for one moment — plugging a card into a socket. The canvas itself is a dot
+grid at 22px.
 
 ## Roadmap
 
@@ -176,6 +196,8 @@ and a soft ring; the canvas itself is a dot grid at 22px.
 
 把业务链路画成卡片：**输入（蓝）→ 加工（橙）→ 输出（绿）**，一张卡一个环节，箭头连成流程。
 **卡片上只写人话**：读卡的人不需要懂代码；命令、脚本、路径、字段名收进「⚙ 内部实现」，卡片正面不显示。
+**用到的东西拆成模块**：输入卡写素材、加工卡写工具、输出卡写成果，每块一个短词。
+**拖卡就是连线**：把输入卡拖到加工卡的「素材」插槽、输出卡拖到「成果」插槽，松手就接上；把模块从插槽里拖出来就断开。
 一条工作流只指派一个 agent；任何卡片都能问 agent，也能让它给「下一步」候选卡，点一下自动加卡并连线。
 界面：空白处拖动＝平移画板，`⌘`+滚轮＝缩放，右键按住＝转盘菜单。
 
