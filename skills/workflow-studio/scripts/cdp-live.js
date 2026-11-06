@@ -71,6 +71,10 @@ const ok = (name, pass, info) => {
   await ev(`(() => { seedDraft('把这件商品的几张图挑成卖点卡'); return 1; })()`);
   const dr = await state();
   ok('temp-draft-card', dr.nodes === 1 && dr.titles[0] === '本次要求', { nodes: dr.nodes, titles: dr.titles });
+  // 临时画布长出卡走的是 paintOne（不经过 render），空画布上的「⇣ 读取 agent 链路」按钮必须跟着收掉，
+  // 否则它会浮在画布中央、挡住卡片与点击。
+  const er = await ev(`(() => { const el = document.querySelector('#emptyRead'); const wr = wrap.getBoundingClientRect(); const hit = document.elementFromPoint(wr.left + wr.width / 2, wr.top + wr.height / 2); return { nodes: flow().nodes.length, on: el.classList.contains('on'), display: getComputedStyle(el).display, hit: hit ? (hit.id || hit.className || hit.tagName) : null }; })()`);
+  ok('temp-empty-read-hides', er.nodes === 1 && !er.on && !/emptyRead/.test(String(er.hit)), er);
   const chunk1 = '{"name":"测试链路","summary":"一句话","cards":[{"key":"c1","kind":"in","title":"素材包","body":"主图 5 张 + 页面标题","impl":"evidence/a"}';
   const chunk2 = chunk1 + ',{"key":"c2","kind":"proc","title":"挑卖点","body":"从这些图里挑 3 条卖点","impl":"cards/a.json","mods":["主图","页面字段"]}';
   await ev(`(() => { window.__mark = document.querySelector('.node') ? 'none' : 'empty'; growTempFrom(${JSON.stringify(chunk1)}); return 1; })()`);
@@ -242,7 +246,9 @@ const ok = (name, pass, info) => {
     const ans1 = await lastMsg();
     ok('agent-sees-facts',
       ans1.text.includes(String(formal.version)) && ans1.text.includes(String(formal.nodes)) && (!formal.proc || ans1.text.includes(formal.proc)),
-      { version: formal.version, cards: formal.nodes, proc: formal.proc, answer_head: ans1.text.slice(0, 160), steps: ans1.steps });
+      { version: formal.version, cards: formal.nodes, proc: formal.proc, answer_head: ans1.text.slice(0, 160), human_head: ans1.human.slice(0, 60), steps: ans1.steps });
+    // 模型顺手给了候选卡也不能把原回答顶掉：human 只放「给你 N 个候选卡」这句提示，回答留在 text
+    ok('agent-facts-kept', !/^给你 \d+ 个候选卡/.test(ans1.text), { text_head: ans1.text.slice(0, 80), human_head: ans1.human.slice(0, 80) });
     console.log('agent 答事实:', JSON.stringify(ans1.text.slice(0, 300)));
     const before = await ev(`(() => { const w = store.workflows.find(x => x.id === ${JSON.stringify(formal.id)}); return { nodes: w.nodes.length, edges: w.edges.length, version: w.version || 1 }; })()`);
     await ev(`dockSend(${JSON.stringify(`请直接把「${formal.proc}」这张卡从画布上删掉。`)})`);

@@ -205,6 +205,11 @@ agent 驱动的写操作（改卡片、删卡片）都要先放进这个确认�
 **加卡入口只有 `addFromOption()` 一处**，别在别处直接调它——一旦多一个入口，这条确认就被绕过了。
 「逐卡验证」只写状态点和聊天记录、不改卡片内容，所以不需要确认。
 
+**候选卡提示不许顶掉原回答**：流结束时 `runStream()` 只写 `live.human = '给你 N 个候选卡…'`，
+原回答留在 `live.text`（气泡显示 human，原话进「看原话」折叠块）。以前把 `live.text` 整段换成那句提示，
+结果「这条链路第几版、几张卡」这种纯事实问答在界面上看不到它答了什么，验收也断不到。`dockPrompt()` 另有一句
+「问事实直接回答，不要给候选卡」。
+
 ## 左栏（对话栏）：默认收起，双击卡片 = 聊天框
 
 - 布局（`#layout` 是 grid）：展开 `364px 1fr 242px`，收起 `0 1fr 242px` ——
@@ -376,16 +381,22 @@ node skills/workflow-studio/scripts/cdp-click.js --card "<卡片标题>" --mode 
   进程启动时 `links().drop('__temp__')` 抹掉上次没清干净的。漏了 `placeChain()` 这条的后果：先开临时画布、再去「读取链路」落卡，
   下一次「对话建链路」会把上一张草稿带回来（实测残留）。
 - 临时画布的气泡**说人话**：`tempHuman()` 把流里的 JSON 换成「正在搭 / 搭好了：N 张卡 + 每张 类型｜标题：正文一句」，
-  原始 JSON 存进 `msg.human` 对应的折叠块「看原话」（`bubblesHTML` 的 `details.more.raw`、`patchLive` 也读 `m.human`）。
+  原始 JSON 留在 `msg.text`，气泡把它收进「看原话」折叠块（`bubblesHTML` 的 `details.more.raw`、`patchLive` 也读 `m.human`）。
   别把 `impl/key/mods` 糊给用户——和卡片正面「只写人话」是同一条规矩。
+- **空画布按钮要跟着卡片数走，不能只在 `render()` 里切**：`#emptyRead`（「⇣ 读取 agent 链路」）的显隐统一走
+  `syncEmptyRead()`，由 `render()` / `paintNodes()` / `paintOne()` / `patchNodesDiff()` 调。临时画布的卡是
+  `paintOne()` 长出来的、不经过 `render()`，只在 `render()` 里切会留下一层挡在画布中央、点不到卡片（实测
+  `hitAtCenter:"emptyRead"`）。
 - 临时画布不写 localStorage：`saveStore()` 里 `current` 会写成列表第一条，重启不会把临时画布带回来。
 
 ```bash
 export CDP_PORT=9333
 node skills/workflow-studio/scripts/cdp-live.js            # 不花钱：起草卡/临时画布/状态文件/外部认领/坏文件/存成正式/落卡清草稿
-node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加三次真实 agent 调用（首卡时间 + 气泡人话 + 看得到/改不了）
-# 期望全 PASS：chat-first-card-2s = 起草卡（6ms 级）、chat-agent-first-card = 模型第一张卡（8–9s）、
-# chat-cards-clear-of-dock 卡压对话框面积 0、chat-bubble-humane 气泡里没有原始 JSON
+node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加两次真实 agent 调用（首卡时间 + 气泡人话 + 看得到/改不了）
+# 期望全 PASS：temp-empty-read-hides 有卡后空画布按钮收掉（elementFromPoint 不再命中 #emptyRead）、
+# chat-first-card-2s = 起草卡（10ms 级）、chat-agent-first-card = 模型第一张卡（实测 6–10s）、
+# chat-cards-clear-of-dock 卡压对话框面积 0、chat-bubble-humane 气泡里没有原始 JSON、
+# agent-sees-facts / agent-facts-kept = 问事实答得对且原回答没被「给你 N 个候选卡」顶掉
 ```
 
 ## 视觉规范（不要自创）
