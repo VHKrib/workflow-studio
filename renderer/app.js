@@ -23,6 +23,9 @@ let agents = [];
 const USE_STREAM = true;   // true：真流式（Hermes 的边跑边出，但 CLI 流里没有思考正文）
                            // false：一次性文本模式（能拿到「思考」正文，但没有逐字效果）
 const DOCK_AGENT = 'default';        // 右下角对话框固定对接「平台主管」（default profile）
+const TEMP_ID = '__temp__';          // 临时对话画布：跟着这次对话存在，不进工作流列表
+let tempFlow = null;                 // 临时画布的数据（不写 localStorage，关掉就没了）
+const LINK = { paths: {}, timer: 0, applying: false, delay: 350 };  // 共享链路状态文件（人和 agent 共用一份底稿）
 let store = { workflows: [], current: null };
 let selId = null;          // 只是选中（转盘/删除键用），不打开任何面板
 let panelCardId = null;     // 右栏正在看哪张卡：只有双击卡片（或卡上的按钮）才会打开
@@ -39,7 +42,8 @@ const ORIGIN = { x: 6000, y: 4000 };
 const CANVAS = { w: 12000, h: 8000 };   // 与 style.css 的 #canvas 一致
 const OX = ORIGIN.x, OY = ORIGIN.y;
 const uid = () => 'n' + (seq++) + '_' + Math.random().toString(36).slice(2, 6);
-const flow = () => store.workflows.find(w => w.id === store.current);
+const isTemp = () => store.current === TEMP_ID && !!tempFlow;
+const flow = () => (store.current === TEMP_ID ? tempFlow : (store.workflows.find(w => w.id === store.current) || null));
 const find = id => (flow() ? flow().nodes.find(n => n.id === id) : null);
 
 // ---------- 说人话 / 内部实现 ----------
@@ -73,10 +77,20 @@ function cardLine(n, i) {
   renderWorkflowList();
   render();
   centerView();
+  // 共享链路状态文件：先把每条链路的文件路径记下来（prompt 里要写给 agent），再听外部改动
+  try {
+    for (const w of store.workflows) LINK.paths[w.id] = await window.tcflow.linkPath(w.id);
+    if (window.tcflow.onLinkExternal) {
+      window.tcflow.onLinkExternal(({ id, doc }) => { if (id !== TEMP_ID) applyLinkDoc(doc); });
+    }
+  } catch (e) { }
 })();
 
 function bindUI() {
   $('#btnNew').onclick = () => createWorkflow('新工作流 ' + (store.workflows.length + 1));
+  $('#btnTempChat').onclick = startTempCanvas;
+  $('#tempSave').onclick = promoteTemp;
+  $('#tempClose').onclick = closeTempCanvas;
   $('#btnAddCard').onclick = e => { e.stopPropagation(); $('#addMenu').classList.toggle('on'); };
   document.addEventListener('click', () => $('#addMenu').classList.remove('on'));
   document.querySelectorAll('#addMenu div').forEach(d => d.onclick = () => { addNode(d.dataset.kind); $('#addMenu').classList.remove('on'); });
@@ -91,7 +105,7 @@ function bindUI() {
   $('#rPlace').onclick = placeChain;
   $('#mClose').onclick = $('#mCancel').onclick = closeRunModal;
   $('#panelTab').onclick = togglePanel;
-  $('#flowAgent').addEventListener('change', e => { flow().agent = e.target.value; renderWorkflowList(); render(); });
+  $('#flowAgent').addEventListener('change', e => { flow().agent = e.target.value; saveStore(); renderWorkflowList(); render(); });
   $('#dockMin').onclick = () => { dockOpen = false; renderDock(); };
   $('#dockFab').onclick = () => { dockOpen = true; renderDock(); const i = $('#dockIn'); if (i) i.focus(); };
   $('#dockSend').onclick = () => dockSend($('#dockIn').value);
@@ -100,7 +114,7 @@ function bindUI() {
   $('#mGo').onclick = startRun;
   $('#wrap').addEventListener('contextmenu', e => e.preventDefault());
   document.addEventListener('keydown', onKey);
-  $('#flowName').addEventListener('change', e => { flow().name = e.target.value.trim() || '未命名'; renderWorkflowList(); });
+  $('#flowName').addEventListener('change', e => { flow().name = e.target.value.trim() || '未命名'; saveStore(); renderWorkflowList(); });
 
   $('#zoomIn').onclick = () => { zoom = Math.min(1.8, zoom + 0.1); applyZoom(); drawEdges(); };
   $('#zoomOut').onclick = () => { zoom = Math.max(0.4, zoom - 0.1); applyZoom(); drawEdges(); };
@@ -248,12 +262,128 @@ function loadStore() {
     store.workflows.forEach(w => { hit += plainifyLegacy(w); hit += plainifySpecific(w); hit += seedMods(w); });
     if (hit) saveStore();
   }
+  store.workflows.forEach(w => { w.version = w.version || 1; w.updated_at = w.updated_at || Date.now(); });
 }
-function saveStore() { try { localStorage.setItem(LS_KEY, JSON.stringify(store)); } catch (e) { } }
+// 画布改动 → 本地存储 + 共享状态文件（临时画布不写本地存储：关掉就没了）
+// bump=false：只是聊天/状态点这种不影响链路结构的改动，不算新版本、也不写文件（文件里只有链路）
+function saveStore(bump = true) {
+  const w = flow();
+  const touch = bump && !LINK.applying;
+  if (w && touch) { w.version = (w.version || 0) + 1; w.updated_at = Date.now(); }
+  const current = store.current === TEMP_ID ? (store.workflows[0] ? store.workflows[0].id : null) : store.current;
+  try { localStorage.setItem(LS_KEY, JSON.stringify({ workflows: store.workflows, current })); } catch (e) { }
+  if (w && touch) queueLinkWrite(w);
+}
+
+// ---------- 共享链路状态文件（人和 agent 共用的一份底稿） ----------
+// 一条链路的完整状态：卡片 / 连线 / 每张卡的模块 / 正文 / 内部实现 / 执行方 / 版本号。
+// 画布是唯一写入方；agent 只读。外面改了文件（版本更大）画布认领回来。
+function linkDoc(w) {
+  const order = chainOrder(w);
+  const byKind = { in: 0, proc: 0, out: 0 };
+  w.nodes.forEach(n => { byKind[n.kind] = (byKind[n.kind] || 0) + 1; });
+  return {
+    schema: 'workflow-studio/link@1',
+    id: w.id,
+    kind: w.temp ? 'temp' : 'workflow',
+    name: w.name || '未命名',
+    agent: w.agent || null,
+    agent_name: w.agent ? execName(w.agent) : null,
+    version: w.version || 1,
+    updated_at: new Date(w.updated_at || Date.now()).toISOString(),
+    summary: {
+      cards: w.nodes.length,
+      edges: w.edges.length,
+      by_kind: byKind,
+      executor: w.agent ? execName(w.agent) : '未指派',
+      chain: order.map(n => `${KINDS[n.kind].label}｜${n.title}`),
+    },
+    cards: w.nodes.map(n => ({
+      id: n.id, kind: n.kind, title: n.title, body: n.body || '', impl: implOf(n),
+      mods: modsOf(n).map(m => ({ type: m.type, name: m.name })),
+      position: { x: Math.round(n.x), y: Math.round(n.y) },
+    })),
+    edges: w.edges.map(e => [e[0], e[1]]),
+  };
+}
+function queueLinkWrite(w) {
+  if (!window.tcflow || !window.tcflow.linkWrite || !w) return;
+  clearTimeout(LINK.timer);
+  const id = w.id;
+  LINK.timer = setTimeout(() => {
+    const cur = id === TEMP_ID ? tempFlow : store.workflows.find(x => x.id === id);
+    if (!cur || !window.tcflow.linkWrite) return;
+    window.tcflow.linkWrite({ id, doc: linkDoc(cur) }).then(r => { if (r && r.path) LINK.paths[id] = r.path; }).catch(() => { });
+  }, LINK.delay);
+}
+// 状态文件被外面改了（人改、别的工具改）：版本更大就认领回来，只重画变了的那几张卡
+function applyLinkDoc(doc) {
+  if (!doc || !Array.isArray(doc.cards)) return false;
+  const w = doc.id === TEMP_ID ? tempFlow : store.workflows.find(x => x.id === doc.id);
+  if (!w) return false;
+  if ((doc.version || 0) < (w.version || 0)) return false;
+  if (document.querySelector('.node.dragging')) { setTimeout(() => applyLinkDoc(doc), 400); return false; }   // 正在拖卡：拖完再认领
+  LINK.applying = true;
+  if (doc.name) w.name = String(doc.name);
+  if (doc.agent !== undefined) w.agent = doc.agent || '';
+  w.nodes = doc.cards.map(c => ({
+    id: c.id || uid(),
+    kind: ['in', 'proc', 'out'].includes(c.kind) ? c.kind : 'proc',
+    title: String(c.title || ''), body: String(c.body || ''), impl: String(c.impl || ''),
+    mods: (c.mods || []).map(m => ({ id: uid(), type: m.type || KIND_MOD[c.kind] || 'tool', name: String(m.name || '') })),
+    checks: [], chat: [], status: 'idle',
+    x: c.position ? Number(c.position.x) || 0 : 0, y: c.position ? Number(c.position.y) || 0 : 0,
+  }));
+  const ids = new Set(w.nodes.map(n => n.id));
+  w.edges = (doc.edges || []).filter(e => Array.isArray(e) && ids.has(e[0]) && ids.has(e[1]));
+  w.version = Math.max(w.version || 1, doc.version || 1);
+  w.updated_at = doc.updated_at ? (Date.parse(doc.updated_at) || Date.now()) : Date.now();
+  saveStore();                                                    // 落 localStorage；LINK.applying 挡掉回写，不会自己推自己
+  LINK.applying = false;
+  if (store.current === w.id) {
+    $('#flowName').value = w.name;
+    $('#flowAgent').innerHTML = agentOptionsHTML(w.agent);
+    patchNodesDiff();
+    $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+  }
+  renderWorkflowList();
+  return true;
+}
+// 只补变了的那部分：新卡追加、改过的卡换掉自己那块、删掉的移走；连线重画
+const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y]);
+function patchNodesDiff() {
+  const w = flow(); if (!w) return;
+  const live = new Map([...canvas.querySelectorAll('.node')].map(el => [el.dataset.id, el]));
+  const keep = new Set();
+  for (const n of w.nodes) {
+    keep.add(n.id);
+    const sig = nodeSig(n);
+    const old = live.get(n.id);
+    if (!old) { const el = nodeEl(n); el.dataset.sig = sig; canvas.appendChild(el); continue; }
+    if (old.dataset.sig !== sig) { const el = nodeEl(n); el.dataset.sig = sig; old.replaceWith(el); }
+  }
+  for (const [id, el] of live) if (!keep.has(id)) el.remove();
+  drawEdges();
+}
+// 画布上的卡换了一张：只换这一块，不整张画布重建（拖拽不受影响）
+function paintOne(n) {
+  const sig = nodeSig(n);
+  const old = canvas.querySelector(`.node[data-id="${n.id}"]`);
+  if (old) {
+    if (old.dataset.sig === sig) return false;
+    const el = nodeEl(n); el.dataset.sig = sig; old.replaceWith(el);
+  } else {
+    const el = nodeEl(n); el.dataset.sig = sig; canvas.appendChild(el);
+  }
+  drawEdges();
+  return true;
+}
+
 
 // ---------- 工作流 ----------
 function createWorkflow(name, seed = false) {
-  const w = { id: 'w' + Date.now().toString(36), name, agent: '', nodes: [], edges: [], chat: [] };
+  if (isTemp()) dropTemp();
+  const w = { id: 'w' + Date.now().toString(36), name, agent: '', nodes: [], edges: [], chat: [], version: 1, updated_at: Date.now() };
   if (seed) {
     const a = { id: uid(), kind: 'in',   title: '商品编号', body: '一件示例商品（编号 A-1001），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。', checks: [],
                 impl: 'item_id = A-1001；evidence/<包>/images + page-fields', x: 0,   y: 70, status: 'idle' };
@@ -273,7 +403,7 @@ function createWorkflow(name, seed = false) {
   saveStore(); renderWorkflowList(); render();
   return w;
 }
-function switchWorkflow(id) { store.current = id; selId = null; panelCardId = null; panelOpen = false; saveStore(); renderWorkflowList(); render(); centerView(); }
+function switchWorkflow(id) { if (isTemp()) dropTemp(); store.current = id; selId = null; panelCardId = null; panelOpen = false; saveStore(); renderWorkflowList(); render(); centerView(); }
 function deleteWorkflow(id, ev) {
   ev.stopPropagation();
   if (store.workflows.length <= 1) return alert('至少保留一个工作流');
@@ -297,6 +427,8 @@ function renderWorkflowList() {
 }
 function agentName(id) { const a = agents.find(x => x.id === id); return a ? a.name : id; }
 function dockAgentName() { return '平台主管'; }
+// 执行方的显示名：右下角对话框那条固定是平台主管（profile 名 default 不在岗位列表里）
+const execName = id => (!id ? '未指派' : (id === DOCK_AGENT ? '平台主管' : agentName(id)));
 function isStopped(id) { const a = agents.find(x => x.id === id); return !a || a.stopped; }
 
 // 只列在用岗；已停用的折叠进 disabled 分组，避免误派
@@ -353,6 +485,7 @@ function render() {
   drawEdges();
   renderPanel();
   renderDock();
+  renderTempBar();
   $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
   $('#emptyRead').classList.toggle('on', !w.nodes.length);
 }
@@ -388,6 +521,8 @@ function nodeEl(n) {
   el.className = `node k-${n.kind}` + (selId === n.id ? ' sel' : '');
   el.style.left = (n.x + OX) + 'px'; el.style.top = (n.y + OY) + 'px';
   el.dataset.id = n.id;
+  el.dataset.sig = nodeSig(n);
+  if (n.draft) el.classList.add('draft');
   el.title = '双击打开右栏：改名字、和 agent 聊这张卡';
   el.innerHTML = `
     <div class="hd">
@@ -870,7 +1005,7 @@ function renderPanel() {
       <div style="margin-top:10px">${rows}</div>
       <button id="pAskFlow" class="primary" style="width:100%;margin-top:12px">让 agent 看整条流程</button>
       <div id="agentOut">（agent 会读全部卡片，指出断链、缺校验的地方）</div>`;
-    $('#pFlowAgent').onchange = e => { w.agent = e.target.value; renderWorkflowList(); render(); };
+    $('#pFlowAgent').onchange = e => { w.agent = e.target.value; saveStore(); renderWorkflowList(); render(); };
     $('#pAskFlow').onclick = askFlow;
     return;
   }
@@ -972,6 +1107,16 @@ const PLAIN_RULE = [
 ].join('');
 // 候选卡的模块：和卡片上的素材/工具/成果同一套口径
 const MODS_RULE = 'mods 把这张卡用到的东西拆成短词模块（每块 8 个字以内，说人话）：输入卡写素材（哪几张图、哪些数据），加工卡写工具（怎么挑、怎么比、怎么查），输出卡写成果（交出的文件里有哪几样）。';
+// 共享链路状态：agent 每次都拿得到「现在是第几版、这条链路长什么样、状态文件在哪」，但只能读
+const LINK_RULE = '画布你只能读：不能加卡、改字、删卡、连线。你想改，就在回答里写一条提议（「提议：把「卡名」的加工方式改成 …」），人点了才会生效；不要说「我已经改好了」。状态文件也是只读的：不要用写文件、跑命令之类的工具去改它。';
+function linkBrief(w) {
+  const p = LINK.paths[w.id] || (w.temp ? '（临时画布：应用数据目录 links/__temp__.json）' : '（应用数据目录 links/ 下，按链路 id 命名）');
+  return [
+    `【这条链路的状态 · 只读】第 ${w.version || 1} 版｜执行方：${execName(w.agent)}｜${w.nodes.length} 张卡 / ${w.edges.length} 条连线`,
+    `状态文件（可以直接打开读；卡片、模块、内部实现、连线都在里面）：${p}`,
+    LINK_RULE,
+  ].join('\n');
+}
 async function askFlow() {
   const w = flow();
   if (!w.agent) { alert('先给整条工作流指派一个 agent'); return; }
@@ -981,6 +1126,7 @@ async function askFlow() {
   const prompt = ['你是这条工作流的执行方。只做评审：不执行、不发请求、不改文件、不付费。',
     PLAIN_RULE,
     `工作流：${w.name}`, desc, '',
+    linkBrief(w), '',
     '6 行以内：1) 哪处断链（上一张卡的产出对不上下一个要的东西）；2) 哪张卡缺必须的校验；3) 最该先改的一处。',
     '建议改卡片时也用大白话；需要补的命令或路径另起一段，标「内部实现：」。'].join('\n');
   out.textContent = `正在问 ${agentName(w.agent)} …（只读）`;
@@ -1114,6 +1260,7 @@ function buildChatPrompt(n, text) {
     PLAIN_RULE,
     `工作流：${w.name}`,
     `整条流程：\n${chainOrder(w).map(cardLine).join('\n')}`,
+    linkBrief(w),
     `现在这张卡：[${KINDS[n.kind].label}] ${n.title}`,
     `内容（人话）：${n.body || '(空)'}｜内部实现：${implOf(n) || '(未填)'}｜校验：${(n.checks || []).join(',') || '无'}`,
     hist ? `上文对话：\n${hist}` : '',
@@ -1186,11 +1333,11 @@ async function chatSend(text) {
   if (!n || !msg) return;
   if (!w.agent) { alert('先给整条工作流指派一个 agent（顶栏或「概览」）'); return; }
   n.chat = (n.chat || []).concat([{ role: 'me', text: msg, at: Date.now() }]).slice(-30);
-  saveStore(); renderChat(n);
+  saveStore(false); renderChat(n);
   const inEl = $('#chatIn'); if (inEl) inEl.value = '';
   const live = await runStream({ msgs: n.chat, rerender: () => renderChat(n), profile: w.agent, prompt: buildChatPrompt(n, msg) });
   n.chat = n.chat.slice(-30);
-  saveStore(); renderChat(n);
+  saveStore(false); renderChat(n);
   return live;
 }
 
@@ -1226,6 +1373,7 @@ function dockPrompt(text) {
     hist ? `上文对话：\n${hist}` : '',
     `我说：${text}`,
     '从平台主管的角度回答：这条链路该谁干、缺哪一步、要不要加人/换人；说人话、短一点。',
+    linkBrief(w),
     '如果我要的是「下一步」候选卡，只输出 JSON 数组，不要解释：',
     MODS_RULE,
     '[{"kind":"proc","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"命令/脚本/路径/字段","mods":["模块短词"]}]',
@@ -1234,13 +1382,47 @@ function dockPrompt(text) {
 async function dockSend(text) {
   const w = flow(), msg = String(text == null ? '' : text).trim();
   if (!msg) return;
+  const temp = !!w.temp;
   w.chat = (w.chat || []).concat([{ role: 'me', text: msg, at: Date.now() }]).slice(-30);
-  saveStore(); renderDock();
+  saveStore(false); renderDock();
   const inEl = $('#dockIn'); if (inEl) inEl.value = '';
-  const live = await runStream({ msgs: w.chat, rerender: () => renderDock(), profile: DOCK_AGENT, prompt: dockPrompt(msg) });
+  const live = await runStream({
+    msgs: w.chat,
+    // 临时画布：agent 每吐出一张完整的卡，画布就跟着长一张（只补新的，不整张重画）
+    rerender: () => {
+      renderDock();
+      if (!temp) return;
+      const last = w.chat[w.chat.length - 1];
+      if (last && last.live) growTempFrom(last.text);
+      else growTempFrom('');
+    },
+    profile: temp ? (w.agent || DOCK_AGENT) : DOCK_AGENT,
+    prompt: temp ? tempPrompt(msg) : dockPrompt(msg),
+    cards: !temp,                                   // 临时画布：留着原话对齐卡片，不走「候选卡」确认层
+    timeoutMs: temp ? 240000 : 180000,
+  });
   w.chat = w.chat.slice(-30);
-  saveStore(); renderDock();
+  saveStore(false); renderDock();
+  if (temp) finishTemp(live.text || '');
   return live;
+}
+// 临时画布的口径：边写边出，卡片跟着长；不落地，人点「存成正式」才进列表
+function tempPrompt(text) {
+  const w = flow();
+  const drawn = w.nodes.length ? chainOrder(w).map(cardLine).join('\n') : '（画布还空着）';
+  return [
+    '只输出一个 JSON 对象，边写边出：先写 name/summary 和第一张卡，写完一张立刻接着写下一条，不要等全部想好；不要解释、不要代码块标记，不要先调用工具。',
+    '{"name":"工作流名（12 字内）","summary":"一句话说清这条链路","cards":[{"key":"c1","kind":"in","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"技能/目录/工具/字段","mods":["模块短词"]}],"edges":[["c1","c2"]]}',
+    '你在工作流开发平台里，和用户一起现搭一条工作流。你负责拆卡，人负责定。',
+    '只做建议：不执行、不发请求、不改文件、不付费。',
+    PLAIN_RULE,
+    MODS_RULE,
+    `画布上现在有：\n${drawn}`,
+    linkBrief(w),
+    `我说：${text}`,
+    '第一张卡尽量短：标题 6 个字以内、正文一句话，把整条链路的最前面先立起来。',
+    '临时画布上的卡是提议：人点了「存成正式工作流」才进列表。已经在用的正式链路你只能读、不能改，要改就给一条提议。',
+  ].filter(Boolean).join('\n');
 }
 // 右下角对话框里确认加入：没有"上一张卡"，放在流程右下方、不自动连线
 function addFromDock(mi, oi) {
@@ -1368,6 +1550,7 @@ async function validateAll() {
   for (const n of chainOrder(w)) {
     selId = n.id; panelCardId = n.id; panelOpen = false; n.status = 'running'; render();
     const prompt = ['只做评审，不执行、不发请求、不改文件。',
+      linkBrief(w),
       `[${KINDS[n.kind].label}] ${n.title}｜内容（人话）：${n.body || '(空)'}｜内部实现：${implOf(n) || '(未写)'}｜校验：${(n.checks || []).join(',') || '无'}`,
       '2 行：可执行 / 需补；需补就写缺哪个字段或校验（补的字段和命令算内部实现，别塞进卡片人话里）。'].join('\n');
     const r = await window.tcflow.askAgent({ profile: w.agent, prompt });
@@ -1379,7 +1562,7 @@ async function validateAll() {
       text: `【逐卡验证】${ok ? '可执行' : '需补'}\n${agentAnswer(r.text || r.error || '').slice(0, 400)}`,
       at: Date.now(),
     }]).slice(-30);
-    saveStore(); render();
+    saveStore(false); render();
   }
   openCard(firstFail || w.nodes[0]);
 }
@@ -1872,6 +2055,152 @@ function playArrival(w, tileOf) {
   });
   const when = ([a, b]) => Math.max(landAt.get(a) || 0, landAt.get(b) || 0);
   [...w.edges].sort((x, y) => when(x) - when(y)).forEach((e, k) => drawIn(`${e[0]}>${e[1]}`, null, when(e) + 60 + k * 50));
+}
+
+// ---------- 临时对话画布（跟着一次对话长出来，不进工作流列表） ----------
+// 规矩：临时画布不写 localStorage、不进工作流列表；关掉/切走就没了；人按「存成正式」才进列表。
+// 长卡只动变了的那一块（append / 换掉单张卡），不整张画布重建，所以拖拽不受影响。
+async function startTempCanvas() {
+  if (!tempFlow) tempFlow = { id: TEMP_ID, temp: true, name: '临时画布', agent: DOCK_AGENT, nodes: [], edges: [], chat: [], version: 1, updated_at: Date.now() };
+  // 先把状态文件的真实路径取到：这次对话的 prompt 里要写给 agent（它可以直接打开读）
+  try { LINK.paths[TEMP_ID] = await window.tcflow.linkPath(TEMP_ID); } catch (e) { }
+  store.current = TEMP_ID; selId = null; panelCardId = null; panelOpen = false;
+  dockOpen = true; dockConfirm = null;
+  renderTempBar(); renderWorkflowList(); render(); centerView();
+  queueLinkWrite(tempFlow);
+  const i = $('#dockIn'); if (i) i.focus();
+}
+function dropTemp() {
+  const t = tempFlow;
+  tempFlow = null;
+  if (t) { delete LINK.paths[t.id]; try { window.tcflow.linkDrop(t.id); } catch (e) { } }   // 关掉就清干净：文件删掉，列表里什么都没多
+  if (store.current === TEMP_ID) store.current = store.workflows[0] ? store.workflows[0].id : null;
+  selId = null; panelCardId = null; panelOpen = false;
+  renderTempBar();
+}
+function closeTempCanvas() { dropTemp(); renderWorkflowList(); render(); centerView(); }
+// 存成正式工作流：内容与临时画布一致（卡片、连线、模块、正文、内部实现、执行方、对话）
+function promoteTemp() {
+  const t = tempFlow;
+  if (!t || !t.nodes.length) return;
+  const base = (t.name && t.name !== '临时画布') ? t.name : '对话链路';
+  const w = {
+    id: 'w' + Date.now().toString(36),
+    name: uniqueFlowName(base),
+    agent: t.agent || '',
+    chat: (t.chat || []).slice(-30),
+    nodes: t.nodes.map(n => Object.assign({}, n, {
+      draft: false,
+      mods: modsOf(n).map(m => ({ ...m, id: uid() })),
+      checks: (n.checks || []).slice(), chat: [],
+    })),
+    edges: t.edges.map(e => e.slice()),
+    version: 1, updated_at: Date.now(),
+  };
+  store.workflows.push(w); store.current = w.id;
+  tempFlow = null; delete LINK.paths[TEMP_ID];
+  try { window.tcflow.linkDrop(TEMP_ID); } catch (e) { }
+  selId = null; panelCardId = null; panelOpen = false;
+  renderTempBar(); saveStore(); renderWorkflowList(); render(); fitView(true);
+}
+function renderTempBar() {
+  const bar = $('#tempBar');
+  if (!bar) return;
+  const on = isTemp();
+  bar.classList.toggle('on', on);
+  if (on) bar.querySelector('.tb-name').textContent = `临时画布 · 第 ${(tempFlow.version || 1)} 版`;
+}
+// 临时画布上的落点：输入/加工/输出各一列，同类往下排（不压别的卡）
+const TEMP_COL = { in: 0, proc: 1, out: 2 };
+function tempCardNode(c) {
+  const w = tempFlow;
+  const col = TEMP_COL[c.kind] == null ? 1 : TEMP_COL[c.kind];
+  const row = w.nodes.filter(n => n.kind === c.kind).length;
+  return {
+    id: uid(), kind: c.kind, title: c.title, body: c.body || '', impl: c.impl || '',
+    mods: (c.mods || []).map(m => ({ id: uid(), type: KIND_MOD[c.kind] || 'tool', name: String(typeof m === 'string' ? m : (m && m.name) || '') })).filter(m => m.name),
+    checks: [], chat: [], status: 'idle', draft: true,
+    x: 40 + col * 350, y: 40 + row * 210,
+  };
+}
+// 流里已经写完整的卡片对象（还没写完的那张先不长出来）
+function partialCardObjects(text) {
+  const t = String(text || ''), i = t.indexOf('"cards"');
+  if (i < 0) return [];
+  const s = t.slice(i), out = [];
+  let depth = 0, start = -1, inStr = false, bs = false;
+  for (let k = 0; k < s.length; k++) {
+    const ch = s[k];
+    if (inStr) { if (bs) bs = false; else if (ch === '\\') bs = true; else if (ch === '"') inStr = false; continue; }
+    if (ch === '"') { inStr = true; continue; }
+    if (ch === '{') { if (depth === 0) start = k; depth++; }
+    else if (ch === '}' && depth > 0) {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        try { const o = JSON.parse(s.slice(start, k + 1)); if (o && o.title) out.push(o); } catch (e) { }
+        start = -1;
+      }
+    }
+  }
+  return out;
+}
+// 画布跟着长：只补新卡、只换改过的卡；新卡按顺序和上一张连一条线
+function growTempFrom(text) {
+  const w = tempFlow;
+  if (!w || document.querySelector('.node.dragging')) return 0;   // 正在拖卡：拖完再长，别抢手
+  let added = 0, touched = false;
+  for (const x of partialCardObjects(text)) {
+    if (w.nodes.length >= 12) break;
+    const raw = String(x.kind || '').trim();
+    const kind = KIND_ALIAS[raw.toLowerCase()] || KIND_ALIAS[raw];
+    const title = String(x.title || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    if (!kind || !title || /^(短标题|标题|卡名|示例)$/.test(title)) continue;
+    let n = w.nodes.find(v => v.title === title);
+    if (!n) {
+      if (!String(x.body || '').trim()) continue;                  // 正文还没写出来：等下一帧
+      n = tempCardNode({ kind, title, body: String(x.body), impl: String(x.impl || x.internal || ''), mods: x.mods });
+      w.nodes.push(n);
+      paintOne(n); added++;
+    } else {
+      const body = String(x.body || ''), impl = String(x.impl || x.internal || '');
+      if (body && (n.body !== body || (n.impl || '') !== impl)) { n.body = body; n.impl = impl; paintOne(n); touched = true; }
+    }
+    const prev = w.nodes[w.nodes.length - 2];
+    if (prev && prev !== n && n.kind !== 'in' && !w.edges.some(([a, b]) => a === prev.id && b === n.id)) {
+      w.edges.push([prev.id, n.id]); touched = true;
+    }
+  }
+  if (added || touched) {
+    drawEdges();
+    w.version = (w.version || 1) + 1; w.updated_at = Date.now();
+    $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+    renderTempBar(); queueLinkWrite(w);
+  }
+  return added;
+}
+// 一次回答结束：用完整计划对齐一次（补齐漏的卡、按计划的连线接上），然后停下等人决定
+function finishTemp(text) {
+  const w = tempFlow;
+  if (!w) return;
+  const plan = parseChainPlan(text || '');
+  if (plan) {
+    const byTitle = new Map(w.nodes.map(n => [n.title, n]));
+    const idOf = new Map();
+    for (const c of plan.cards) {
+      let n = byTitle.get(c.title);
+      if (!n) { n = tempCardNode(c); w.nodes.push(n); paintOne(n); byTitle.set(c.title, n); }
+      idOf.set(c.key, n.id);
+    }
+    const es = plan.edges.map(([a, b]) => [idOf.get(a), idOf.get(b)]).filter(([a, b]) => a && b);
+    if (es.length) w.edges = es;
+    if (plan.name && w.name === '临时画布') w.name = plan.name;
+  }
+  w.version = (w.version || 1) + 1; w.updated_at = Date.now();
+  drawEdges();
+  $('#flowName').value = w.name;
+  $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+  renderTempBar(); queueLinkWrite(w);
+  if (w.nodes.length) fitView(false);     // 不折对话框：人正在对话框里跟它聊
 }
 
 // ---------- 导入导出 ----------

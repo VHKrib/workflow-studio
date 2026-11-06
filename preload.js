@@ -13,6 +13,17 @@ contextBridge.exposeInMainWorld('tcflow', {
   },
   // 只读：读一个 agent 的工作链路原料
   readAgentChain: (id) => ipcRenderer.invoke('agent:chain', id),
+  // 共享链路状态文件（人和 agent 共用一份底稿；画布写、人/agent 读）
+  linkDir: () => ipcRenderer.invoke('link:dir'),
+  linkPath: (id) => ipcRenderer.invoke('link:path', id),
+  linkWrite: (payload) => ipcRenderer.invoke('link:write', payload),
+  linkRead: (id) => ipcRenderer.invoke('link:read', id),
+  linkDrop: (id) => ipcRenderer.invoke('link:drop', id),
+  onLinkExternal: (cb) => {
+    const h = (_e, data) => cb(data);
+    ipcRenderer.on('link:external', h);
+    return () => ipcRenderer.removeListener('link:external', h);
+  },
   saveFlow: (flow) => ipcRenderer.invoke('flow:save', flow),
   openFlow: () => ipcRenderer.invoke('flow:open'),
 });

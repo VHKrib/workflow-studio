@@ -6,7 +6,18 @@ const path = require('path');
 
 const PROFILES_DIR = path.join(os.homedir(), '.hermes', 'profiles');
 const { readChain } = require('./chain');
+const { createLinkStore } = require('./linkstore');
 const HERMES = path.join(os.homedir(), '.hermes', 'hermes-agent', '.hermes', 'bin', 'hermes');
+
+// 共享链路状态文件：人和 agent 共用一份底稿（画布写、agent 读；外面改了画布认领回来）
+let LINKS = null;
+function links() {
+  if (!LINKS) {
+    LINKS = createLinkStore(path.join(app.getPath('userData'), 'links'));
+    LINKS.drop('__temp__');          // 临时画布不跨进程存在：上次没收干净的那份，启动时抹掉
+  }
+  return LINKS;
+}
 
 /** 读本机 profile 列表：id + 显示名 + 所属部门 + 描述 */
 let WHITELIST = null;
@@ -116,12 +127,26 @@ app.whenReady().then(() => {
     { role: 'appMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
   ]));
   createWindow();
+  // 状态文件被外部改（人改、别的工具改）：推给画布；坏文件不推，画布继续用上一版
+  links().startWatching(payload => {
+    for (const w of BrowserWindow.getAllWindows()) {
+      try { if (!w.isDestroyed()) w.webContents.send('link:external', payload); } catch (_) { }
+    }
+  });
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 ipcMain.handle('agents:list', () => listAgents());
 ipcMain.handle('agent:ask', (_e, payload) => askAgent(payload));
+// 共享链路状态文件：路径 / 写 / 读 / 删（临时画布关掉就删）
+ipcMain.handle('link:dir', () => links().dir);
+ipcMain.handle('link:path', (_e, id) => links().fileOf(id));
+ipcMain.handle('link:write', (_e, { id, doc }) => {
+  try { return links().write(id, doc); } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+});
+ipcMain.handle('link:read', (_e, id) => links().read(id));
+ipcMain.handle('link:drop', (_e, id) => { links().drop(id); return true; });
 // 只读：读一个 agent 的工作链路原料（身份 / 技能 / 最近干的活 / 上下游 / 读写的目录）
 ipcMain.handle('agent:chain', (_e, id) => readChain(id).catch(err => ({ ok: false, error: String(err && err.message || err) })));
 ipcMain.handle('flow:save', async (_e, flow) => {

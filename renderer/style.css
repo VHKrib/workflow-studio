@@ -58,6 +58,14 @@ button.ghost{background:transparent}
 .side{background:var(--surface);border-left:1px solid var(--line);overflow:auto;padding:14px 12px}
 .side h3{margin:4px 0 10px;font-size:11px;color:var(--ink-3);font-weight:600;letter-spacing:.08em}
 .sidehint{margin-top:14px;font-size:11px;color:var(--ink-3);line-height:1.6;border-top:1px solid var(--soft-line);padding-top:10px}
+/* 临时对话画布：这一条只在临时画布上出现（不进列表，存成正式才进列表） */
+.tempbar{display:none;align-items:center;gap:6px;margin:0 0 10px;padding:7px 8px 7px 10px;
+  border:1px dashed var(--accent-line);border-radius:var(--radius-sm);background:var(--accent-soft)}
+.tempbar.on{display:flex}
+.tempbar .tb-name{font-size:11.5px;font-weight:600;color:var(--accent-ink)}
+.tempbar button{padding:4px 9px;font-size:11.5px;border-radius:7px}
+.tempbar #tempClose{cursor:pointer;color:var(--ink-3);padding:0 5px;border-radius:6px}
+.tempbar #tempClose:hover{color:var(--ink);background:var(--surface)}
 
 .wf{position:relative;padding:9px 10px;border-radius:var(--radius-sm);border:1px solid transparent;cursor:pointer;margin-bottom:4px}
 .wf:hover{background:var(--card);border-color:var(--line)}
@@ -79,6 +87,8 @@ svg#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .node{position:absolute;width:244px;background:var(--surface);border:1px solid var(--line);
   border-radius:var(--radius);padding:11px 12px 12px;cursor:grab;box-shadow:var(--shadow-1)}
 .node:hover{border-color:var(--line-strong)}
+/* 临时画布上的卡：agent 提议的，还没落地（人按「存成正式」才进列表） */
+.node.draft{border-style:dashed;border-color:var(--line-strong);background:color-mix(in srgb,var(--surface) 88%,var(--accent) 12%)}
 .node.sel{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft),var(--shadow-1)}
 .node .hd{display:flex;align-items:center;gap:7px;margin-bottom:8px}
 .node .idx{width:20px;height:20px;border-radius:7px;background:var(--accent-soft);color:var(--accent-ink);
