@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "id": "bad-05-no-edges",
+    "title": "完全没给连线（自己造的坏样本）",
+    "from": "自造 · 对应现实现象：模型只给了卡片，edges 是空的",
+    "note": "三张卡（进 / 工 / 出），一条连线都没给。现有行为：解析时按卡片顺序补线，补完过闸。"
+  },
+  "expect": {
+    "cards": 3,
+    "kinds": { "in": 1, "proc": 1, "out": 1 },
+    "titles": ["派活", "干活", "交付"],
+    "edges": [["c1", "c2"], ["c2", "c3"]],
+    "gate": "",
+    "autoFix": true
+  },
+  "answer": {
+    "name": "没给连线",
+    "summary": "三张卡按顺序排，连线一条没写。",
+    "cards": [
+      { "key": "c1", "kind": "in", "title": "派活", "body": "上游派活：做哪件商品、交什么格式。", "impl": "", "mods": ["派活单"] },
+      { "key": "c2", "kind": "proc", "title": "干活", "body": "按派活单干活，一步一记录。", "impl": "", "mods": ["加工"] },
+      { "key": "c3", "kind": "out", "title": "交付", "body": "交出成品与记录。", "impl": "", "mods": ["成品"] }
+    ],
+    "edges": []
+  }
+}

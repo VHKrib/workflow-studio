@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "id": "bad-01-two-islands",
+    "title": "断成两截（自己造的坏样本）",
+    "from": "自造 · 对应现实现象：两张输入卡连在一起、链路断成两截",
+    "note": "两条互不相干的小链，各有一进一工一出。现有行为：质量闸挡住，判「链路断成了几截」。"
+  },
+  "expect": {
+    "cards": 6,
+    "kinds": { "in": 2, "proc": 2, "out": 2 },
+    "titles": ["甲料", "甲工", "甲货", "乙料", "乙工", "乙货"],
+    "edges": [["c1", "c2"], ["c2", "c3"], ["c4", "c5"], ["c5", "c6"]],
+    "gate": "链路断成了几截",
+    "autoFix": false,
+    "single": false
+  },
+  "answer": {
+    "name": "断成两截",
+    "summary": "故意写成两条互不相干的小链。",
+    "cards": [
+      { "key": "c1", "kind": "in", "title": "甲料", "body": "甲这条链的输入：一份原始材料。", "impl": "", "mods": ["甲料"] },
+      { "key": "c2", "kind": "proc", "title": "甲工", "body": "把甲材料加工成甲成品。", "impl": "", "mods": ["甲工"] },
+      { "key": "c3", "kind": "out", "title": "甲货", "body": "交出甲成品。", "impl": "", "mods": ["甲货"] },
+      { "key": "c4", "kind": "in", "title": "乙料", "body": "乙这条链的输入：另一份原始材料。", "impl": "", "mods": ["乙料"] },
+      { "key": "c5", "kind": "proc", "title": "乙工", "body": "把乙材料加工成乙成品。", "impl": "", "mods": ["乙工"] },
+      { "key": "c6", "kind": "out", "title": "乙货", "body": "交出乙成品。", "impl": "", "mods": ["乙货"] }
+    ],
+    "edges": [["c1", "c2"], ["c2", "c3"], ["c4", "c5"], ["c5", "c6"]]
+  }
+}

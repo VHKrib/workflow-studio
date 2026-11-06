@@ -1,0 +1,28 @@
+{
+  "meta": {
+    "id": "bad-04-proc-only",
+    "title": "只有加工卡（自己造的坏样本）",
+    "from": "自造 · 对应现实现象：模型只拆出几条加工动作，没有输入也没有输出",
+    "note": "四张加工卡首尾相接。现有行为：链路本身连成一片，但质量闸判「拆出来的卡不全（输入、加工、输出得都有）」。"
+  },
+  "expect": {
+    "cards": 4,
+    "kinds": { "in": 0, "proc": 4, "out": 0 },
+    "titles": ["一", "二", "三", "四"],
+    "edges": [["c1", "c2"], ["c2", "c3"], ["c3", "c4"]],
+    "gate": "拆出来的卡不全（输入、加工、输出得都有）",
+    "autoFix": false,
+    "wired": false
+  },
+  "answer": {
+    "name": "只有加工",
+    "summary": "四步动作，没有来源也没有交付。",
+    "cards": [
+      { "key": "c1", "kind": "proc", "title": "一", "body": "先把材料过一遍。", "impl": "", "mods": [] },
+      { "key": "c2", "kind": "proc", "title": "二", "body": "再按字段拆开。", "impl": "", "mods": [] },
+      { "key": "c3", "kind": "proc", "title": "三", "body": "然后配图。", "impl": "", "mods": [] },
+      { "key": "c4", "kind": "proc", "title": "四", "body": "最后自查一遍。", "impl": "", "mods": [] }
+    ],
+    "edges": [["c1", "c2"], ["c2", "c3"], ["c3", "c4"]]
+  }
+}
