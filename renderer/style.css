@@ -178,6 +178,13 @@ svg#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .menu.on{display:block}
 .menu div{padding:7px 10px;border-radius:7px;font-size:12.5px;cursor:pointer;white-space:nowrap}
 .menu div:hover{background:var(--card);color:var(--accent-ink)}
+/* 窄窗口时从顶栏搬进来的按钮：在菜单里按条目样式显示（不再是胶囊按钮） */
+.menu button{width:100%;justify-content:flex-start;border:none;background:transparent;border-radius:7px;
+  padding:7px 10px;font-size:12.5px;font-weight:400;color:var(--ink);text-align:left}
+.menu button:hover{background:var(--card);border-color:transparent;color:var(--accent-ink)}
+.menu .msep{height:1px;margin:5px 2px;padding:0;background:var(--soft-line);cursor:default}
+.menu .msep:hover{background:var(--soft-line)}
+.menu .msep:first-child{display:none}
 
 /* agent 选项卡片 */
 .optlabel{font-size:11.5px;color:var(--ink-3);margin:10px 0 6px}

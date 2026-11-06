@@ -72,6 +72,38 @@ const ok = (name, pass, info) => {
   })()`);
   ok('topbar-no-overlap', !!bar && bar.重叠 === 0 && bar.中点命中 === 'flowName' && bar.名字宽 >= 110 && bar.运行钮右 <= bar.窗口宽 - 8, bar);
 
+  // 应用允许的最小宽度（main.js 的 minWidth 1000）：顶栏不许把控件切出窗，「开始运行」必须点得到。
+  // 用 CDP 视口模拟来量（不动真窗口，也就不依赖 System Events 权限）；量完清掉，后面照常按 1380 跑。
+  const barBox = `(() => {
+    const bar = document.querySelector('.topbar');
+    const box = bar.getBoundingClientRect();
+    const limit = box.right - parseFloat(getComputedStyle(bar).paddingRight || 0);
+    let right = 0; for (const el of bar.children) { const r = el.getBoundingClientRect(); if (r.width > 0) right = Math.max(right, r.right); }
+    const run = document.querySelector('#btnRun').getBoundingClientRect();
+    const hit = document.elementFromPoint(run.left + run.width / 2, run.top + run.height / 2);
+    return { 窗口宽: innerWidth, 顶栏内容宽: bar.scrollWidth, 顶栏可见宽: bar.clientWidth,
+      最右控件右: Math.round(right), 可用右界: Math.round(limit), 运行钮右: Math.round(run.right),
+      中点命中: hit && (hit.id || hit.className),
+      收进菜单: [...document.querySelectorAll('#moreMenu button')].map(b => b.textContent.trim()) };
+  })()`;
+  await send('Emulation.setDeviceMetricsOverride', { width: 1000, height: 880, deviceScaleFactor: 1, mobile: false });
+  await wait(450);
+  const narrow = await ev(barBox);
+  ok('topbar-min-width', !!narrow && narrow.顶栏内容宽 <= narrow.顶栏可见宽 && narrow.最右控件右 <= narrow.可用右界 &&
+    narrow.运行钮右 <= narrow.窗口宽 - 8 && narrow.中点命中 === 'btnRun' && narrow.收进菜单.length >= 1, narrow);
+  // 收进 ⋯ 的入口得真能用：真鼠标点开菜单、点第一项（测试），测试窗要开
+  await clickAt('#btnMore');
+  await wait(300);
+  await clickAt('#moreMenu button');
+  await wait(500);
+  const folded = await ev(`(() => ({ 测试窗: document.querySelector('#testModal').classList.contains('on'), 菜单开着: document.querySelector('#moreMenu').classList.contains('on') }))()`);
+  ok('topbar-fold-click', !!folded && folded.测试窗, folded);
+  await ev(`(() => { closeTest(); document.querySelector('#moreMenu').classList.remove('on'); return 1; })()`);
+  await send('Emulation.clearDeviceMetricsOverride');
+  await wait(400);
+  const restored = await ev(barBox);
+  ok('topbar-restore', !!restored && restored.最右控件右 <= restored.可用右界 && restored.运行钮右 <= restored.窗口宽 - 8, restored);
+
   // ---------- 1 造一条有内容的链路（3 卡 + 2 线 + 模块 + 执行方） ----------
   const src = await ev(`(() => {
     const w = createWorkflow('复制链路 · 原件');
