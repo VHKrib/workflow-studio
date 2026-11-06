@@ -1,5 +1,5 @@
 /* TC 工作流台 —— 与「项目工作台 / AI 模型管理平台」同一套 v3 视觉语言
-   美术基准：奶油纸 + 近黑墨 + 橘红点缀（tokens 取自 项目工作台/tokens.css） */
+   美术基准：奶油纸 + 近黑墨 + 橘红点缀（平台统一视觉 token） */
 :root{
   --accent:#ff5a1f; --accent-ink:#c2410c; --accent-soft:#ff5a1f14; --accent-line:#ff5a1f3d;
   --ink:#111111; --ink-2:#57534c; --ink-3:#726d64;

@@ -253,7 +253,7 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
 用户气泡 padding 9/13 圆角 16、dock 392×480。想加内容时先加空白再考虑压字号——具体数值见
 `references/hermes-chat-visual.md` 的「对话区密度」表，别回退到 10px/12.8px 那套紧凑值。
 
-取自 `项目工作台/tokens.css`：奶油纸 `#f5f3ef`、墨 `#111`、橘 `#ff5a1f`、白卡 `#fffefa`、
+平台统一设计 token：奶油纸 `#f5f3ef`、墨 `#111`、橘 `#ff5a1f`、白卡 `#fffefa`、
 圆角 18 / 10、阴影 `--shadow-1`。卡片三色：输入 `#2f6f95`、加工 `#ff5a1f`、输出 `#2f7d5b`，
 色带做在卡片头部（整条），不要在卡片里再堆色块。
 
@@ -309,6 +309,29 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
 
 ```bash
 git status --short && git diff --stat
+git grep -nEI "(ghp_[A-Za-z0-9]{20,}|github_pat_|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|BEGIN [A-Z ]*PRIVATE KEY|_API_KEY=)" -- . ':!node_modules' || echo "no secrets"
 ```
 
 不要提交 `node_modules/`、`preview.png`、任何 `.env` 或含密钥的文件。
+
+### 发布到 GitHub（已发布：`github.com/VHKrib/workflow-studio`，private）
+
+`tools/publish-github.sh` 把「建库 + 推送」合成一条命令：
+
+```bash
+tools/publish-github.sh                 # 建私有仓库 workflow-studio 并 push
+tools/publish-github.sh <name> public   # 换名字 / 公开
+tools/publish-github.sh --push-only     # 以后只推新提交
+```
+
+脚本会先查 `gh auth status`，再用 `gh api user` 把本地 `user.name/email` 对齐账号，然后
+`gh repo create --source=. --push`（不重新 clone、历史不丢），最后打印仓库地址。默认 **private**，
+要公开必须显式写 `public`（可见性变更对外不可逆，别默认做）。
+
+- 没有凭据时先登录：`gh auth login --web`（设备码）。从 agent 会话里驱动它的完整步骤在 `github` skill
+  （software-development 分类）的 auth 参考文件里，别自己拼 OAuth。
+- **第一次提交之前**就把 `git config user.name/email` 设成 GitHub 账号。占位身份（`*@localhost`）会永久
+  留在历史里，事后只能改写历史 + 强推——那要先问用户，别默认做。
+- 推送前确认密钥扫描干净、`preview.png` / `node_modules/` 未进暂存区；推送后用
+  `gh repo view --json visibility,defaultBranchRef` 和 `git ls-remote --heads origin` 复核远端真的收到了，
+  不要凭 push 输出里的一行 "new branch" 就宣布完成。
