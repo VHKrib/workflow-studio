@@ -308,7 +308,7 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
 | 起进程 | `main.js` | `ipcMain.handle('agent:chain')` 转给 `readChain`；`agent:stream` spawn `hermes -p <id> chat --format stream-json -t <toolsets> -q <prompt>`，逐行转 `agent:event`，子进程存进 `runs`；`agent:cancel` 真 `kill('SIGTERM')`；超时也 SIGTERM | 不解析卡片、不判断拆得好不好、不碰画布状态（它不知道什么是卡） |
 | 预览与落卡 | `renderer/app.js` | `rd` 状态 + `openRead/paintRead/pickRead/analyzeChain/parseChainPlan/planProblem/layoutChain/placeChain/playArrival`；流式只追加预览格子，不重建 DOM | 不许绕过 `planProblem()` 闸门、不许在按钮之外调 `placeChain()`、不许自己决定执行方（`placeChain` 里执行方 = 被读的 agent） |
 
-读多少条：默认最近 80 条会话；**真干过活（`tool_call_count > 0`）的记录少于 30 次**的 agent（合作邀约这种），
+读多少条：默认最近 80 条会话；**真干过活（`tool_call_count > 0`）的记录少于 30 次**的 agent（记录很少的那种），
 窗口放到 300 条，免得稀疏的几条干活记录被一堆闲聊挤出窗口；记录多的照旧 80，不拖慢。上限写在
 `chain.js` 的 `READ_LIMIT / READ_LIMIT_MORE / READ_WORK_SMALL`，在 SQL 里用 `CASE` 算（不读两次库）。
 每次读取在主进程日志打一行 `[读取链路] <agent>：本次读取 N 条 / 上限 80|300`，窗口「⚙ 读到的线索」里也有。
@@ -357,8 +357,8 @@ CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read.js --agent <agent-id>
 #   这条会真实调用分析用的 agent：同一张卡最多跑 2 次
 node skills/workflow-studio/scripts/cdp-read-stability.js --agent <agent-id> --mode kill
 #   正常上限实例：跑到一半杀子进程 →「这次没拆全」+ 重来 + 预览清空；重来后同时只有 1 个分析进程；关窗 0 个
-#   小上限实例（WF_READ_FAKE=hang WF_READ_TIMEOUT_MS=12000）再加 --mode hang / --mode timeout：
-#   不出声也到点自己收场、重来可用、预览不留半张卡
+#   小上限实例（WF_READ_FAKE=hang WF_READ_TIMEOUT_MS=12000）跑 --mode hang / --mode timeout（或 --mode all = 这两个）：
+#   不出声也到点自己收场、重来可用、预览不留半张卡；kill 不在 all 里，小上限实例跑 --mode kill 会打一行 SKIP 跳过
 #   正常上限实例 --mode stall：20 秒没有新内容时，气泡和底部都写「它在想，不是卡住了」
 node skills/workflow-studio/scripts/cdp-canvas.js        # 老功能回归：平移/缩放锚点/拖动/连线/布局
 node skills/workflow-studio/scripts/cdp-dock.js          # 老功能回归：拖卡进插槽、拒绝成圈、拔出、成果槽、动画收干净
