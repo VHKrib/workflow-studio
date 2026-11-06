@@ -6,6 +6,7 @@
 //
 // 样本格式见 skills/workflow-studio/fixtures/README.md：meta（来源）+ expect（该长成什么样）+ answer（拆卡原始回答）。
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const vm = require('vm');
 
@@ -36,13 +37,26 @@ function check(id, name, ok, detail) {
 }
 const list = e => (e || []).map(([a, b]) => `${a}>${b}`).join(' ') || '（空）';
 
-// 脱敏：样本里不许出现本机绝对路径、长数字（货号/订单号）、邮箱、部门/岗位字样
+// 脱敏：样本里不许出现本机绝对路径、长数字（货号/订单号）、邮箱、部门/岗位字样、本机 agent id
 const DIRTY = [
   [/\/Applications|\/Users\/|~\/\.hermes|file:\/\/|[A-Za-z]:\\\\/, '本机绝对路径'],
   [/\d{9,}/, '9 位以上数字（货号/订单号）'],
   [/[\w.+-]+@[\w-]+\.[\w.]+/, '邮箱'],
   [/部门|岗位|主管|专员|项目部/, '部门/岗位字样'],
 ];
+
+// 本机 profile / agent id 也算敏感词：某个岗位的 id 被抄进 impl（文件名、目录名）就是漏了脱敏。
+// 比对用整词边界，避免短 id 命中普通英文单词；别人 clone 下来没有这个目录时跳过，不影响离线回归。
+const PROFILE_RE = (() => {
+  let ids = [];
+  try {
+    ids = fs.readdirSync(path.join(os.homedir(), '.hermes', 'profiles'))
+      .filter(n => /^[a-z0-9][a-z0-9_-]{3,}$/.test(n.toLowerCase()) && !n.startsWith('_'));
+  } catch { return null; }
+  if (!ids.length) return null;
+  ids = ids.map(n => n.toLowerCase()).sort((a, b) => b.length - a.length);
+  return new RegExp(`(^|[^A-Za-z0-9_])(${ids.join('|')})(?![A-Za-z0-9_])`, 'i');
+})();
 
 function runFixture(file) {
   const id = path.basename(file, '.json');
@@ -62,6 +76,10 @@ function runFixture(file) {
   for (const [re, why] of DIRTY) {
     const m = raw.match(re);
     check(id, '脱敏', !m, m ? `出现${why}：${String(m[0]).slice(0, 40)}` : `无${why}`);
+  }
+  if (PROFILE_RE) {
+    const m = raw.match(PROFILE_RE);
+    check(id, '脱敏', !m, m ? `出现本机 agent id：${m[2]}` : '无本机 agent id');
   }
 
   if (e.cards == null) {                              // 期望解析不出计划（流被截断那种）
