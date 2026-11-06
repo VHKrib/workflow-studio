@@ -124,6 +124,21 @@ function renderWorkflowList() {
   }
 }
 function agentName(id) { const a = agents.find(x => x.id === id); return a ? a.name : id; }
+function isStopped(id) { const a = agents.find(x => x.id === id); return !a || a.stopped; }
+
+// 只列在用岗；已停用的折叠进 disabled 分组，避免误派
+function agentOptionsHTML(sel) {
+  const cur = agents.find(a => a.id === sel);
+  const act = agents.filter(a => !a.stopped || a.id === sel);
+  const stop = agents.filter(a => a.stopped && a.id !== sel);
+  let h = `<option value="">— 未指派 —</option>`;
+  h += `<optgroup label="在用（派工白名单）">` +
+    act.map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)}（${a.id}）</option>`).join('') +
+    `</optgroup>`;
+  if (stop.length) h += `<optgroup label="已停用（不在派工白名单）">` +
+    stop.map(a => `<option value="${a.id}" disabled>${esc(a.name)}（${a.id}）</option>`).join('') + `</optgroup>`;
+  return h;
+}
 
 // ---------- 卡片 ----------
 function addNode(kind, props = {}, select = true) {
@@ -152,8 +167,7 @@ function connect(aId, bId) {
 function render() {
   const w = flow(); if (!w) return;
   $('#flowName').value = w.name;
-  $('#flowAgent').innerHTML = ['<option value="">— 未指派 —</option>']
-    .concat(agents.map(a => `<option value="${a.id}" ${a.id === w.agent ? 'selected' : ''}>${a.name}（${a.id}）</option>`)).join('');
+  $('#flowAgent').innerHTML = agentOptionsHTML(w.agent);
 
   for (const el of [...canvas.querySelectorAll('.node')]) el.remove();
   for (const n of w.nodes) canvas.appendChild(nodeEl(n));
@@ -274,8 +288,7 @@ function renderPanel() {
         <span class="chip ${w.agent ? 'ok' : 'bad'}">${w.agent ? '执行方：' + esc(agentName(w.agent)) : '未指派 agent'}</span>
       </div>
       <label>执行 agent（整条工作流）</label>
-      <select id="pFlowAgent"><option value="">— 未指派 —</option>
-        ${agents.map(a => `<option value="${a.id}" ${a.id === w.agent ? 'selected' : ''}>${a.name}（${a.id}）· ${a.section || ''}</option>`).join('')}</select>
+      <select id="pFlowAgent">${agentOptionsHTML(w.agent)}</select>
       <p class="hint">一个工作流只指派一个 agent：验证、评审、执行都由它负责。</p>
       <div style="margin-top:10px">${rows}</div>
       <button id="pAskFlow" class="primary" style="width:100%;margin-top:12px">让 agent 看整条流程</button>
@@ -349,6 +362,7 @@ let pendingOpts = { fromId: null, list: [] };
 async function askOptions(n) {
   const w = flow(), out = $('#agentOut');
   if (!w.agent) { out.textContent = '先给整条工作流指派一个 agent。'; return; }
+  if (isStopped(w.agent)) { out.textContent = `「${agentName(w.agent)}」已停用、不在派工白名单，换个 agent 再问。`; return; }
   const chain = chainOrder(w).map((x, i) => `${i + 1}. [${KINDS[x.kind].label}] ${x.title}：${x.body || '(空)'}`).join('\n');
   const prompt = [
     '你在帮我编排一条工作流。只做建议，不执行、不发请求、不改文件。',
@@ -431,10 +445,7 @@ function openRunModal() {
   body.innerHTML = `
     <div class="mrow" style="grid-template-columns:1fr 260px">
       <div><b>${esc(w.name)}</b><div style="color:var(--ink-3);font-size:11.5px">${w.nodes.length} 张卡 · 执行 agent 统一指派</div></div>
-      <select id="mAgent" class="${w.agent ? '' : 'need'}">
-        <option value="">— 选 agent —</option>
-        ${agents.map(a => `<option value="${a.id}" ${a.id === w.agent ? 'selected' : ''}>${a.name}（${a.id}）</option>`).join('')}
-      </select>
+      <select id="mAgent" class="${w.agent ? '' : 'need'}">${agentOptionsHTML(w.agent)}</select>
     </div>
     ${order.map((n, i) => `<div class="mrow" style="grid-template-columns:28px 76px 1fr">
       <div class="i">${i + 1}</div>
