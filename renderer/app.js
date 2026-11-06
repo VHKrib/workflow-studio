@@ -372,6 +372,7 @@ function patchNodesDiff() {
   }
   for (const [id, el] of live) if (!keep.has(id)) el.remove();
   drawEdges();
+  syncEmptyRead();
 }
 // 画布上的卡换了一张：只换这一块，不整张画布重建（拖拽不受影响）
 function paintOne(n) {
@@ -384,6 +385,7 @@ function paintOne(n) {
     const el = nodeEl(n); el.dataset.sig = sig; canvas.appendChild(el);
   }
   drawEdges();
+  syncEmptyRead();                                  // 临时画布长卡不走 render()：这里把空画布按钮收掉，别挡在卡片前面
   return true;
 }
 
@@ -498,14 +500,20 @@ function render() {
   renderDock();
   renderTempBar();
   $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
-  $('#emptyRead').classList.toggle('on', !w.nodes.length);
+  syncEmptyRead();
+}
+// 空画布上的「读取 agent 链路」按钮：跟着卡片数走。
+// 不能只在 render() 里切——临时画布的卡是 paintOne 长出来的，不走 render，会残留一层挡在画布中央。
+function syncEmptyRead() {
+  const el = $('#emptyRead'); if (!el) return;
+  const w = flow(); el.classList.toggle('on', !(w && w.nodes.length));
 }
 function rebuildNodes() {
   for (const el of [...canvas.querySelectorAll('.node')]) el.remove();
   for (const n of flow().nodes) canvas.appendChild(nodeEl(n));
 }
 // 只重画画布上的卡（左栏里正在编辑时用：不重建面板、不抢焦点）
-function paintNodes() { rebuildNodes(); drawEdges(); }
+function paintNodes() { rebuildNodes(); drawEdges(); syncEmptyRead(); }
 function applyPanelState() {
   const n = find(panelCardId);
   const collapsed = !n && !panelOpen;
@@ -1336,7 +1344,9 @@ async function runStream({ msgs, rerender, profile, prompt, toolsets, cards = tr
   if (!live.text && r.text) live.text = r.text;
   if (!r.ok && !live.text) live.text = '失败：' + (r.error || r.code || '未知错误');
   const opts = cards ? parseCardArray(r.text || live.text || '') : [];
-  if (opts.length) { live.opts = opts; live.text = `给你 ${opts.length} 个候选卡：点一下看细节，按「确认添加」才会进流程。`; }
+  // 候选卡只加一句提示，**不覆盖原回答**：原回答留在 live.text（气泡里「看原话」能看到），
+  // 否则「问它这条链路第几版、几张卡」这种纯事实问答会被换掉，人看不到它答了什么。
+  if (opts.length) live.human = `给你 ${opts.length} 个候选卡：点一下看细节，按「确认添加」才会进流程。`;
   rerender();
   return live;
 }
@@ -1387,6 +1397,7 @@ function dockPrompt(text) {
     hist ? `上文对话：\n${hist}` : '',
     `我说：${text}`,
     '从平台主管的角度回答：这条链路该谁干、缺哪一步、要不要加人/换人；说人话、短一点。',
+    '我问的是事实（第几版、几张卡、哪张是什么）就直接照状态文件回答，不要给候选卡。',
     linkBrief(w),
     '如果我要的是「下一步」候选卡，只输出 JSON 数组，不要解释：',
     MODS_RULE,
