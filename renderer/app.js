@@ -1638,8 +1638,8 @@ function startRun() {
 //       跑不了命令、读写不了文件、发不了消息，也碰不到店铺后台的数据接口。
 // 落盘：先在窗里预览，按「放进画布」才建卡（agent 不能自己往画布上加东西）。
 const READ_TOOLSETS = 'todo,no_mcp';
-// 一次分析的总预算（含自动重来一次）：默认 150 秒。实测正常 40–70 秒拆完；2 分半够慢一档的模型跑完，
-// 又不至于让人对着「正在拆卡」干等 4 分钟。WF_READ_TIMEOUT_MS 只给验收把上限调小，界面上没有开关。
+// 一次分析的总预算（含自动重来一次）：默认 150 秒。三条真实链路（最长那次还自动重来了一次）都在这个上限里拆完；
+// 给到 2 分半是留一档慢模型的余量，又不至于让人对着「正在拆卡」干等 4 分钟。WF_READ_TIMEOUT_MS 只给验收调小。
 const READ_BUDGET_MS = Math.max(5000, Number((window.tcflow && window.tcflow.readTimeoutMs) || 0) || 150000);
 const READ_STALL_MS = 20000;          // 20 秒没有新内容：界面明说「它在等，不是我卡了」
 const SRC_LABEL = { kanban: '看板派单', oneshot: '单次指令', subagent: '别的 agent 调用', local: '直接对话', cron: '定时任务', cli: '命令行', desktop: '桌面对话' };

@@ -324,8 +324,8 @@ const r = await window.tcflow.askAgent({ profile: flow.agent, prompt });   // �
 ### 卡住要收场、能重来（验收：`cdp-read-stability.js`）
 
 - **总预算 `READ_BUDGET_MS` = 150 秒**（`preload.js` 从 `WF_READ_TIMEOUT_MS` 读，默认 150000；界面没有开关）。
-  一次分析 + 自动重来一次共用这个预算。实测正常 40–70 秒拆完，给到 2 分半是留一档慢模型的余量，
-  又不至于让人对着「正在拆卡」干等 4 分钟。
+  一次分析 + 自动重来一次共用这个预算。三条真实链路（最长那次还自动重来了一次）都能在 2 分半里拆完；
+  留这档余量是给慢一档的模型，又不至于让人对着「正在拆卡」干等 4 分钟。
 - **两道刹车**：主进程 `agent:stream` 到点 SIGTERM（回包带 `timedOut: true`）；渲染层再兜一层
   `Promise.race`（预算 +3 秒），万一 IPC 不回来也不会一直转圈，并把 runId 杀掉。
 - **断流/超时/取消都不留半张卡**：`analyzeChain()` 在 `ok=false`（断了/到点）时**不自动重来**，
