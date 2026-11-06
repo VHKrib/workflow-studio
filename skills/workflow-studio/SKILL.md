@@ -625,6 +625,18 @@ node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加 previ
 删完用 DOM 断言收口：`.brand-sub / .legend / .sidehint / .thin` 应该一个都查不到；
 重启（只关自己端口的实例）后再断言一次（页面缓存会让你以为删了其实没生效）。
 
+### 顶栏宽度是有预算的（被打回过一次）
+
+默认窗口 1380 宽，顶栏一排已经占满：`WF + 名字`、执行方选择器（最长选项 211px，控件 242）+
+读取/加卡片/逐卡验证/对话建链路/新建/复制/测试/⋯/开始运行。所以：
+
+- 名字框 `#flowName` 是 `width:100%;min-width:110px;max-width:220px`，`.brand` 可收缩但 `min-width:170px`；
+  名字的父层 `.brand-name` 必须 `flex:1 1 auto;min-width:0`（少了它输入框会溢出品牌区、压在选择器上）。
+- **导入 / 导出收在顶栏「⋯」菜单里**（`#btnMore` + `#moreMenu`，条目仍是 `#btnOpen / #btnSave`，处理函数不变）。
+- 往顶栏加按钮前先量三条：名字与选择器 rect `overlap === 0`、名字中点 `elementFromPoint` 命中 `flowName`、
+  最右按钮右边界 ≤ `innerWidth - 8`。这三条已经写进 `cdp-copy.js` 的 `topbar-no-overlap`，别等验收才看见。
+  血的教训：24b04c0 新增「复制链路 / 测试」后 `#flowName` 还写死 220px，名字直接盖住执行方选择器 182px。
+
 ## 常见坑
 
 - **折叠面板别用 `display:none`**：它会把自己从 grid 里摘掉，后面的列整体前移（画布被挤成 0 宽、

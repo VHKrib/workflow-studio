@@ -107,8 +107,9 @@ function bindUI() {
   $('#btnTempChat').onclick = startTempCanvas;
   $('#tempSave').onclick = promoteTemp;
   $('#tempClose').onclick = closeTempCanvas;
-  $('#btnAddCard').onclick = e => { e.stopPropagation(); $('#addMenu').classList.toggle('on'); };
-  document.addEventListener('click', () => $('#addMenu').classList.remove('on'));
+  $('#btnAddCard').onclick = e => { e.stopPropagation(); $('#moreMenu').classList.remove('on'); $('#addMenu').classList.toggle('on'); };
+  $('#btnMore').onclick = e => { e.stopPropagation(); $('#addMenu').classList.remove('on'); $('#moreMenu').classList.toggle('on'); };
+  document.addEventListener('click', () => { $('#addMenu').classList.remove('on'); $('#moreMenu').classList.remove('on'); });
   document.querySelectorAll('#addMenu div').forEach(d => d.onclick = () => { addNode(d.dataset.kind); $('#addMenu').classList.remove('on'); });
   $('#btnSave').onclick = exportFlow;
   $('#btnOpen').onclick = importFlow;

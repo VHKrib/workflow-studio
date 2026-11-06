@@ -60,6 +60,18 @@ const ok = (name, pass, info) => {
   const orig = await ev(`(() => ({ id: store.current }))()`);
   ok('open', await ev(`['duplicateWorkflow','checkFlow','checkText','startPreview','clearPreviews','openTest'].every(k => typeof window[k] === 'function')`), '复制 / 体检 / 预演 / 清空的入口都在');
 
+  // 顶栏在默认窗口下不许挤：名字框与执行方选择器 rect 不相交、名字中点能点到名字、最右按钮不被窗口裁掉
+  const bar = await ev(`(() => {
+    const n = document.querySelector('#flowName').getBoundingClientRect();
+    const f = document.querySelector('.flowagent').getBoundingClientRect();
+    const run = document.querySelector('#btnRun').getBoundingClientRect();
+    const hit = document.elementFromPoint(n.left + n.width / 2, n.top + n.height / 2);
+    return { 名字宽: Math.round(n.width), 名字右: Math.round(n.right), 选择器左: Math.round(f.left),
+      重叠: Math.round(Math.max(0, Math.min(n.right, f.right) - Math.max(n.left, f.left))),
+      中点命中: hit && (hit.id || hit.className), 运行钮右: Math.round(run.right), 窗口宽: innerWidth };
+  })()`);
+  ok('topbar-no-overlap', !!bar && bar.重叠 === 0 && bar.中点命中 === 'flowName' && bar.名字宽 >= 110 && bar.运行钮右 <= bar.窗口宽 - 8, bar);
+
   // ---------- 1 造一条有内容的链路（3 卡 + 2 线 + 模块 + 执行方） ----------
   const src = await ev(`(() => {
     const w = createWorkflow('复制链路 · 原件');
