@@ -276,9 +276,13 @@ function saveStore(bump = true) {
   const w = flow();
   const touch = bump && !LINK.applying;
   if (w && touch) w.updated_at = Date.now();
+  saveLocal();
+  if (w && touch) { scheduleVersion(w); queueLinkWrite(w); }
+}
+// 只落本地存储（不动版本、不推状态文件）：打字过程中的节流落盘用它
+function saveLocal() {
   const current = store.current === TEMP_ID ? (store.workflows[0] ? store.workflows[0].id : null) : store.current;
   try { localStorage.setItem(LS_KEY, JSON.stringify({ workflows: store.workflows, current })); } catch (e) { }
-  if (w && touch) { scheduleVersion(w); queueLinkWrite(w); }
 }
 
 // ---------- 共享链路状态文件（人和 agent 共用的一份底稿） ----------
@@ -434,7 +438,8 @@ function verContent(s) {
     (s.cards || []).map(c => [c.id, c.kind, c.title, c.body, c.impl, (c.mods || []).map(m => m.type + ':' + m.name), c.checks || []]),
     (s.edges || []).map(e => e.join('>')).sort()]);
 }
-// 这一版改了什么：说人话，是哪张卡的哪个环节
+// 这一版改了什么：说人话，是哪张卡的哪个环节（例：加工卡·出图：换了加工方式）
+const BODY_WORD = { in: '换了输入元素', proc: '换了加工方式', out: '换了交付内容' };
 function verWhat(prev, next) {
   if (!prev) return '新建链路';
   const parts = [];
@@ -444,13 +449,13 @@ function verWhat(prev, next) {
   for (const c of next.cards || []) {
     const o = pm.get(c.id); if (!o) continue;
     const f = [];
-    if (o.kind !== c.kind) f.push('类型');
-    if (o.title !== c.title) f.push('名字');
-    if (o.body !== c.body) f.push('正文');
-    if (o.impl !== c.impl) f.push('内部实现');
-    if (JSON.stringify(o.mods || []) !== JSON.stringify(c.mods || [])) f.push('模块');
-    if (JSON.stringify(o.checks || []) !== JSON.stringify(c.checks || [])) f.push('校验');
-    if (f.length) parts.push(`改「${c.title}」的${f.join('、')}`);
+    if (o.kind !== c.kind) f.push('换了类型');
+    if (o.title !== c.title) f.push('改了名字');
+    if (o.body !== c.body) f.push(BODY_WORD[c.kind] || '换了内容');
+    if (o.impl !== c.impl) f.push('改了内部实现');
+    if (JSON.stringify(o.mods || []) !== JSON.stringify(c.mods || [])) f.push('改了模块');
+    if (JSON.stringify(o.checks || []) !== JSON.stringify(c.checks || [])) f.push('改了校验');
+    if (f.length) parts.push(`${(KINDS[c.kind] || KINDS.proc).label}卡·${c.title}：${f.join('、')}`);
   }
   const pe = new Set((prev.edges || []).map(e => e.join('>'))), ne = new Set((next.edges || []).map(e => e.join('>')));
   const addE = [...ne].filter(k => !pe.has(k)).length, delE = [...pe].filter(k => !ne.has(k)).length;
@@ -491,6 +496,7 @@ function commitVersion(w, by) {
   if (w.rollback && !w.rollback.settled) w.rollback.settled = true;   // 回滚之后又改了内容：提示改成「曾经回滚」
   const entry = { v, at: Date.now(), by: by || 'me', what: verWhat(prev && prev.snapshot, snap), snapshot: snap };
   pushVersion(w.id, entry);
+  syncFoot(w);                                        // 底部的「vN」跟着变：别让人以为版本没记上
   queueLinkWrite(w);                                   // 版本号变了，状态文件跟着写新版本号
 }
 function pushVersion(id, entry) {
@@ -508,6 +514,46 @@ function pushVersion(id, entry) {
 
 // agent 提议、人点了确认才落地的那几处：这一批改动记成「agent 提议后应用」
 function saveAs(by) { const prev = changeBy; changeBy = by; saveStore(); changeBy = prev; }
+
+// ---------- 编辑即版本：改正文 / 标题 / 内部实现 / 模块，也走同一条通道 ----------
+// 用户口径（2026-11）：改一张卡里面的东西，也得立刻反映到画布和共享状态、记一版、agent 下次知道。
+// 三条规矩：
+//   1 画布当场变（syncCard / paintNodes），但绝不重建左栏——重建会抢焦点，光标会跳；
+//   2 内容边打边同步：本地存储 300ms、共享状态文件 350ms 节流，都在 1 秒内，关窗口不丢字；
+//   3 版本等「这次改完」才记：停手 1.5 秒或失焦。连打 30 个字也只出一版。
+const EDIT_IDLE_MS = 1500;
+const EDIT = { local: 0, ver: 0, paint: 0, id: '', by: 'me' };
+
+// 面板里改了一处：立刻改内存 + 画布，落盘和记版本按节流排队
+function saveEditing(opts = {}) {
+  const w = flow(); if (!w) return;
+  w.updated_at = Date.now();
+  EDIT.id = w.id; EDIT.by = changeBy || 'me';
+  clearTimeout(EDIT.local);
+  EDIT.local = setTimeout(() => { EDIT.local = 0; saveLocal(); }, 300);
+  queueLinkWrite(w);                                  // 状态文件按 350ms 节流：边打字边同步（1 秒内）
+  clearTimeout(EDIT.ver);
+  if (opts.commit) { EDIT.ver = 0; commitEditVersion(); return; }   // 失焦 = 这次改完
+  EDIT.ver = setTimeout(() => { EDIT.ver = 0; commitEditVersion(); }, EDIT_IDLE_MS);  // 停手也算改完
+}
+// 把「这次改完」的内容落盘并记一版；内容没真变（只是点了面板/挪了位置）时 commitVersion 自己会跳过
+function commitEditVersion() {
+  saveLocal();
+  const w = store.workflows.find(x => x.id === EDIT.id);
+  if (!w || w.temp || w.id === TEMP_ID) return;       // 临时画布不记版本（和 B 卡一致）
+  if (LINK.applying) return;                          // 外部认领不是人改的
+  VER.pending[w.id] = EDIT.by || 'me';
+  clearTimeout(VER.timer); VER.timer = 0;
+  commitVersions();
+  paintVersionBox();
+}
+// 还没到停手时间就把面板关了（Esc / 切卡 / 关窗口）：这次的改动当场记一版，别丢
+function flushEditing() {
+  if (!EDIT.ver) return;
+  clearTimeout(EDIT.ver); EDIT.ver = 0;
+  commitEditVersion();
+}
+addEventListener('beforeunload', () => { clearTimeout(EDIT.local); saveLocal(); });
 
 // 载入/补一版基线：新链路第一次打开时先记下「现在长什么样」，之后每次改动才有回滚点
 async function initVersions() {
@@ -610,11 +656,18 @@ function verRowsHTML(w) {
 }
 function paintVersionBox() {
   const box = document.querySelector('#verList');
-  if (!box) return;
   const w = flow();
+  syncFoot(w);
+  if (!box) return;
   if (!w || w.temp || w.id === TEMP_ID) { box.innerHTML = ''; return; }
   box.innerHTML = verRowsHTML(w);
   box.querySelectorAll('.verrow').forEach(el => el.onclick = () => rollbackTo(el.dataset.v));
+}
+// 左下角那行「N 卡 / N 连线 · vN」：版本一涨就跟着刷，别停在旧号上
+function syncFoot(w) {
+  const el = document.querySelector('#footStat');
+  if (!el || !w) return;
+  el.textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线 · v${w.version || 1}`;
 }
 
 
@@ -716,6 +769,7 @@ function connect(aId, bId, animate = true) {
 // ---------- 渲染 ----------
 function render() {
   const w = flow(); if (!w) return;
+  flushEditing();                                   // 面板要重建了：手上没落的那次编辑先记一版
   $('#flowName').value = w.name;
   $('#flowAgent').innerHTML = agentOptionsHTML(w.agent);
 
@@ -1296,33 +1350,47 @@ function renderPanel() {
       <input id="pChecks" value="${esc((n.checks || []).join(', '))}" placeholder="校验项，逗号分隔（例：sha256, schema）">
     </details>`;
 
-  $('#pTitle').oninput = e => { n.title = e.target.value.trim() || k.label + '卡'; syncCard(n); };
-  $('#pTitle').onchange = () => { saveStore(); t.textContent = `${KINDS[n.kind].label}卡 · ${n.title}`; renderWorkflowList(); paintNodes(); };
-  $('#pKind').onchange = e => { n.kind = e.target.value; n.mods = modsOf(n).map(m => ({ ...m, type: KIND_MOD[n.kind] })); saveStore(); render(); };
-  $('#pBody').oninput = e => { n.body = e.target.value.replace(/\u00a0/g, ' '); syncCard(n); };
-  $('#pBody').onchange = () => saveStore();
-  $('#pChecks').onchange = e => { n.checks = e.target.value.split(',').map(s => s.trim()).filter(Boolean); saveStore(); render(); };
-  $('#pImpl').onchange = e => { n.impl = e.target.value.replace(/\u00a0/g, ' ').trim(); saveStore(); render(); };
+  $('#pTitle').oninput = e => { n.title = e.target.value; syncCard(n); saveEditing(); };
+  $('#pTitle').onchange = () => {
+    if (!n.title.trim()) n.title = k.label + '卡';           // 清空了就回到默认名，别留一张没名字的卡
+    t.textContent = `${KINDS[n.kind].label}卡 · ${n.title}`;
+    renderWorkflowList(); syncCard(n);
+    saveEditing({ commit: true });                            // 失焦 = 这次改完，立刻记一版
+  };
+  $('#pKind').onchange = e => { n.kind = e.target.value; n.mods = modsOf(n).map(m => ({ ...m, type: KIND_MOD[n.kind] })); saveEditing({ commit: true }); render(); };
+  $('#pBody').oninput = e => { n.body = e.target.value.replace(/\u00a0/g, ' '); syncCard(n); saveEditing(); };
+  $('#pBody').onchange = () => saveEditing({ commit: true });
+  $('#pChecks').onchange = e => { n.checks = e.target.value.split(',').map(s => s.trim()).filter(Boolean); paintNodes(); saveEditing({ commit: true }); };
+  $('#pImpl').oninput = e => { n.impl = e.target.value.replace(/\u00a0/g, ' '); saveEditing(); };
+  $('#pImpl').onchange = e => { n.impl = e.target.value.replace(/\u00a0/g, ' ').trim(); paintNodes(); saveEditing({ commit: true }); };
   // 模块：直接改名、清空即删，✕ 删，回车加一块；只重画画布，不重建面板（不抢焦点）
   b.querySelectorAll('#pMods .mn').forEach(sp => {
     sp.addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); sp.blur(); } });
+    sp.addEventListener('input', () => {                    // 改模块名边打边同步：画布 250ms 后跟手重画
+      const i = +sp.dataset.i; if (!n.mods || !n.mods[i]) return;
+      n.mods[i].name = sp.textContent.replace(/\s+/g, ' ').trim().slice(0, 24);
+      clearTimeout(EDIT.paint);
+      EDIT.paint = setTimeout(() => { EDIT.paint = 0; paintNodes(); }, 250);
+      saveEditing();
+    });
     sp.addEventListener('blur', () => {
       const i = +sp.dataset.i, v = sp.textContent.replace(/\s+/g, ' ').trim().slice(0, 24);
       if (!n.mods || !n.mods[i]) return;
-      if (!v) { n.mods.splice(i, 1); saveStore(); paintNodes(); renderPanel(); return; }
-      if (v !== n.mods[i].name) { n.mods[i].name = v; saveStore(); paintNodes(); }
+      if (!v) { n.mods.splice(i, 1); paintNodes(); saveEditing({ commit: true }); renderPanel(); return; }
+      n.mods[i].name = v; paintNodes();
+      saveEditing({ commit: true });                        // 失焦 = 这次改完（内容没变就不会多一版）
     });
   });
   b.querySelectorAll('#pMods .mx').forEach(x => x.addEventListener('click', () => {
     if (!n.mods) return;
-    n.mods.splice(+x.dataset.x, 1); saveStore(); paintNodes(); renderPanel();
+    n.mods.splice(+x.dataset.x, 1); paintNodes(); saveEditing({ commit: true }); renderPanel();
   }));
   $('#pModAdd').addEventListener('keydown', ev => {
     if (ev.key !== 'Enter') return;
     ev.preventDefault();
     const v = ev.target.value.replace(/\s+/g, ' ').trim().slice(0, 24); if (!v) return;
     n.mods = modsOf(n).concat([{ id: uid(), type: KIND_MOD[n.kind] || 'tool', name: v }]);
-    saveStore(); paintNodes(); renderPanel();
+    paintNodes(); saveEditing({ commit: true }); renderPanel();
     const i = $('#pModAdd'); if (i) i.focus();
   });
 

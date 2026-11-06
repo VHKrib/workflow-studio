@@ -25,6 +25,7 @@ node skills/workflow-studio/scripts/cdp-canvas.js                 # 平移/缩�
 node skills/workflow-studio/scripts/cdp-dock.js                   # 拖卡进插槽：悬停/接入/拒绝成圈/拔出/成果槽 + 动画收干净
 node skills/workflow-studio/scripts/cdp-dock.js --record docs/dock.gif   # 同时录演示（.gif / .mp4，ffmpeg）
 node skills/workflow-studio/scripts/cdp-version.js                # 版本与回滚：5 改 5 版 / 并版 / 只留 20 / 回滚 / 拖动不出新版本（不调 agent）
+node skills/workflow-studio/scripts/cdp-edit.js                   # 编辑即版本：改正文/标题/内部实现/模块各一版 + 连打只 1 版 + 1 秒内同步（不调 agent）
 ```
 
 `tools/eval.js` 只是同步求值（没有 `awaitPromise`），等不到 `chatSend` / agent 回答。要断言异步结果
@@ -500,6 +501,42 @@ node skills/workflow-studio/scripts/cdp-version.js --fake
 断言 `RUNS` 里这次运行被摘掉、消息打了 `cancelled`、最新一版写「回滚到 vX（停掉 1 个正在跑的对话）」，
 主进程日志有 `[取消] 停掉正在跑的运行 …`。
 
+## 编辑即版本（改一张卡里面的东西）
+
+用户口径（2026-11）：换输入元素、换加工方式、加删模块、改内部实现，和加卡连线一样，
+**要立刻反映到画布和共享底稿、记一版、agent 下次知道**。以前这些只在失焦时 `saveStore()` 一次，
+打字过程中既不落盘也不记版本（Esc/切卡还可能丢掉没失焦的那几个字）。
+
+### 三条时间线（改这块先看这里）
+
+| 什么时候 | 做什么 | 代码 |
+|---|---|---|
+| 每敲一个字 | 改内存 + 画布当场变（`syncCard` / `paintNodes`），**不重建左栏**（重建会抢焦点、光标跳） | `oninput → saveEditing()` |
+| 停手 350ms / 连续打字每 350ms | 写共享状态文件（`queueLinkWrite`，1 秒内一定同步） | `saveEditing()` |
+| 停手 300ms | 本地存储落盘（关窗口不丢字；`beforeunload` 再兜一次） | `saveEditing()` |
+| 停手 1.5 秒 / 失焦 / 面板被重建 | 记一版（`EDIT_IDLE_MS`；`render()` 开头 `flushEditing()` 兜住 Esc、切卡、关面板） | `commitEditVersion()` |
+
+- 版本仍走 B 卡那一套：`VER.pending` + `commitVersions()`，内容指纹没变（只是点了面板 / 挪了位置）就自己跳过。
+  连打 30 个字只多 1 条：`saveEditing()` 每敲一下只重置 1.5 秒的定时器，不直接记。
+- 版本条目说人话：`verWhat()` 现在写 `加工卡·出图：换了加工方式` / `…：改了内部实现` / `…：改了模块`
+  （`BODY_WORD` 按卡片类型把「正文变了」翻译成换输入元素 / 换加工方式 / 换交付内容）。
+- 改标题时输入框允许暂时为空，失焦才归一成默认名；模块名 `contenteditable` 打字时 250ms 节流重画画布，
+  失焦/回车才提交版本，清空即删。
+- agent 那边不用额外做：`cardLine()` 一直从画布读实时值，四条提示词（卡片对话 / 右下角 / 概览 / 逐卡验证）都带正文、
+  模块、内部实现。`cdp-edit.js --chat` 会真问一次「这张加工卡的正文是什么」验这句话。
+
+注意：`paintNodes()` 只重建画布上的卡（`#canvas .node`），面板不动，所以打字时不会掉焦点；
+别图省事在输入回调里调 `render()`。
+
+### 跑验收
+
+```bash
+export CDP_PORT=9333
+node skills/workflow-studio/scripts/cdp-edit.js          # 17 条：各改一次都成版 / 连打 30 字只 1 版 / 光标与长任务 / 1 秒内落盘 /
+                                                         # 回滚带回编辑 / 拖卡折叠换选中 0 版 / 提示词带新内容 / 收尾干净
+node skills/workflow-studio/scripts/cdp-edit.js --chat   # 再加一次真实调用：agent 复述改过的加工方式（原样引用）
+```
+
 ## 视觉规范（不要自创）
 
 要「跟 Hermes 一样」时先读 `references/hermes-chat-visual.md`（源码路径 + 具体 token 数值 + 搬运规则），
@@ -561,7 +598,7 @@ node skills/workflow-studio/scripts/cdp-version.js --fake
 
 ## 开源
 
-本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `cdp-dock.js` / `cdp-version.js` / `parse-agent-output.js`）就在仓库里：
+本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `cdp-dock.js` / `cdp-version.js` / `cdp-edit.js` / `parse-agent-output.js`）就在仓库里：
 `skills/workflow-studio/`。新增验证脚本直接放这里（`scripts/` 是可直接重跑的采集/断言，不要写成一次性探针），
 并在 `git status` 里确认它们不是 `??` 漏提。
 

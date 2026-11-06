@@ -118,10 +118,12 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     await wait(430);
   }
   const a4 = await vinfo();
+  await wait(500);                                   // 25 次是 430ms 一次打的：最后那一版可能还在 300ms 防抖里没落地，读完再取一次
+  const a4b = await vinfo();
   const file4 = await ev(`(async () => { const r = await window.tcflow.versionList(flow().id); return { n: r.list.length, first: r.list[0].v, last: r.list[r.list.length - 1].v }; })()`);
   const nums4 = file4.last - file4.first + 1;
-  ok('ver-cap-20', file4.n === 20 && a4.n === 20 && nums4 === 20 && file4.last === a4.v,
-    { 列表条数: file4.n, 版本号区间: [file4.first, file4.last], 连续: nums4, 画布版本: a4.v });
+  ok('ver-cap-20', file4.n === 20 && a4b.n === 20 && nums4 === 20 && file4.last === a4b.v,
+    { 列表条数: file4.n, 版本号区间: [file4.first, file4.last], 连续: nums4, 画布版本: a4b.v, '刚打完时': a4.v });
 
   // 概览里的版本列表（控制台）：一条一行，最多 20 行
   const rowsDom = await ev(`(() => { panelOpen = true; panelCardId = null; render(); const rows = [...document.querySelectorAll('#verList .verrow')]; return { n: rows.length, head: document.querySelector('.verhd .vn') ? document.querySelector('.verhd .vn').textContent : '', sample: rows.slice(0, 3).map(r => r.textContent.replace(/\\s+/g, ' ').trim()) }; })()`);
