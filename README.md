@@ -70,7 +70,7 @@ Three ideas it is built around:
 ## Quickstart
 
 ```bash
-git clone <this repo> workflow-studio
+git clone https://github.com/VHKrib/workflow-studio.git
 cd workflow-studio
 npm install
 npm start
