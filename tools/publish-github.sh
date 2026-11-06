@@ -8,6 +8,11 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# 推之前先扫一遍「这次要推上去的内容」：本机绝对路径 / 内部项目名 / 部门岗位名 / 指向本机的软链。
+# 有命中就停在这儿（扫描退出码 1），别等推上去才发现——公开仓库里的东西收不回来。
+# 规则和输出见 tools/scan-public.js（只扫 git 跟踪的文件，被 gitignore 的不参与）。
+node tools/scan-public.js || { echo; echo "扫描有命中：先清干净再发（上面列了文件:行）。"; exit 1; }
+
 REPO="workflow-studio"
 VIS="private"
 MODE="create"
