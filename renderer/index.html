@@ -12,11 +12,9 @@
       <div class="brand-mark">WF</div>
       <div>
         <input id="flowName" class="brand-title" spellcheck="false" value="未命名工作流">
-        <div class="brand-sub">一个工作流一块画布 · 输入 / 加工 / 输出</div>
       </div>
     </div>
-    <div class="flowagent">
-      <span class="lbl">执行 agent</span>
+    <div class="flowagent" title="这条流程的执行 agent（可换）">
       <select id="flowAgent"></select>
     </div>
     <span class="sp"></span>
@@ -35,26 +33,10 @@
     <button id="btnRun" class="primary">▶ 开始运行</button>
   </div>
 
-  <div class="layout">
-    <aside class="side">
-      <h3>工作流 · 一块画布</h3>
-      <div id="wfList"></div>
-      <div class="sidehint">每个工作流独立保存：环节、连线、执行 agent。点「新建画布」开新的。</div>
-    </aside>
-
-    <section class="canvaswrap" id="wrap">
-      <div id="canvas"><svg id="edges"></svg></div>
-      <div class="zoombar">
-        <span id="zoomOut" title="缩小">−</span>
-        <span id="zoom">100%</span>
-        <span id="zoomIn" title="放大">+</span>
-        <span id="zoomReset" title="复位">⌂</span>
-      </div>
-      <div class="legend">空白处拖动＝移动画板 · ⌘滚轮＝缩放 · 卡片可拖 · 卡片右下「↗ 连线」拖到另一张卡建立连接 · 右键按住出转盘</div>
-    </section>
-
+  <div class="layout" id="layout">
+    <!-- 左边：和 agent 的对话框（卡片信息 + 聊天），没选卡片时自动收起 -->
     <aside class="panel">
-      <div class="ph" id="panelTitle">工作流概览</div>
+      <div class="ph"><span id="panelTitle">工作流概览</span><span class="sp"></span><span id="panelDel" title="删除这张卡（连线一起删）">✕</span></div>
       <div class="pb" id="panelBody"></div>
       <div class="foot">
         <span id="footStat">0 环节 / 0 连线</span>
@@ -62,7 +44,36 @@
         <span id="savePath" style="color:#726d64"></span>
       </div>
     </aside>
+
+    <section class="canvaswrap">
+      <div id="wrap">
+        <div id="canvas"><svg id="edges"></svg></div>
+      </div>
+      <div class="dock" id="dock">
+        <div class="dock-hd"><b>和平台主管聊</b><span class="sp"></span><span id="dockMin" title="收起">—</span></div>
+        <div class="dock-log" id="dockLog"></div>
+        <div class="dock-in">
+          <textarea id="dockIn" rows="1" placeholder="问点什么…（Enter 发送 · Shift+Enter 换行）"></textarea>
+          <button id="dockSend" class="primary">发送</button>
+        </div>
+      </div>
+      <div class="dock-fab" id="dockFab" title="展开：和平台主管聊">✍ 和 agent 聊</div>
+      <div class="zoombar">
+        <span id="zoomOut" title="缩小">−</span>
+        <span id="zoom">100%</span>
+        <span id="zoomIn" title="放大">+</span>
+        <span id="zoomReset" title="复位">⌂</span>
+      </div>
+    </section>
+
+    <!-- 右边：工作流列表 -->
+    <aside class="side">
+      <h3>工作流 · 一块画布</h3>
+      <div id="wfList"></div>
+    </aside>
   </div>
+
+  <div id="panelTab" title="展开对话／概览">概览</div>
 
   <div id="radial"></div>
 

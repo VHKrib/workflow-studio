@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -55,6 +55,40 @@ function askAgent({ profile, prompt, timeoutMs = 120000 }) {
     child.on('error', e => resolve({ ok: false, error: String(e) }));
   });
 }
+
+/** 流式：边跑边把事件推给渲染层（Hermes 的对话框效果靠它） */
+const runs = new Map();
+ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000 }) => new Promise((resolve) => {
+  if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES });
+  const child = spawn(HERMES, ['-p', profile, 'chat', '--format', 'stream-json', '-q', prompt], { env: { ...process.env } });
+  runs.set(runId, child);
+  let buf = '', finalText = '', tokens = null, err = '';
+  const send = ev => { try { if (!e.sender.isDestroyed()) e.sender.send('agent:event', { runId, ev }); } catch (_) { } };
+  const timer = setTimeout(() => { try { child.kill('SIGTERM'); } catch (_) { } }, timeoutMs);
+  child.stdout.on('data', d => {
+    buf += d.toString('utf8');
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line) continue;
+      let o; try { o = JSON.parse(line); } catch (_) { continue; }
+      if (o.type === 'result') { finalText = o.text || ''; tokens = o.tokens || null; }
+      send(o);
+    }
+  });
+  child.stderr.on('data', d => { err += d.toString('utf8'); });
+  child.on('error', e2 => { clearTimeout(timer); runs.delete(runId); resolve({ ok: false, error: String(e2) }); });
+  child.on('close', code => {
+    clearTimeout(timer); runs.delete(runId);
+    resolve({ ok: code === 0, code, text: finalText, tokens, error: err.slice(-2000) });
+  });
+}));
+ipcMain.handle('agent:cancel', (_e, runId) => {
+  const c = runs.get(runId);
+  if (!c) return false;
+  try { c.kill('SIGTERM'); } catch (_) { }
+  return true;
+});
 
 function createWindow() {
   const win = new BrowserWindow({

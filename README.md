@@ -25,14 +25,45 @@ Three ideas it is built around:
 
 ## Features
 
-- **Pan & zoom canvas** — drag empty space to pan, `⌘/Ctrl` + wheel or the ± control to zoom.
-- **Three card types** with coloured header bands, inline editing, per-card checks (`sha256`, `schema`, …).
+- **Infinite-feel canvas** — the logical origin sits in the middle of a 12000×8000 board
+  (`ORIGIN = {x:6000, y:4000}`), so you can pan ~6000px in *every* direction, not just down-right.
+  `⌘/Ctrl` + wheel or the ± control zooms **around the viewport centre** (the point under the middle
+  stays put); the legend and zoom pill live outside the scroll layer so they never pan away.
+- **Cards are never trapped** — dragging is computed in canvas space, so the card follows the cursor even
+  while the board auto-scrolls; holding it near an edge keeps scrolling, and releasing scrolls the card
+  back into view. No invisible boundary stops a card, and the legend strip no longer swallows drags.
+- **Three card types** with coloured header bands and per-card checks (`sha256`, `schema`, …).
+- **Cards are read-only on the canvas** — nothing to click into, so the whole card is a drag handle.
+  A single click only selects; **double-click opens that card's info + chat** in the left panel.
+  Renaming, rewriting and re-typing happen there (left panel), never on the canvas.
 - **Drag-to-connect** — hit `↗ 连线` on a card and drop it on another to create an edge.
-- **Workflow-level agent assignment** — top bar pill, right panel select, and the run dialog all set the same field.
-- **Ask the agent** — `? 问` on any card (single-card review) or *"let the agent read the whole flow"* (chain review).
-- **Suggest next step** — `✦ 下一步` asks the agent for candidate cards as strict JSON; picking one
-  creates the card and connects it automatically.
-- **Per-card validation pass** — walks the chain in edge order and marks each card `ok` / `needs work`.
+- **Two different agents, on purpose** — every workflow picks *its own* executing agent (top bar, overview,
+  run dialog). The bottom-right dock is different: it always talks to the **platform supervisor**
+  (`default` profile, 平台主管) — planning, dispatch and cross-team review, never card-level work.
+- **Real streaming** — the agent runs through `hermes chat --format stream-json`, so tool calls appear one
+  row at a time (spinner → `✓ 0.2s`, click for arguments/result), the reply types in as it is produced, and
+  the header shows a live 「进行中」 dot. The live turn is patched in place (never re-rendered wholesale), so a
+  `思考过程 · N 步` block you fold open/closed stays put while the run is still streaming. Text renders as light markdown (bold / inline code / code blocks /
+  lists). `USE_STREAM` in `renderer/app.js` flips back to one-shot text mode when you need the reasoning
+  prose — the CLI's JSON stream carries tool events and text, but not the model's thinking.
+- **Hermes-style answers** — quiet scaffold rows instead of boxes: tool calls list as one muted line per
+  step (`📚 Skill … 0.2s`), the reasoning sits under a `思考 16s · 6095 字` disclosure **open by default**,
+  the reply is plain text (no bubble) and only the user's own messages get a bubble. Long answers collapse
+  behind `展开全文（N 字）`; while waiting the row counts up 「正在想… Ns」. The workflow agent picker is a
+  borderless text control, not a native `<select>` in an orange pill.
+- **The left panel is an agent chat** — under the card body sits a chat box wired to the assigned agent:
+  type anything (Enter to send), or hit a chip (`评审这张卡` / `✦ 下一步候选` / `看整条流程`). The card,
+  its internal wiring and the whole chain ride along as context on every turn.
+- **Bottom-right agent dock** — a persistent chat with the **platform supervisor** about the whole
+  workflow (the left panel chat is with the workflow's own agent, per card). It answers in plain words, can propose candidate cards, and those
+  still need `确认添加` before anything lands on the canvas. `—` folds it into a pill.
+- **Next-step cards need your confirmation** — when the agent answers with candidate cards they render as
+  buttons inside that message. Clicking one only expands it (name / plain body / ⚙ internal wiring);
+  the card is added and wired **only after you press `确认添加`**. The agent never edits the board by itself.
+- **Left panel auto-hides** — with no card selected the dialog folds away (canvas gets the space back);
+  the `概览` handle on the left edge brings the workflow overview back. The workflow list sits on the right.
+- **Per-card validation pass** — walks the chain in edge order, marks each card `ok` / `needs work`, and
+  writes the verdict into that card's chat so the history stays with the card.
 - **Multiple canvases** — left sidebar lists workflows; each has its own cards, edges and agent; export/import as JSON.
 - **Radial menu** — press and hold right mouse button (or `Space`) for add / ask / duplicate / delete / validate / run.
 
@@ -61,26 +92,56 @@ The renderer never touches a shell. It calls three IPC channels exposed by `prel
 Because questions are one-shot `chat -q` calls with an explicit *"do not execute, do not write files,
 do not spend money"* instruction, wiring this to a real production agent is a deliberate separate step.
 
+### Cards speak plain language; code stays inside
+
+A card is read by people, not by a machine. So a card carries two layers:
+
+| Layer | Field | What goes there | Shown on the canvas? |
+|---|---|---|---|
+| plain language | `body` | 具体：用哪些图 / 哪些数据 → 怎么加工 → 交出什么文件、里面有什么；不写命令、路径、字段名 | **yes** |
+| internal wiring | `impl` | the actual commands, scripts, paths, field names the executor needs | no — only the ⚙ panel and the agent see it |
+
+The rule is enforced in three places, not left to the model's goodwill:
+
+1. **prompt** — every `askAgent` call carries the same instruction: plain words **and concrete** —
+   which images, which fields, what transformation, what file comes out — with the tech in `impl`;
+2. **parser** — `cleanCard()` moves any lingering command/path sentence out of the body into `impl`
+   (sentence-level, conservative: it never rewrites text it cannot split cleanly);
+3. **load** — old cards whose body is still machine-ish are converted by the `LEGACY_PLAIN` table, so an
+   existing board becomes readable without touching the wording of anything else.
+
+A ⚙ chip on a card means "there is internal wiring behind this sentence" — click it to open the panel
+section, or edit `impl` in the right panel directly.
+
 ### The "next step" protocol
 
 Ask for cards, get strict JSON:
 
 ```json
-[{ "kind": "proc", "title": "短标题", "body": "这张卡要什么 / 做什么 / 产出什么" }]
+[{ "kind": "proc", "title": "短标题", "body": "这一步要什么/做什么/交出什么", "impl": "执行时真正跑什么：命令/脚本/路径/字段" }]
 ```
 
-`kind` is `in` | `proc` | `out`. The parser (`parseOptions` in `renderer/app.js`) tries JSON first, then
-falls back to line parsing, so a chatty model still produces something usable.
+`kind` is `in` | `proc` | `out`. Two things the parser has to survive:
+
+- **the CLI echoes the question first.** `hermes chat -q` prints `Query: <prompt>` before the answer, and
+  the prompt itself contains a `[…]` example — so the parser searches for the **last** bracket span that
+  parses as a card array (`jsonArrays`), and drops placeholder cards (`validOpt`).
+- **chatty models.** If no JSON is found it falls back to line parsing (`[加工] 标题：内容`).
+
+`agentAnswer()` strips the echo and the trailing session block, so what the panel shows is what the agent
+actually said.
 
 ## Data model
 
 ```js
 store = { workflows: [{ id, name, agent, nodes: [], edges: [] }], current: workflowId }
-node  = { id, kind: 'in'|'proc'|'out', title, body, checks: [], x, y, status }
+node  = { id, kind: 'in'|'proc'|'out', title, body, impl, checks: [], chat: [], x, y, status }
 edge  = [fromId, toId]
+chat  = [{ role: 'me'|'agent', text, at, opts? }]   // 每张卡自己的对话，opts 是那次回答里的候选卡
 ```
 
-Persisted to `localStorage['tcflow.v3']`. Execution order is derived (`chainOrder`): a DFS from every
+Persisted to `localStorage['tcflow.v4']` (v3 boards are migrated on first load: `impl` is filled in,
+old seed copy is rewritten in plain language). Execution order is derived (`chainOrder`): a DFS from every
 node with no incoming edge. Nothing is stored server-side; export the JSON if you want it in git.
 
 ## Project layout
@@ -114,6 +175,7 @@ and a soft ring; the canvas itself is a dot grid at 22px.
 ## 中文说明
 
 把业务链路画成卡片：**输入（蓝）→ 加工（橙）→ 输出（绿）**，一张卡一个环节，箭头连成流程。
+**卡片上只写人话**：读卡的人不需要懂代码；命令、脚本、路径、字段名收进「⚙ 内部实现」，卡片正面不显示。
 一条工作流只指派一个 agent；任何卡片都能问 agent，也能让它给「下一步」候选卡，点一下自动加卡并连线。
 界面：空白处拖动＝平移画板，`⌘`+滚轮＝缩放，右键按住＝转盘菜单。
 

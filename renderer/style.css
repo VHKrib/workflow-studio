@@ -42,15 +42,20 @@ button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 button.primary:hover{background:var(--accent-ink);border-color:var(--accent-ink)}
 button.ghost{background:transparent}
 
-/* 工作流级 agent 选择 */
-.flowagent{-webkit-app-region:no-drag;display:flex;align-items:center;gap:7px;padding:5px 10px;border:1px solid var(--accent-line);
-  border-radius:999px;background:var(--accent-soft)}
-.flowagent .lbl{font-size:11px;color:var(--accent-ink);font-weight:600;white-space:nowrap}
-.flowagent select{border:none;background:transparent;font:inherit;font-size:12.5px;color:var(--ink);max-width:210px;outline:none}
+/* 工作流级 agent 选择：静默文字控件（Hermes 的取样式样，无边框、无填充） */
+.flowagent{-webkit-app-region:no-drag;position:relative;display:flex;align-items:center;border-radius:8px;padding:3px 6px}
+.flowagent:hover{background:color-mix(in srgb,currentColor 6%,transparent)}
+.flowagent select{-webkit-app-region:no-drag;appearance:none;-webkit-appearance:none;border:none;background:transparent;
+  font:inherit;font-size:12.5px;color:var(--ink-2);padding:2px 16px 2px 2px;outline:none;cursor:pointer;max-width:230px}
+.flowagent select:hover{color:var(--ink)}
+.flowagent::after{content:'';position:absolute;right:7px;top:50%;width:6px;height:6px;pointer-events:none;
+  border-right:1.5px solid var(--ink-3);border-bottom:1.5px solid var(--ink-3);
+  transform:translateY(-70%) rotate(45deg)}
+.flowagent select option{color:var(--ink);background:#fff}
 
 /* ---------- 三栏 ---------- */
-.layout{display:grid;grid-template-columns:242px 1fr 340px;height:calc(100vh - 64px)}
-.side{background:var(--surface);border-right:1px solid var(--line);overflow:auto;padding:14px 12px}
+.layout{display:grid;grid-template-columns:364px 1fr 242px;height:calc(100vh - 64px)}
+.side{background:var(--surface);border-left:1px solid var(--line);overflow:auto;padding:14px 12px}
 .side h3{margin:4px 0 10px;font-size:11px;color:var(--ink-3);font-weight:600;letter-spacing:.08em}
 .sidehint{margin-top:14px;font-size:11px;color:var(--ink-3);line-height:1.6;border-top:1px solid var(--soft-line);padding-top:10px}
 
@@ -64,9 +69,11 @@ button.ghost{background:transparent}
 .wf .x:hover{color:var(--danger)}
 
 /* 画布 */
-.canvaswrap{position:relative;overflow:auto;background-color:var(--bg);
+/* 外层只做定位（浮层不跟着滚），#wrap 才是滚动/平移层 */
+.canvaswrap{position:relative;overflow:hidden;background-color:var(--bg)}
+#wrap{position:absolute;inset:0;overflow:auto;cursor:grab;
   background-image:radial-gradient(rgba(17,17,17,.13) 1px,transparent 1px);background-size:22px 22px}
-#canvas{position:relative;width:2600px;height:1700px}
+#canvas{position:relative;width:12000px;height:8000px}   /* 大画板：逻辑原点在正中，四向都能拖 */
 svg#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 
 .node{position:absolute;width:244px;background:var(--surface);border:1px solid var(--line);
@@ -109,13 +116,16 @@ svg#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .node .mini{font-size:10.5px;color:var(--accent-ink);border:1px solid var(--accent-line);border-radius:999px;
   padding:1px 7px;cursor:crosshair;background:#fff;white-space:nowrap}
 .node .mini:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+/* ⚙ = 这张卡有内部实现（命令/路径/脚本），卡片正面不显示它 */
+.gar{font-size:10.5px;line-height:1.5;color:var(--ink-3);border:1px solid var(--line);border-radius:999px;
+  padding:0 5px;background:#fbfbfd;cursor:pointer;flex:0 0 auto}
+.gar:hover{color:var(--accent-ink);border-color:var(--accent-line);background:var(--accent-soft)}
 .node.linking{box-shadow:0 0 0 3px var(--accent-soft),var(--shadow-1)}
 .node.target{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
 
 /* 画板拖动 & 缩放 */
-.canvaswrap{cursor:grab}
-.canvaswrap.panning{cursor:grabbing}
-.canvaswrap.panning .node{cursor:grabbing}
+#wrap.panning{cursor:grabbing}
+#wrap.panning .node{cursor:grabbing}
 .zoombar{position:absolute;right:14px;bottom:12px;display:flex;align-items:center;gap:2px;background:var(--surface);
   border:1px solid var(--line);border-radius:999px;padding:3px 6px;box-shadow:var(--shadow-1);font-size:11.5px;color:var(--ink-3)}
 .zoombar span{padding:2px 7px;cursor:pointer;border-radius:999px}
@@ -155,11 +165,11 @@ svg#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .rawout{white-space:pre-wrap;font:11.5px/1.55 var(--mono);color:var(--ink-2);background:var(--card);
   border:1px solid var(--line);border-radius:var(--radius-sm);padding:9px;margin-top:8px;max-height:34vh;overflow:auto}
 
-.legend{position:absolute;left:14px;bottom:12px;font-size:11.5px;color:var(--ink-3);background:var(--surface);
+.legend{position:absolute;pointer-events:none;left:14px;bottom:12px;font-size:11.5px;color:var(--ink-3);background:var(--surface);
   border:1px solid var(--line);border-radius:999px;padding:6px 12px;box-shadow:var(--shadow-1)}
 
 /* 右栏 */
-.panel{background:var(--surface);border-left:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
+.panel{background:var(--surface);border-right:1px solid var(--line);display:flex;flex-direction:column;overflow:hidden}
 .panel .ph{padding:13px 16px;border-bottom:1px solid var(--line);font-size:12.8px;font-weight:600;color:var(--ink);background:#fbfbfd}
 .panel .pb{flex:1;overflow:auto;padding:14px 16px}
 .panel label{display:block;font-size:11px;color:var(--ink-3);margin:12px 0 5px;letter-spacing:.03em}
@@ -177,6 +187,17 @@ svg#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .pgroup.in{background:var(--in-soft);border-color:var(--in-line)} .pgroup.in .lab{background:#fff;color:var(--in);border:1px solid var(--in-line)}
 .pgroup.proc{background:var(--accent-soft);border-color:var(--accent-line)} .pgroup.proc .lab{background:#fff;color:var(--accent-ink);border:1px solid var(--accent-line)}
 .pgroup.out{background:var(--out-soft);border-color:var(--out-line)} .pgroup.out .lab{background:#fff;color:var(--out);border:1px solid var(--out-line)}
+.panel .thin{font-size:10.5px;color:var(--ink-3);margin:5px 0 0;line-height:1.5}
+
+/* 内部实现：命令/路径/脚本收在这里，卡片正面不显示 */
+details.internal{margin-top:12px;border:1px solid var(--line);border-radius:var(--radius-sm);background:#fbfbfd;padding:0 10px 9px}
+details.internal summary{cursor:pointer;list-style:none;outline:none;font-size:11px;color:var(--ink-3);
+  letter-spacing:.03em;padding:8px 0;font-weight:600}
+details.internal summary::-webkit-details-marker{display:none}
+details.internal summary:before{content:'▸ ';font-weight:400}
+details.internal[open] summary:before{content:'▾ '}
+details.internal summary:hover{color:var(--accent-ink)}
+details.internal textarea{font:11.8px/1.55 var(--mono);background:#fff;min-height:66px}
 
 .ovrow{display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--soft-line)}
 .ovrow .oi{color:var(--accent-ink);font-weight:700;font-size:11px;min-width:16px}
@@ -213,6 +234,168 @@ svg#edges{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 #radial text{fill:#57534c;font-size:11.5px;font-family:var(--font);text-anchor:middle;dominant-baseline:middle}
 #radial .hub{fill:#f5f3ef;stroke:rgba(17,17,17,.16)}
 
-.canvaswrap::-webkit-scrollbar,.side::-webkit-scrollbar,.pb::-webkit-scrollbar{width:10px;height:10px}
-.canvaswrap::-webkit-scrollbar-thumb,.side::-webkit-scrollbar-thumb,.pb::-webkit-scrollbar-thumb{
+#wrap::-webkit-scrollbar,.side::-webkit-scrollbar,.pb::-webkit-scrollbar{width:10px;height:10px}
+#wrap::-webkit-scrollbar-thumb,.side::-webkit-scrollbar-thumb,.pb::-webkit-scrollbar-thumb{
   background:rgba(17,17,17,.18);border-radius:8px;border:2px solid var(--bg)}
+
+/* 右栏头部：删除键 */
+.panel .ph{display:flex;align-items:center;gap:8px}
+.panel .ph #panelDel{cursor:pointer;color:#c0b8ad;font-size:12px;padding:0 2px}
+.panel .ph #panelDel:hover{color:var(--danger)}
+
+/* 概览自动隐藏：没选卡片时右栏收起，右侧留一条「概览」把手 */
+.layout.collapsed{grid-template-columns:0 1fr 242px}
+/* 折叠时不要把面板从网格里摘掉（会顶掉后面的列），只压成 0 宽 */
+.layout.collapsed .panel{overflow:hidden;border-right:none;visibility:hidden}
+#panelTab{position:fixed;left:0;top:50%;transform:translateY(-50%);writing-mode:vertical-rl;
+  background:var(--surface);border:1px solid var(--line);border-left:none;border-radius:0 10px 10px 0;
+  padding:12px 5px;font-size:11px;letter-spacing:.08em;color:var(--ink-3);cursor:pointer;display:none;
+  box-shadow:var(--shadow-1);z-index:60}
+#panelTab.on{display:block}
+#panelTab:hover{color:var(--accent-ink);border-color:var(--accent-line);background:var(--accent-soft)}
+
+/* 卡片名：无边框大标题（卡片本身不可编辑，改名只在这里） */
+.panel .titleinp{font-size:14px;font-weight:600;background:transparent;border:1px solid transparent;padding:4px 6px}
+.panel .titleinp:hover{border-color:var(--line)}
+.panel .titleinp:focus{background:#fff;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.panel .kindrow{display:flex;align-items:center;gap:8px;margin-top:6px}
+.panel .kindrow .lab{font-size:11px;color:var(--ink-3)}
+.panel .kindrow select{width:auto;flex:0 0 auto;padding:4px 8px}
+
+/* 卡片下方的 agent 聊天框 */
+.chat{margin-top:12px;border:none;background:transparent;padding:0;display:flex;flex-direction:column}
+.chat-hd{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:var(--ink-3);margin-bottom:6px}
+.chat-hd .kbd{font-size:10px;border:1px solid var(--line);border-radius:5px;padding:0 5px;background:#fff}
+.chat-log{max-height:44vh;min-height:96px;overflow:auto;display:flex;flex-direction:column;gap:18px;padding:4px 2px 8px}
+.msg{font-size:12.3px;line-height:1.55;white-space:pre-wrap;word-break:break-word;
+  border-radius:10px;padding:6px 9px;max-width:96%;user-select:text}
+.msg.me{align-self:flex-end;background:var(--accent);color:#fff;border:1px solid var(--accent)}
+.msg.agent{align-self:flex-start;background:#fff;border:1px solid var(--line);color:var(--ink)}
+.msg.empty,.msg.thinking{color:var(--ink-3);font-style:italic;background:transparent;border:none;padding:2px}
+.msg .who{font-size:10px;color:var(--accent-ink);font-weight:700;margin-bottom:2px}
+.chat-chips{display:flex;gap:5px;flex-wrap:wrap;margin:7px 0 6px}
+.qchip{font-size:10.5px;color:var(--accent-ink);border:1px solid var(--accent-line);border-radius:999px;
+  padding:2px 8px;background:#fff;cursor:pointer;white-space:nowrap}
+.qchip:hover{background:var(--accent);color:#fff;border-color:var(--accent)}
+.chat-in{display:flex;gap:6px;align-items:flex-end}
+.chat-in textarea{flex:1;min-height:46px;font-size:12.4px;resize:vertical}
+.chat-in button{flex:0 0 auto;height:34px}
+.optlist{display:flex;flex-direction:column;gap:5px;margin-top:7px}
+.msg .opt{padding:6px 8px;margin:0}
+/* 候选卡确认块：agent 不能直接往画布上加东西，必须人按「确认添加」 */
+.msg .opt.confirming{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft);background:#fff}
+.optconfirm{margin:6px 0 2px;padding:8px 9px;border:1px dashed var(--accent-line);border-radius:10px;background:#fff}
+.cf-row{display:flex;gap:7px;font-size:11.5px;color:var(--ink-2);line-height:1.55;margin-bottom:4px}
+.cf-row .lab{flex:0 0 62px;color:var(--ink-3);font-size:10.5px}
+.cf-row span:last-child{flex:1;word-break:break-word;user-select:text}
+.cf-ask{font-size:11.5px;color:var(--accent-ink);margin:6px 0 7px}
+.cf-btns{display:flex;gap:6px}
+.cf-btns button{padding:4px 12px;font-size:12px}
+
+/* 右下角常驻的 agent 对话框 */
+.dock{position:absolute;right:14px;bottom:52px;width:392px;height:480px;display:none;
+  flex-direction:column;background:var(--surface);border:1px solid var(--soft-line);
+  border-radius:14px;box-shadow:var(--shadow-2);z-index:70;overflow:hidden}
+.dock.on{display:flex}
+.dock-hd{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--soft-line);
+  background:transparent;font-size:12px;color:color-mix(in srgb,var(--ink) 70%,transparent)}
+.dock-hd b{font-weight:600}
+.dock-hd #dockMin{cursor:pointer;color:var(--ink-3);padding:0 4px;border-radius:6px}
+.dock-hd #dockMin:hover{color:var(--ink);background:var(--card)}
+.dock-log{flex:1;overflow:auto;display:flex;flex-direction:column;gap:18px;padding:16px 18px 20px}
+.dock-in{display:flex;gap:6px;align-items:flex-end;padding:8px 10px 10px;border-top:1px solid var(--soft-line)}
+.dock-in textarea{flex:1;min-height:38px;max-height:110px;resize:none;background:#fff;border:1px solid var(--line-strong);
+  border-radius:8px;padding:6px 8px;font:inherit;font-size:12.4px;user-select:text}
+.dock-in textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.dock-in button{flex:0 0 auto;height:32px}
+.dock-fab{position:absolute;right:14px;bottom:52px;display:none;align-items:center;gap:6px;
+  padding:8px 14px;border-radius:999px;background:var(--accent);color:#fff;border:1px solid var(--accent);
+  font-size:12.5px;box-shadow:var(--shadow-2);cursor:pointer;z-index:70}
+.dock-fab.on{display:inline-flex}
+.dock-fab:hover{background:var(--accent-ink);border-color:var(--accent-ink)}
+/* 气泡 = Hermes 的对话视觉：
+   助手 = 纯文本块（无边框），思考/工具是静默脚手架行；用户 = 右侧浅底气泡 */
+.msg{padding:0;border:none;background:transparent;border-radius:0}
+.msg.me{align-self:flex-end;padding:9px 13px;border-radius:16px;border:none;
+  background:color-mix(in srgb,var(--ink) 7%,transparent);color:var(--ink)}
+.msg.agent{align-self:stretch;max-width:100%;color:var(--ink)}
+.msg .who{display:flex;align-items:baseline;gap:7px;margin-bottom:6px;font-size:11px;color:color-mix(in srgb,var(--ink) 64%,transparent);
+  margin-bottom:3px;font-weight:500}
+.msg .who .meta{font-weight:400;font-size:10px;color:color-mix(in srgb,var(--ink) 44%,transparent)}
+/* 思考行：一条静默的可折叠行，caret 在右侧、悬停才明显 */
+.msg details.think{margin:2px 0 5px;border:none;background:transparent;padding:0}
+.msg details.think summary{cursor:pointer;list-style:none;outline:none;font-size:11.5px;line-height:22px;
+  color:color-mix(in srgb,var(--ink) 55%,transparent);width:max-content;max-width:100%;padding:1px 4px;
+  margin-left:-4px;border-radius:6px;display:flex;align-items:center;gap:6px}
+.msg details.think summary::-webkit-details-marker{display:none}
+.msg details.think summary:hover{background:color-mix(in srgb,var(--ink) 5%,transparent);
+  color:color-mix(in srgb,var(--ink) 78%,transparent)}
+.msg details.think summary:after{content:'▾';font-size:9px;opacity:.5;transition:opacity .15s,transform .15s}
+.msg details.think:not([open]) summary:after{transform:rotate(-90deg)}
+.msg details.think summary:hover:after{opacity:.9}
+.msg details.think[open] summary:after{opacity:.9}
+.msg details.think pre{margin:4px 0 8px 2px;padding:0 0 0 12px;border-left:1px solid color-mix(in srgb,var(--ink) 12%,transparent);
+  font:11.5px/1.6 var(--font);color:color-mix(in srgb,var(--ink) 68%,transparent);
+  white-space:pre-wrap;word-break:break-word;max-height:190px;overflow:auto;user-select:text}
+/* 工具步骤：一行一步，右边耗时（Hermes 的 scaffold 行） */
+.msg .steps{display:flex;flex-direction:column;gap:1px;margin:0 0 6px 2px;padding-left:10px;
+  border-left:1px solid color-mix(in srgb,var(--ink) 12%,transparent)}
+.msg .steps span{display:flex;align-items:baseline;gap:8px;font-size:11px;line-height:18px;
+  color:color-mix(in srgb,var(--ink) 55%,transparent);min-width:0}
+.msg .steps span em{font-style:normal;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.msg .steps span>i{margin-left:auto;font-style:normal;font-size:10px;color:color-mix(in srgb,var(--ink) 44%,transparent)}
+.msg .steps span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.msg details.more summary{cursor:pointer;font-size:11px;color:color-mix(in srgb,var(--ink) 55%,transparent);padding:2px 0}
+.msg .txt{font-size:12.8px;line-height:1.62;color:var(--ink)}
+.msg.thinking .txt{color:color-mix(in srgb,var(--ink) 55%,transparent)}
+.msg.empty{font-size:11.5px;color:color-mix(in srgb,var(--ink) 42%,transparent);font-style:normal;padding:2px 0}
+/* 长文本一律不撑破容器 */
+.msg,.msg .txt{overflow-wrap:anywhere;word-break:break-word;min-width:0}
+.msg .txt{max-width:100%}
+.who-row{display:flex;align-items:center;gap:8px;margin:12px 0 4px}
+.who-row .lab{font-size:11px;color:var(--ink-3)}
+.who-row b{font-size:12.5px}
+.who-row .hint-inline{font-size:10px;color:var(--ink-3);border:1px solid var(--line);border-radius:999px;padding:0 5px}
+.magent{display:flex;align-items:center;padding:6px 8px;border:1px solid var(--line-strong);border-radius:8px;background:#fbfbfd;font-size:12.3px}
+/* ---------- Hermes 式正文（markdown-lite）与工具行 ---------- */
+.msg .txt{font-size:13px;line-height:1.72}
+.msg .md-p{margin:0}
+.msg .md-gap{height:10px}
+.msg .md-h{font-weight:600;margin:8px 0 2px}
+.msg .md-h1{font-size:14px} .msg .md-h2{font-size:13.2px} .msg .md-h3{font-size:12.8px}
+.msg .md-li{position:relative;padding-left:14px;margin:1px 0}
+.msg .md-li:before{content:'·';position:absolute;left:5px;color:color-mix(in srgb,var(--ink) 45%,transparent)}
+.msg .md-inline{font:0.92em/1.4 var(--mono);background:color-mix(in srgb,var(--ink) 8%,transparent);
+  border-radius:4px;padding:0 4px}
+.msg .md-code{display:block;margin:6px 0;padding:7px 9px;border:1px solid color-mix(in srgb,var(--ink) 12%,transparent);
+  border-radius:8px;background:color-mix(in srgb,var(--ink) 4%,transparent);
+  font:11.5px/1.5 var(--mono);white-space:pre-wrap;word-break:break-word;max-height:260px;overflow:auto;user-select:text}
+
+/* 工具行：运行中 = 呼吸点，完成 = ✓ 与耗时，点开看参数/结果 */
+.msg .steps{display:flex;flex-direction:column;gap:2px;margin:0;padding:0;border:none}
+.msg details.step{border:none;background:transparent;padding:0}
+.msg details.step>summary{display:flex;align-items:center;gap:7px;list-style:none;outline:none;cursor:pointer;
+  font-size:11.5px;line-height:22px;color:color-mix(in srgb,var(--ink) 55%,transparent);
+  width:max-content;max-width:100%;padding:0 4px;margin-left:-4px;border-radius:6px}
+.msg details.step>summary::-webkit-details-marker{display:none}
+.msg details.step>summary:hover{background:color-mix(in srgb,var(--ink) 5%,transparent);
+  color:color-mix(in srgb,var(--ink) 76%,transparent)}
+.msg details.step em{font-style:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msg details.step summary i{margin-left:2px;font-style:normal;font-size:10px;
+  color:color-mix(in srgb,var(--ink) 44%,transparent)}
+.msg details.step .dot{width:5px;height:5px;border-radius:50%;flex:none;background:color-mix(in srgb,var(--ink) 40%,transparent)}
+.msg details.step.running .dot{background:var(--accent);animation:pulse 1s ease-in-out infinite}
+.msg details.step.done .dot{background:color-mix(in srgb,var(--ok) 80%,transparent)}
+.msg details.step.error .dot{background:var(--danger)}
+@keyframes pulse{0%,100%{opacity:.35;transform:scale(.9)}50%{opacity:1;transform:scale(1.25)}}
+.msg details.step .step-body{margin:2px 0 4px 11px;padding-left:9px;
+  border-left:1px solid color-mix(in srgb,var(--ink) 12%,transparent)}
+.msg details.step .step-k{font-size:10px;color:color-mix(in srgb,var(--ink) 44%,transparent);margin:3px 0 1px}
+.msg details.step pre{margin:0;font:10.8px/1.5 var(--mono);color:color-mix(in srgb,var(--ink) 70%,transparent);
+  white-space:pre-wrap;word-break:break-word;max-height:180px;overflow:auto;user-select:text}
+.msg .live-dot{color:var(--accent-ink);font-weight:600}
+.msg .live-dot:before{content:'';display:inline-block;width:5px;height:5px;border-radius:50%;
+  background:var(--accent);margin-right:5px;vertical-align:middle;animation:pulse 1s ease-in-out infinite}
+/* 「思考过程」块里的步骤：与思考正文同样的细线缩进 */
+.msg details.think.process .steps{margin:2px 0 6px 2px;padding-left:12px;
+  border-left:1px solid color-mix(in srgb,var(--ink) 12%,transparent)}
