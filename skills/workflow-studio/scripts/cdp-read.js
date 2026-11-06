@@ -136,7 +136,18 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     const fly = await J(`JSON.stringify({ flyers: document.querySelectorAll('.node.arriving').length, anims: document.getAnimations().filter(${ours}).length })`);
     await wait(500);
     await shot('4-arriving');
-    await wait(2600);
+    // 落地动画是有限长的：卡一张张落（560ms/张、间隔 70ms），连线再一条条描+光点+涟漪。
+    // 卡/线多的时候（9 卡 12 线）最后一条线要到 2s 外才收尾，固定 3s 会误报残留 —— 这里轮询到干净，最多等 6s。
+    const arClean = `(() => { const flyers = document.querySelectorAll('.node.arriving').length, fx = document.querySelectorAll('#fx *').length,
+      anims = document.getAnimations().filter(${ours}).length,
+      hidden = [...document.querySelectorAll('.node')].filter(e => e.style.opacity === '0').length,
+      dash = [...document.querySelectorAll('#edges path.edge')].filter(p => p.style.strokeDasharray).length;
+      return JSON.stringify({ flyers, fx, anims, hidden, dash }); })()`;
+    let ar = await J(arClean), settleMs = 0;
+    while ((ar.flyers || ar.fx || ar.anims || ar.hidden || ar.dash) && settleMs < 6000) {
+      await wait(250); settleMs += 250;
+      ar = await J(arClean);
+    }
     const pc = await J(`(() => { const w = flow();
       const boxes = w.nodes.map(n => { const e = document.querySelector('.node[data-id="' + n.id + '"]').getBoundingClientRect(); return [e.left, e.top, e.right, e.bottom]; });
       let ov = 0; for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) { const a = boxes[i], b = boxes[j]; if (a[0] < b[2] && b[0] < a[2] && a[1] < b[3] && b[1] < a[3]) ov++; }
@@ -150,10 +161,8 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
     // 卡片绝不压在对话框底下（放不下就把对话框收成药丸）；只有缩到下限 0.4 还放不下时，才允许有卡在视口外
     pass('place', pc.flows === before.flows + 1 && pc.nodes === pl.n && pc.edges === pl.e && pc.drawn === pl.e && pc.agent === AGENT && pc.src === AGENT && !pc.ov && !pc.under && (!pc.out || pc.zoom <= 0.4) && !pc.modal,
       `新工作流「${pc.name}」：${pc.nodes} 卡 / ${pc.edges} 线（画出 ${pc.drawn}），${pc.mods} 个模块，执行方 ${pc.agent}，重叠 ${pc.ov}，视口外 ${pc.out}，压在对话框下 ${pc.under}，缩放 ${pc.zoom}，对话框 ${pc.dock ? '开着' : '收成药丸'}`);
-    const ar = await J(`JSON.stringify({ flyers: document.querySelectorAll('.node.arriving').length, fx: document.querySelectorAll('#fx *').length, anims: document.getAnimations().filter(${ours}).length,
-      hidden: [...document.querySelectorAll('.node')].filter(e => e.style.opacity === '0').length, dash: [...document.querySelectorAll('#edges path.edge')].filter(p => p.style.strokeDasharray).length })`);
     pass('arrive', fly.flyers > 0 && fly.anims > 0 && !ar.flyers && !ar.fx && !ar.anims && !ar.hidden && !ar.dash,
-      `落地时飞行卡 ${fly.flyers} 张、动画 ${fly.anims} 个 → 3s 后残留：飞行卡 ${ar.flyers}、光点 ${ar.fx}、动画 ${ar.anims}、隐身卡 ${ar.hidden}、没画完的线 ${ar.dash}`);
+      `落地时飞行卡 ${fly.flyers} 张、动画 ${fly.anims} 个 → ${((2600 + settleMs) / 1000).toFixed(1)}s 后残留：飞行卡 ${ar.flyers}、光点 ${ar.fx}、动画 ${ar.anims}、隐身卡 ${ar.hidden}、没画完的线 ${ar.dash}`);
     await shot('5-placed');
   }
 
