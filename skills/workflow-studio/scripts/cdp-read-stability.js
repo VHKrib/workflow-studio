@@ -1,17 +1,18 @@
 // 「读取 agent 链路」稳定性验收：分析卡住要收场、能重来、不留半张卡。对着隔离实例跑：
-//   CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read-stability.js --agent <agent-id> [--mode hang|kill|all] [--shots DIR]
+//   CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read-stability.js --agent <agent-id> [--mode hang|timeout|kill|stall|all] [--shots DIR]
 //
-// 三种模式：
+// 五种模式：
 //   hang  不花真 agent：把流式那一步换成「一直不出声」（和真卡住一样），验
 //         进度可见（还在拆 N 张 / 已等多少秒）、20 秒没动静的说明、到点自己结束、出现「重来」、预览不留半张卡
 //   timeout 起一个不出声的真子进程（启动实例时带 WF_READ_FAKE=hang + WF_READ_TIMEOUT_MS=12000）：
 //         验到点主进程把它杀掉、界面自己收场、重来可用、不留半张卡
 //   kill  真起一次分析，跑到一半把子进程杀掉（模拟断流）：验界面说「这次没拆全」+ 重来 + 不留半张卡，
-//         再点「重来」验同时只有一个子进程在跑（旧进程先被杀掉），最后关窗收干净
-//   all   hang + timeout（要配小上限的实例：WF_READ_FAKE=hang WF_READ_TIMEOUT_MS=12000）
+//         再点「重来」验同时只有一个子进程在跑（旧进程先被杀掉），最后关窗收干净。
+//         **只跑在正常上限的实例上**（上限 < 60 秒会先到点，runId 已清空，杀掉那一步没意义）
+//   all   hang + timeout（要配小上限的实例：WF_READ_FAKE=hang WF_READ_TIMEOUT_MS=12000）；不含 kill
 //   stall 20 秒没有新内容时，界面明说「它在等，不是卡住」（要正常上限的实例，不花真 agent）
 // 期望全部 PASS：budget / stall-words / progress / self-stop / no-half-card / retry-ready /
-//               killed / retry / single-process / cancel-clean / errors
+//               timeout / timeout-says / killed / killed-says / retry / cancel-clean / stall-live / stall-clean / errors
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -23,8 +24,10 @@ const PORT = Number(opt('port', process.env.CDP_PORT || 9333));
 if (PORT === 9222) { console.error('9222 是用户在用的窗口：换一个端口（实现 9333 / 验收 9334）'); process.exit(1); }
 const AGENT = opt('agent', '');
 const MODE = opt('mode', 'all');
+const MODES = ['hang', 'timeout', 'kill', 'stall', 'all'];
+if (!MODES.includes(MODE)) { console.error('--mode 只能是 ' + MODES.join(' / ') + '，收到 ' + MODE); process.exit(1); }
 const SHOTS = opt('shots', '');
-if (!AGENT) { console.error('usage: CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read-stability.js --agent <agent-id> [--mode hang|kill|all] [--shots DIR]'); process.exit(1); }
+if (!AGENT) { console.error('usage: CDP_PORT=9333 node skills/workflow-studio/scripts/cdp-read-stability.js --agent <agent-id> [--mode hang|timeout|kill|stall|all] [--shots DIR]'); process.exit(1); }
 
 const get = u => new Promise((res, rej) => http.get(u, r => { let b = ''; r.on('data', d => b += d); r.on('end', () => res(JSON.parse(b))); }).on('error', rej));
 const wait = ms => new Promise(r => setTimeout(r, ms));
@@ -162,7 +165,11 @@ const hermesRuns = () => procs().kids.filter(r => /hermes.*chat.*stream-json|sle
     await esc(); await wait(400);
   }
 
-  if (MODE === 'kill' || MODE === 'all') {
+  if (MODE === 'kill' && cfg.budget < 60000) {
+    // 小上限实例撑不住 kill：真起进程后要等它出点东西（最多 20s），预算先到点、runId 已清空，
+    // 杀进程那一步空转 —— 那是用法不对，不是产品问题。说清楚、跳过，别报成 FAIL。
+    console.log(`SKIP  kill           这个模式要跑在正常上限的实例上（当前上限 ${cfg.budget}ms）；小上限实例请用 --mode hang / timeout`);
+  } else if (MODE === 'kill') {
     // ---------- 断流：跑到一半把子进程杀掉 ----------
     await openAndPick();
     await waitBusy(20000);

@@ -12,8 +12,8 @@ const PROFILES_DIR = path.join(HERMES_HOME, 'profiles');
 const BUNDLED_SKILLS = path.join(HERMES_HOME, 'hermes-agent', 'skills');
 const SQLITE = fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : 'sqlite3';
 
-// 读多少条会话：默认最近 80 条。真干过活（有工具调用）的记录少于 30 次的 agent——比如合作邀约
-// 只有两三次——它的干活记录容易被一堆闲聊挤出 80 条的窗口，往前多读到 300 条；记录多的照旧 80，不拖慢。
+// 读多少条会话：默认最近 80 条。真干过活（有工具调用）的记录少于 30 次的 agent——它可能只干过两三次活
+// ——干活记录容易被一堆闲聊挤出 80 条的窗口，往前多读到 300 条；记录多的照旧 80，不拖慢。
 const READ_LIMIT = 80, READ_LIMIT_MORE = 300, READ_WORK_SMALL = 30;
 
 // 工作流开发平台自己发给 agent 的提问——不算它的活，统计时剔掉
