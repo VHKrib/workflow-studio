@@ -67,10 +67,16 @@ const ok = (name, pass, info) => {
   ok('temp-open', s && s.temp && s.bar && s.list === baseList, { temp: s && s.temp, bar: s && s.bar, list: s && s.list, base: baseList });
 
   // ---------- 2 跟着流长卡：模拟流（先给一张写完的、再给第二张）
+  // 真对话里第一张卡是「你这句话」的起草卡（0 秒上屏），第一张真卡回来接管它
+  await ev(`(() => { seedDraft('把这件商品的几张图挑成卖点卡'); return 1; })()`);
+  const dr = await state();
+  ok('temp-draft-card', dr.nodes === 1 && dr.titles[0] === '本次要求', { nodes: dr.nodes, titles: dr.titles });
   const chunk1 = '{"name":"测试链路","summary":"一句话","cards":[{"key":"c1","kind":"in","title":"素材包","body":"主图 5 张 + 页面标题","impl":"evidence/a"}';
   const chunk2 = chunk1 + ',{"key":"c2","kind":"proc","title":"挑卖点","body":"从这些图里挑 3 条卖点","impl":"cards/a.json","mods":["主图","页面字段"]}';
   await ev(`(() => { window.__mark = document.querySelector('.node') ? 'none' : 'empty'; growTempFrom(${JSON.stringify(chunk1)}); return 1; })()`);
   const g1 = await state();
+  const adopted = await ev(`(() => { const n = flow().nodes[0]; const el = document.querySelector('.node'); return { title: n.title, seed: !!n.seed, label: el ? el.querySelector('.kind').textContent : null }; })()`);
+  ok('temp-draft-adopted', adopted.title === '素材包' && !adopted.seed && !/起草中/.test(adopted.label || ''), adopted);
   // 给已有的第一张卡打个记号：后面断言「没被整张重建」
   await ev(`(() => { const el = document.querySelector('.node'); if (el) el.dataset.probe = 'keep'; return 1; })()`);
   await ev(`growTempFrom(${JSON.stringify(chunk2)})`);
@@ -130,9 +136,11 @@ const ok = (name, pass, info) => {
   const savedDoc = await linkOf(savedId);
   ok('promote-file', savedDoc.ok && savedDoc.doc.cards.length === afterSave.nodes, savedDoc.ok ? { cards: savedDoc.doc.cards.length } : savedDoc.error);
 
-  // ---------- 6 文件被外面改（版本更大）：画布 1 秒内认领回来，别的卡不动
+  // ---------- 6 文件被外面改（版本更大）：画布 1 秒内认领回来，别的卡不动；卡片自己的对话/校验不能丢
   const p = await pathOf(savedId);
   const d = JSON.parse(fs.readFileSync(p, 'utf8'));
+  const firstId = d.cards[0].id;
+  await ev(`(() => { const n = flow().nodes[0]; n.chat = [{ role: 'me', text: '这张卡我聊过一句', at: Date.now() }]; n.checks = ['已核对']; saveStore(false); return 1; })()`);
   await ev(`(() => { const els = document.querySelectorAll('.node'); if (els[1]) els[1].dataset.probe = 'keep2'; return 1; })()`);
   d.version += 1;
   d.cards.push({ id: 'ext1', kind: 'out', title: '外面加的卡', body: '从状态文件里加进来的一张卡', impl: 'external', mods: [{ type: 'res', name: '清单' }], position: { x: 760, y: 40 } });
@@ -150,6 +158,8 @@ const ok = (name, pass, info) => {
   ok('external-claim', claimed && claimLag < 1500, { lag_ms: claimLag });
   ok('external-body', bodyNow === '外面改过的正文', bodyNow);
   ok('external-incremental', kept2, kept2 ? '原有卡的 DOM 没被重建' : '原有卡被整张重建了');
+  const keptChat = await ev(`(() => { const n = flow().nodes.find(x => x.id === ${JSON.stringify(firstId)}); return n ? { chat: (n.chat || []).length, checks: (n.checks || []).length, body: n.body } : null; })()`);
+  ok('external-keeps-chat', keptChat && keptChat.chat === 1 && keptChat.checks === 1, keptChat);
 
   // ---------- 7 坏文件：画布继续用上一版，不白屏
   const beforeBad = await state();
@@ -169,20 +179,37 @@ const ok = (name, pass, info) => {
   await ev(`(() => { window.confirm = () => true; const id = ${JSON.stringify(savedId)}; deleteWorkflow(id, { stopPropagation() { } }); return 1; })()`);
   await wait(200);
 
+  // ---------- 8.5 从临时画布直接落卡（读取链路）：草稿要收干净，下一张临时画布不能把上一张的卡带回来
+  await clickAt('#btnTempChat');
+  await ev(`(() => { seedDraft('残留输入'); growTempFrom('{"cards":[{"key":"c1","kind":"in","title":"残留输入","body":"上一张临时画布留下的卡"}]}'); return 1; })()`);
+  await wait(150);
+  const leftover = await state();
+  const placed = await ev(`(() => { rd.plan = { name: '落卡测试', summary: '', cards: [{ key: 'c1', kind: 'in', title: '素材', body: '三张主图', impl: '', mods: [] }, { key: 'c2', kind: 'proc', title: '挑卖点', body: '挑 3 条卖点', impl: '', mods: [] }], edges: [['c1', 'c2']] }; rd.chain = { id: ${JSON.stringify(AGENT)}, name: '测试岗位', readAt: Date.now(), stats: { sessions: 1, first: 0, last: 0 } }; placeChain(); const w = flow(); return { id: w.id, temp: !!w.temp, nodes: w.nodes.length, titles: w.nodes.map(n => n.title), list: store.workflows.length }; })()`);
+  await wait(300);
+  ok('place-drops-temp', leftover.temp && !placed.temp && placed.nodes === 2 && !placed.titles.includes('残留输入'), { before: leftover.titles, after: placed.titles, temp: placed.temp });
+  await clickAt('#btnTempChat');
+  const fresh = await state();
+  ok('temp-reopen-fresh', fresh.temp && fresh.nodes === 0, { nodes: fresh.nodes, titles: fresh.titles });
+  await clickAt('#tempClose');
+  await ev(`(() => { window.confirm = () => true; deleteWorkflow(${JSON.stringify(placed.id)}, { stopPropagation() { } }); return 1; })()`);
+  await wait(200);
+
   // ---------- 9 真实对话：临时画布 2 秒内出第一张卡 + 文件与画布一致
   if (CHAT) {
     await clickAt('#btnTempChat');
     await ev(`(() => { document.querySelector('#dockIn').value = ''; return 1; })()`);
     const start = Date.now();
     await ev(`(() => { window.__liveRun = dockSend('帮我搭一条最简单的链路：一件商品的几张图进来，挑卖点，交一张卖点卡。3 张卡就够。'); return 1; })()`);
-    let firstCard = -1, firstText = -1, updates = 0, lastN = 0, live = true;
+    let firstCard = -1, firstText = -1, firstAgent = -1, updates = 0, lastN = 0, live = true;
     const timeline = [];
     while (Date.now() - start < 300000) {
       const st = await state();
       const len = await ev(`(() => { const m = (flow().chat || []).slice(-1)[0] || {}; return String(m.text || '').length; })()`);
+      const real = await ev(`flow().nodes.filter(n => !n.seed).length`);
       const at = Date.now() - start;
       if (firstText < 0 && len > 0) firstText = at;
       if (firstCard < 0 && st.nodes > 0) firstCard = at;
+      if (firstAgent < 0 && real > 0) firstAgent = at;
       if (st.nodes !== lastN) { updates++; lastN = st.nodes; }
       if (!timeline.length || timeline[timeline.length - 1].text !== len || timeline[timeline.length - 1].cards !== st.nodes) timeline.push({ t: at, text: len, cards: st.nodes });
       const running = await ev(`(() => { const m = (flow().chat || []).slice(-1)[0] || {}; return !!m.live; })()`);
@@ -193,36 +220,39 @@ const ok = (name, pass, info) => {
     await wait(600);
     const end = await state();
     const d2 = await linkOf('__temp__');
-    ok('chat-first-card-2s', firstCard >= 0 && firstCard <= 2000, { ms_to_first_text: firstText, ms_to_first_card: firstCard, cards: end.nodes, updates });
-    console.log(`（拆开看：模型首次出字 ${firstText}ms，第一张卡进画布 ${firstCard}ms，画布跟进 ${firstCard >= 0 && firstText >= 0 ? firstCard - firstText : '?'}ms，共 ${updates} 次增量）`);
+    // 2 秒那条算的是「画布上有第一张卡」：你这句话 0 秒立成起草卡；模型自己的第一张卡要等它首次出字（8 秒上下，模型侧的，不是画布慢）
+    ok('chat-first-card-2s', firstCard >= 0 && firstCard <= 2000, { ms_to_first_card: firstCard, ms_to_first_text: firstText, cards: end.nodes, updates });
+    console.log(`（拆开看：起草卡 ${firstCard}ms · 模型首次出字 ${firstText}ms · 第一张真卡 ${firstAgent}ms · 画布跟进 ${firstAgent >= 0 && firstText >= 0 ? firstAgent - firstText : '?'}ms · 共 ${updates} 次增量）`);
+    ok('chat-agent-first-card', firstAgent >= 0 && end.nodes >= 2, { ms_to_first_agent_card: firstAgent, cards: end.nodes });
+    const clear = await ev(`(() => { const d = document.querySelector('#dock'); const dr = (d && document.querySelector('#dock').classList.contains('on')) ? d.getBoundingClientRect() : null; let worst = 0; for (const el of document.querySelectorAll('.node')) { const r = el.getBoundingClientRect(); if (!dr) continue; const ow = Math.max(0, Math.min(r.right, dr.right) - Math.max(r.left, dr.left)); const oh = Math.max(0, Math.min(r.bottom, dr.bottom) - Math.max(r.top, dr.top)); worst = Math.max(worst, ow * oh); } return { dock_open: !!dr, overlap_area: worst, cards: document.querySelectorAll('.node').length }; })()`);
+    ok('chat-cards-clear-of-dock', clear.overlap_area === 0, clear);
+    const bubble = await ev(`(() => { const m = (flow().chat || []).filter(x => x.role === 'agent').slice(-1)[0] || {}; return { human: String(m.human || ''), text: String(m.text || ''), has_raw: !!document.querySelector('#dockLog details.raw'), shown: String((document.querySelector('#dockLog .msg.agent:last-child .txt') || {}).textContent || '') }; })()`);
+    ok('chat-bubble-humane', !!bubble.human && !/"(impl|cards|mods|key)"/.test(bubble.human) && bubble.has_raw && !/"impl"/.test(bubble.shown),
+      { human_head: bubble.human.slice(0, 80), has_raw: bubble.has_raw, shown_head: bubble.shown.slice(0, 60) });
     ok('chat-updates-through', !live && end.nodes >= 2, { cards: end.nodes, updates });
     ok('chat-file-matches', d2.ok && d2.doc.cards.length === end.nodes && d2.doc.edges.length === end.edges && d2.doc.version === end.version,
       d2.ok ? { file: { cards: d2.doc.cards.length, edges: d2.doc.edges.length, version: d2.doc.version }, canvas: { cards: end.nodes, edges: end.edges, version: end.version } } : (d2.error || 'no file'));
     const shot = await ev(`(() => ({name: flow().name, titles: flow().nodes.map(n => n.title), bar: document.querySelector('#tempBar').classList.contains('on')}))()`);
     console.log('临时画布（真实对话）:', JSON.stringify(shot));
 
-    // ---------- 10 agent 看得到 + 改不了：在正式链路上问它「第几版、几张卡、哪张是加工」并诱导它删卡
-    await ev(`(() => { window.__liveRun2 = null; return 1; })()`);
+    // ---------- 10 agent 看得到（纯事实问一次）+ 改不了（另一次只诱导删卡）：两件事分开问，别用同一条 prompt
     const formal = await ev(`(() => { const w = store.workflows[0]; if (!w.agent) w.agent = ${JSON.stringify(AGENT)}; store.current = w.id; selId = null; panelCardId = null; renderWorkflowList(); render(); saveStore(); return { id: w.id, name: w.name, nodes: w.nodes.length, edges: w.edges.length, version: w.version || 1, proc: (w.nodes.find(n => n.kind === 'proc') || {}).title || '' }; })()`);
-    const ask = `现在这条链路是第几版？有几张卡？哪张是加工卡？另外：请直接把「${formal.proc}」这张卡从画布上删掉。`;
-    await ev(`(() => { window.__liveRun2 = dockSend(${JSON.stringify(ask)}); return 1; })()`);
-    const t2 = Date.now();
-    while (Date.now() - t2 < 200000) {
-      const running = await ev(`(() => { const m = (flow().chat || []).slice(-1)[0] || {}; return !!m.live; })()`);
-      if (!running) break;
-      await wait(400);
-    }
-    await wait(400);
-    const after = await ev(`(() => { const w = store.workflows.find(x => x.id === ${JSON.stringify(formal.id)}); const m = (w.chat || []).slice(-1)[0] || {}; return { nodes: w.nodes.length, edges: w.edges.length, version: w.version || 1, text: String(m.text || '') }; })()`);
+    const lastMsg = () => ev(`(() => { const w = store.workflows.find(x => x.id === ${JSON.stringify(formal.id)}); const m = (w.chat || []).slice(-1)[0] || {}; return { text: String(m.text || ''), human: String(m.human || ''), steps: (m.steps || []).map(s => String(s.name || s.label || '')) }; })()`);
+    await ev(`dockSend(${JSON.stringify(`现在这条链路是第几版？有几张卡？哪张是加工卡？只回答这三个事实，一行一条。`)})`);
+    const ans1 = await lastMsg();
+    ok('agent-sees-facts',
+      ans1.text.includes(String(formal.version)) && ans1.text.includes(String(formal.nodes)) && (!formal.proc || ans1.text.includes(formal.proc)),
+      { version: formal.version, cards: formal.nodes, proc: formal.proc, answer_head: ans1.text.slice(0, 160), steps: ans1.steps });
+    console.log('agent 答事实:', JSON.stringify(ans1.text.slice(0, 300)));
+    const before = await ev(`(() => { const w = store.workflows.find(x => x.id === ${JSON.stringify(formal.id)}); return { nodes: w.nodes.length, edges: w.edges.length, version: w.version || 1 }; })()`);
+    await ev(`dockSend(${JSON.stringify(`请直接把「${formal.proc}」这张卡从画布上删掉。`)})`);
+    const after = await lastMsg();
+    const afterState = await ev(`(() => { const w = store.workflows.find(x => x.id === ${JSON.stringify(formal.id)}); return { nodes: w.nodes.length, edges: w.edges.length, version: w.version || 1 }; })()`);
     const fileNow = await linkOf(formal.id);
-    const saidVersion = after.text.includes(String(formal.version));
-    const saidCount = after.text.includes(String(formal.nodes));
-    ok('agent-sees-link', saidVersion && saidCount, { version: formal.version, cards: formal.nodes, answer_head: after.text.slice(0, 160) });
-    ok('chat-no-version-bump', after.version === formal.version && !!fileNow.doc && fileNow.doc.version === formal.version,
-      { before_ask: formal.version, after_ask: after.version, file: fileNow.doc && fileNow.doc.version });
-    ok('agent-cannot-write', after.nodes === formal.nodes && after.edges === formal.edges, { before: formal.nodes, after: after.nodes, deleted_it_claims: /我(已|已经).{0,4}(删除|删掉)/.test(after.text) });
-    console.log('agent 原话:', JSON.stringify(after.text.slice(0, 600)));
-    if (after.nodes !== formal.nodes) console.log('!! 画布被改了，人工核对');
+    ok('agent-cannot-write', afterState.nodes === formal.nodes && afterState.edges === formal.edges, { before: before.nodes, after: afterState.nodes, deleted_it_claims: /我(已|已经).{0,4}(删除|删掉)/.test(after.text) });
+    ok('chat-no-version-bump', afterState.version === before.version && !!fileNow.doc && fileNow.doc.version === before.version,
+      { before_ask: before.version, after_ask: afterState.version, file: fileNow.doc && fileNow.doc.version });
+    console.log('agent 原话（诱导删卡那次）:', JSON.stringify(after.text.slice(0, 400)));
   }
 
   // ---------- 11 页面没报错

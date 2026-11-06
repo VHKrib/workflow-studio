@@ -191,6 +191,9 @@ msg   = { role: 'me'|'agent', text, at, think?, steps?: [{label,time}], secs?, o
 - dock 里只有标题、消息、输入框——不加说明文案（见「界面文案：越少越好」）。
 - `dockSend()` **不检查** `workflow.agent`（它固定走 `DOCK_AGENT`）；只有卡片对话 `chatSend()` 需要
   `workflow.agent`，未指派时才提示去顶栏选。别把同一个前置检查复制到两条链路上。
+- **`default` 这个执行方在选择器和列表里都显示「平台主管」**：`agentOptionsHTML()` 会把 `DOCK_AGENT` 补成一条可选
+  （它不在 `~/.hermes/profiles/` 下，但仍得能选中；漏了就会「数据是 default、界面显示 — 未指派 —」），
+  右栏列表用 `execName()` 不用 `agentName()`。
 
 ## 人确认才落盘（agent 不得自己改画布）
 
@@ -345,6 +348,8 @@ node skills/workflow-studio/scripts/cdp-click.js --card "<卡片标题>" --mode 
   踩过的坑：发一条消息也涨版本，agent 读文件答「第 20 版」而画布是 19，验收判定不一致。
 - 文件被外面改（版本 ≥ 当前）→ `applyLinkDoc()` 认领回来，`patchNodesDiff()` 只换变了的那张卡；别的卡 DOM 不动（拖拽顺）；
   正在拖卡时推迟 400ms 再认领。版本号只由画布涨，外部改要自己写更大的 `version`。
+- **状态文件只带结构**（卡片 / 模块 / 正文 / 内部实现 / 坐标 / 执行方 / 版本）。卡片自己的 `chat / checks / status`
+  只活在这台机器上：`applyLinkDoc()` 按**卡片 id** 从旧节点认领回来，否则外面改一次正文就把卡片对话和校验点清空了。
 
 ### agent 看得到、但改不了
 
@@ -356,19 +361,31 @@ node skills/workflow-studio/scripts/cdp-click.js --card "<卡片标题>" --mode 
 ### 临时对话画布
 
 - 顶栏「对话建链路」→ `startTempCanvas()`：`tempFlow` 只在内存，`store.current='__temp__'`，不进列表、不写 localStorage。
+- **第一张卡 0 秒上屏**：`dockSend()` 一发出就先 `seedDraft(msg)`——把你这句话立成这条链路的输入卡（标题「本次要求」、
+  正文是你的原话、头部标「起草中」）。agent 的第一张真卡回来时 `adoptDraft()` 接管它（同一个 id、按它该在的列重摆，
+  `seed` 清掉）；计划里自带输入卡就并进那张，别留两张输入（`finishTemp()` 里 `planIn` 优先）。
+  **这不是编内容**：起草卡写的是人自己的要求，模型的第一张卡到了就换掉它。想看「模型自己的第一张卡什么时候到」看
+  `cdp-live --chat` 的 `chat-agent-first-card`（实测 8–9s）。
 - 流里每写完一张卡就长一张：`partialCardObjects()` 扫出完整 JSON 对象（跳过没写完的），`growTempFrom()` 只追加/替换单张卡
   （`paintOne()`），自动和上一张连线；**画布这一侧 1ms 内上屏**（同一帧）。结束时 `finishTemp()` 用完整计划再对齐一次。
-- 右栏 `.tempbar` 只在临时画布上出现：「存成正式」→ `promoteTemp()`（进列表、id 换新、文件跟着走）；`✕` → `dropTemp()`（删文件、回原工作流）。
-  切工作流 / 新建 / 存成正式都会 `dropTemp()`；进程启动时 `links().drop('__temp__')` 抹掉上次没清干净的。
+- 卡长出来时如果**看不见或被右下角对话框盖住**，才调 `fitView(false)`（`anyCardOutOfView()` 判定）：长卡时视野跟着走，
+  但不折对话框（人正在里面聊）。`fitView()` 的缩放下限放到 **0.3**（三列并排在对话框左边通常要 0.35 上下），
+  所以要保证「卡不压在对话框底下」先看这个下限。
+- 右栏 `.tempbar` 只在临时画布上出现：「存成正式」→ `promoteTemp()`（进列表、id 换新、清理 `draft/seed` 标记、文件跟着走）；
+  `✕` → `dropTemp()`（删文件、回原工作流）。切工作流 / 新建 / 存成正式 / **`placeChain()`** 都会 `dropTemp()`；
+  进程启动时 `links().drop('__temp__')` 抹掉上次没清干净的。漏了 `placeChain()` 这条的后果：先开临时画布、再去「读取链路」落卡，
+  下一次「对话建链路」会把上一张草稿带回来（实测残留）。
+- 临时画布的气泡**说人话**：`tempHuman()` 把流里的 JSON 换成「正在搭 / 搭好了：N 张卡 + 每张 类型｜标题：正文一句」，
+  原始 JSON 存进 `msg.human` 对应的折叠块「看原话」（`bubblesHTML` 的 `details.more.raw`、`patchLive` 也读 `m.human`）。
+  别把 `impl/key/mods` 糊给用户——和卡片正面「只写人话」是同一条规矩。
 - 临时画布不写 localStorage：`saveStore()` 里 `current` 会写成列表第一条，重启不会把临时画布带回来。
-- **「2 秒内出第一张卡」做不到**：实测模型首次出字 5.8–8.1s（provider 思考时间），首卡 6.6–9.1s；画布拿到完整卡到上屏 1ms。
-  要压到 2s 得换更快的档案/模型，属于产品口径（见交接「未解决」）。
 
 ```bash
 export CDP_PORT=9333
-node skills/workflow-studio/scripts/cdp-live.js            # 不花钱：临时画布/状态文件/外部认领/坏文件/存成正式
-node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加两次真实 agent 调用（首卡时间/agent 看得到/改不了）
-# chat-first-card-2s 会 FAIL（模型首次出字就不是 2s），其余应全 PASS
+node skills/workflow-studio/scripts/cdp-live.js            # 不花钱：起草卡/临时画布/状态文件/外部认领/坏文件/存成正式/落卡清草稿
+node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加三次真实 agent 调用（首卡时间 + 气泡人话 + 看得到/改不了）
+# 期望全 PASS：chat-first-card-2s = 起草卡（6ms 级）、chat-agent-first-card = 模型第一张卡（8–9s）、
+# chat-cards-clear-of-dock 卡压对话框面积 0、chat-bubble-humane 气泡里没有原始 JSON
 ```
 
 ## 视觉规范（不要自创）

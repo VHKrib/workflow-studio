@@ -117,7 +117,7 @@ function bindUI() {
   $('#flowName').addEventListener('change', e => { flow().name = e.target.value.trim() || '未命名'; saveStore(); renderWorkflowList(); });
 
   $('#zoomIn').onclick = () => { zoom = Math.min(1.8, zoom + 0.1); applyZoom(); drawEdges(); };
-  $('#zoomOut').onclick = () => { zoom = Math.max(0.4, zoom - 0.1); applyZoom(); drawEdges(); };
+  $('#zoomOut').onclick = () => { zoom = Math.max(0.3, zoom - 0.1); applyZoom(); drawEdges(); };
   $('#zoomReset').onclick = () => { zoom = 1; applyZoom(); drawEdges(); };
   bindPanZoom();
 }
@@ -142,7 +142,7 @@ function bindPanZoom() {
   wrap.addEventListener('wheel', e => {
     if (!e.metaKey && !e.ctrlKey) return;
     e.preventDefault();
-    zoom = Math.min(1.8, Math.max(0.4, zoom - e.deltaY * 0.0015));
+    zoom = Math.min(1.8, Math.max(0.3, zoom - e.deltaY * 0.0015));
     applyZoom(); drawEdges();
   }, { passive: false });
 }
@@ -302,6 +302,7 @@ function linkDoc(w) {
       id: n.id, kind: n.kind, title: n.title, body: n.body || '', impl: implOf(n),
       mods: modsOf(n).map(m => ({ type: m.type, name: m.name })),
       position: { x: Math.round(n.x), y: Math.round(n.y) },
+      draft: !!n.draft, seed: !!n.seed,
     })),
     edges: w.edges.map(e => [e[0], e[1]]),
   };
@@ -326,14 +327,21 @@ function applyLinkDoc(doc) {
   LINK.applying = true;
   if (doc.name) w.name = String(doc.name);
   if (doc.agent !== undefined) w.agent = doc.agent || '';
-  w.nodes = doc.cards.map(c => ({
-    id: c.id || uid(),
-    kind: ['in', 'proc', 'out'].includes(c.kind) ? c.kind : 'proc',
-    title: String(c.title || ''), body: String(c.body || ''), impl: String(c.impl || ''),
-    mods: (c.mods || []).map(m => ({ id: uid(), type: m.type || KIND_MOD[c.kind] || 'tool', name: String(m.name || '') })),
-    checks: [], chat: [], status: 'idle',
-    x: c.position ? Number(c.position.x) || 0 : 0, y: c.position ? Number(c.position.y) || 0 : 0,
-  }));
+  // 状态文件是「人和 agent 共用的底稿」，它只带结构（卡片/模块/正文/实现/坐标）。
+  // 卡片自己的对话、校验点、运行状态只活在这台机器上：按 id 认领回来，别因为外面改了一次就清空。
+  const old = new Map(w.nodes.map(n => [n.id, n]));
+  w.nodes = doc.cards.map(c => {
+    const prev = old.get(c.id) || {};
+    return {
+      id: c.id || uid(),
+      kind: ['in', 'proc', 'out'].includes(c.kind) ? c.kind : 'proc',
+      title: String(c.title || ''), body: String(c.body || ''), impl: String(c.impl || ''),
+      mods: (c.mods || []).map(m => ({ id: uid(), type: m.type || KIND_MOD[c.kind] || 'tool', name: String(m.name || '') })),
+      checks: (prev.checks || []).slice(), chat: (prev.chat || []).slice(), status: prev.status || 'idle',
+      draft: !!c.draft, seed: !!c.seed,
+      x: c.position ? Number(c.position.x) || 0 : 0, y: c.position ? Number(c.position.y) || 0 : 0,
+    };
+  });
   const ids = new Set(w.nodes.map(n => n.id));
   w.edges = (doc.edges || []).filter(e => Array.isArray(e) && ids.has(e[0]) && ids.has(e[1]));
   w.version = Math.max(w.version || 1, doc.version || 1);
@@ -350,7 +358,7 @@ function applyLinkDoc(doc) {
   return true;
 }
 // 只补变了的那部分：新卡追加、改过的卡换掉自己那块、删掉的移走；连线重画
-const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y]);
+const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y, n.seed ? 1 : 0]);
 function patchNodesDiff() {
   const w = flow(); if (!w) return;
   const live = new Map([...canvas.querySelectorAll('.node')].map(el => [el.dataset.id, el]));
@@ -419,7 +427,7 @@ function renderWorkflowList() {
     el.className = 'wf' + (w.id === store.current ? ' on' : '');
     el.onclick = () => switchWorkflow(w.id);
     el.innerHTML = `<div class="wn">${esc(w.name)}</div>
-      <div class="ws">${w.nodes.length} 卡 · ${w.agent ? esc(agentName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
+      <div class="ws">${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
       <div class="x" title="删除">✕</div>`;
     el.querySelector('.x').onclick = (ev) => deleteWorkflow(w.id, ev);
     box.appendChild(el);
@@ -437,7 +445,10 @@ function agentOptionsHTML(sel) {
   const act = agents.filter(a => !a.stopped || a.id === sel);
   const stop = agents.filter(a => a.stopped && a.id !== sel);
   let h = `<option value="">— 未指派 —</option>`;
-  h += `<optgroup label="在用（派工白名单）">` +
+  // 右下角对话框固定对接平台主管（default profile），它不在 profiles/ 目录下，但得能选中、显示成「平台主管」
+  const supOpt = agents.some(a => a.id === DOCK_AGENT) ? ''
+    : `<option value="${DOCK_AGENT}" ${sel === DOCK_AGENT ? 'selected' : ''}>${esc(execName(DOCK_AGENT))}（${DOCK_AGENT}）</option>`;
+  h += `<optgroup label="在用（派工白名单）">` + supOpt +
     act.map(a => `<option value="${a.id}" ${a.id === sel ? 'selected' : ''}>${esc(a.name)}（${a.id}）</option>`).join('') +
     `</optgroup>`;
   if (stop.length) h += `<optgroup label="已停用（不在派工白名单）">` +
@@ -526,7 +537,7 @@ function nodeEl(n) {
   el.title = '双击打开右栏：改名字、和 agent 聊这张卡';
   el.innerHTML = `
     <div class="hd">
-      <span class="kind">${k.label}</span>
+      <span class="kind">${k.label}${n.seed ? ' · 起草中' : ''}</span>
       <div class="t">${esc(n.title)}</div>
       <div class="st ${n.status}">${statusDot(n)}</div>
     </div>
@@ -1169,7 +1180,7 @@ function patchLive(el, m, whoLabel) {
   }
   let txt = el.querySelector('.txt');
   if (!txt) { txt = document.createElement('div'); txt.className = 'txt'; el.appendChild(txt); }
-  txt.innerHTML = mdToHTML(m.text || '');
+  txt.innerHTML = mdToHTML(m.human || m.text || '');
 }
 function bubblesHTML(msgs, conf, emptyText, waiting, whoLabel) {
   const who = esc(whoLabel || agentName(flow().agent) || 'agent');
@@ -1182,9 +1193,12 @@ function bubblesHTML(msgs, conf, emptyText, waiting, whoLabel) {
   let h = msgs.length ? msgs.map((m, i) => {
     if (m.role === 'me') return `<div class="msg me">${mdToHTML(m.text)}</div>`;
     const meta = [m.secs ? m.secs + 's' : '', (m.steps && m.steps.length) ? m.steps.length + ' 步' : ''].filter(Boolean).join(' · ');
-    const body = m.text ? (m.text.length > 900 && !m.live
-      ? `<div class="txt">${mdToHTML(m.text.slice(0, 600))}</div><details class="more"><summary>展开全文（${m.text.length} 字）</summary><div class="txt">${mdToHTML(m.text)}</div></details>`
-      : `<div class="txt">${mdToHTML(m.text)}</div>`) : '';
+    const shown = m.human || m.text;                     // 有「人话摘要」就显示摘要（原始 JSON 收进折叠块）
+    const rawBox = (m.human && m.text && m.text !== m.human)
+      ? `<details class="more raw"><summary>看原话</summary><div class="txt"><pre>${esc(m.text)}</pre></div></details>` : '';
+    const body = (shown ? (shown.length > 900 && !m.live
+      ? `<div class="txt">${mdToHTML(shown.slice(0, 600))}</div><details class="more"><summary>展开全文（${shown.length} 字）</summary><div class="txt">${mdToHTML(shown)}</div></details>`
+      : `<div class="txt">${mdToHTML(shown)}</div>`) : '') + rawBox;
     let box = `<div class="msg agent${m.live ? ' live' : ''}"${m.live ? ' data-live="1"' : ''}>
         <div class="who">${who}${meta ? `<span class="meta">${esc(meta)}</span>` : ''}${m.live ? '<span class="meta live-dot">进行中</span>' : ''}</div>
         ${stepsHTML(m.steps)}${thinkHTML(m)}${body}`;
@@ -1384,6 +1398,7 @@ async function dockSend(text) {
   if (!msg) return;
   const temp = !!w.temp;
   w.chat = (w.chat || []).concat([{ role: 'me', text: msg, at: Date.now() }]).slice(-30);
+  if (temp) seedDraft(msg);                       // 第一张卡 0 秒上屏：你这句话就是这条链路的输入，模型的第一张真卡回来再接管它
   saveStore(false); renderDock();
   const inEl = $('#dockIn'); if (inEl) inEl.value = '';
   const live = await runStream({
@@ -1393,7 +1408,7 @@ async function dockSend(text) {
       renderDock();
       if (!temp) return;
       const last = w.chat[w.chat.length - 1];
-      if (last && last.live) growTempFrom(last.text);
+      if (last && last.live) { last.human = tempHuman(last.text, true); growTempFrom(last.text); }
       else growTempFrom('');
     },
     profile: temp ? (w.agent || DOCK_AGENT) : DOCK_AGENT,
@@ -1402,6 +1417,10 @@ async function dockSend(text) {
     timeoutMs: temp ? 240000 : 180000,
   });
   w.chat = w.chat.slice(-30);
+  if (temp) {
+    const last = w.chat[w.chat.length - 1];
+    if (last && last.role === 'agent') last.human = tempHuman(last.text, false);
+  }
   saveStore(false); renderDock();
   if (temp) finishTemp(live.text || '');
   return live;
@@ -1949,7 +1968,7 @@ function fitView(fold = false) {
   if (fold && dock && need(wrap.clientWidth - dock, wrap.clientHeight) < 0.5) { dockOpen = false; renderDock(); dock = 0; }
   const W = Math.max(320, wrap.clientWidth - dock), H = wrap.clientHeight;
   const fit = need(W, H);
-  zoom = Math.max(0.4, Math.min(1, Math.floor(fit * 20) / 20));     // 0.4 是缩放条的下限
+  zoom = Math.max(0.3, Math.min(1, Math.floor(fit * 20) / 20));     // 0.3 是缩放条的下限：对话框开着时宁可字小一点，也别让卡压在它底下
   applyZoom();
   // 放得下就居中；还是放不下就从左上角开始（先看见输入卡），往右拖着看
   const wide = (x1 - x0 + 2 * pad) * zoom > W, tall = (y1 - y0 + 2 * pad) * zoom > H;
@@ -1998,6 +2017,7 @@ function layoutChain(w) {
 function placeChain() {
   const p = rd.plan, c = rd.chain;
   if (!p || !c || rd.busy) return;
+  if (isTemp()) dropTemp();                      // 正在临时画布上也照常落卡：先把这张草稿画布收干净，别把它的卡带进正式工作流
   const tiles = new Map([...document.querySelectorAll('#rPrev .rtile[data-key]')].map(t => [t.dataset.key, t.getBoundingClientRect()]));
   $('#readModal').classList.remove('on');
   let w = flow();
@@ -2090,7 +2110,7 @@ function promoteTemp() {
     agent: t.agent || '',
     chat: (t.chat || []).slice(-30),
     nodes: t.nodes.map(n => Object.assign({}, n, {
-      draft: false,
+      draft: false, seed: false,
       mods: modsOf(n).map(m => ({ ...m, id: uid() })),
       checks: (n.checks || []).slice(), chat: [],
     })),
@@ -2123,6 +2143,56 @@ function tempCardNode(c) {
     x: 40 + col * 350, y: 40 + row * 210,
   };
 }
+// 第一张卡 0 秒上屏：模型首次出字要 8 秒上下，画布不能干等着。
+// 先把「你这句话」立成这条链路的输入（内容是人的原话，不是编的），agent 的第一张真卡回来接管它（id、位置不变）。
+function seedDraft(msg) {
+  const w = tempFlow;
+  if (!w || w.nodes.length) return null;
+  const body = String(msg || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  const n = {
+    id: uid(), kind: 'in', title: '本次要求', body, impl: '',
+    mods: [], checks: [], chat: [], status: 'idle', draft: true, seed: true, x: 40, y: 40,
+  };
+  w.nodes.push(n); paintOne(n); drawEdges();
+  w.version = (w.version || 1) + 1; w.updated_at = Date.now();
+  $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
+  renderTempBar(); queueLinkWrite(w);
+  return n;
+}
+// 起草卡被 agent 的第一张真卡接管：内容换成它的，位置按它该在的那一列重摆（临时画布的卡都是自动摆的）
+function adoptDraft(draft, c) {
+  const nn = tempCardNode(c);
+  Object.assign(draft, { kind: nn.kind, title: nn.title, body: nn.body, impl: nn.impl, mods: nn.mods, seed: false, x: nn.x, y: nn.y });
+  paintOne(draft);
+  return draft;
+}
+// 卡片是不是完整落在看得见的画布区里（不能被右下角对话框盖住）
+function cardInView(el) {
+  if (!el) return true;
+  const r = el.getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+  const dock = (dockOpen && $('#dock')) ? $('#dock').getBoundingClientRect() : null;
+  const right = dock && dock.width ? Math.min(wr.right, dock.left) : wr.right;
+  return r.left >= wr.left - 2 && r.top >= wr.top - 2 && r.right <= right + 2 && r.bottom <= wr.bottom + 2;
+}
+function anyCardOutOfView() {
+  for (const el of canvas.querySelectorAll('.node')) if (!cardInView(el)) return true;
+  return false;
+}
+// 临时画布的气泡说人话：流里的原始 JSON 换成「在搭哪几张卡」，原话收进折叠块，不糊给用户
+function tempHuman(text, liveNow) {
+  const raw = String(text || '');
+  const cards = partialCardObjects(raw);
+  const prose = raw.split('{')[0].replace(/\s+/g, ' ').trim();
+  const L = { in: '输入', proc: '加工', out: '成果' };
+  const lines = cards.slice(0, 8).map(c => {
+    const kk = KIND_ALIAS[String(c.kind || '').toLowerCase()] || KIND_ALIAS[c.kind];
+    const body = String(c.body || '').replace(/\s+/g, ' ').trim();
+    return `- ${L[kk] || '加工'}｜${String(c.title).slice(0, 30)}${body ? '：' + body.slice(0, 46) : ''}`;
+  });
+  if (!lines.length) return prose ? prose.slice(0, 320) : (liveNow ? '正在想…' : '');
+  const head = liveNow ? `正在搭这条链路（已经 ${cards.length} 张卡）：` : `搭好了：${cards.length} 张卡。`;
+  return head + '\n' + lines.join('\n');
+}
 // 流里已经写完整的卡片对象（还没写完的那张先不长出来）
 function partialCardObjects(text) {
   const t = String(text || ''), i = t.indexOf('"cards"');
@@ -2149,18 +2219,20 @@ function growTempFrom(text) {
   const w = tempFlow;
   if (!w || document.querySelector('.node.dragging')) return 0;   // 正在拖卡：拖完再长，别抢手
   let added = 0, touched = false;
+  let draft = w.nodes.find(n => n.seed) || null;
   for (const x of partialCardObjects(text)) {
     if (w.nodes.length >= 12) break;
     const raw = String(x.kind || '').trim();
     const kind = KIND_ALIAS[raw.toLowerCase()] || KIND_ALIAS[raw];
     const title = String(x.title || '').replace(/\s+/g, ' ').trim().slice(0, 24);
     if (!kind || !title || /^(短标题|标题|卡名|示例)$/.test(title)) continue;
-    let n = w.nodes.find(v => v.title === title);
+    let n = w.nodes.find(v => v.title === title && !v.seed);
     if (!n) {
       if (!String(x.body || '').trim()) continue;                  // 正文还没写出来：等下一帧
-      n = tempCardNode({ kind, title, body: String(x.body), impl: String(x.impl || x.internal || ''), mods: x.mods });
-      w.nodes.push(n);
-      paintOne(n); added++;
+      const card = { kind, title, body: String(x.body), impl: String(x.impl || x.internal || ''), mods: x.mods };
+      if (draft) { n = adoptDraft(draft, card); draft = null; }    // 第一张真卡接管起草卡
+      else { n = tempCardNode(card); w.nodes.push(n); paintOne(n); }
+      added++;
     } else {
       const body = String(x.body || ''), impl = String(x.impl || x.internal || '');
       if (body && (n.body !== body || (n.impl || '') !== impl)) { n.body = body; n.impl = impl; paintOne(n); touched = true; }
@@ -2176,6 +2248,7 @@ function growTempFrom(text) {
     $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
     renderTempBar(); queueLinkWrite(w);
   }
+  if (added && anyCardOutOfView()) fitView(false);                 // 长出来的卡看不见（或被对话框盖住）就把视野调过去
   return added;
 }
 // 一次回答结束：用完整计划对齐一次（补齐漏的卡、按计划的连线接上），然后停下等人决定
@@ -2184,10 +2257,13 @@ function finishTemp(text) {
   if (!w) return;
   const plan = parseChainPlan(text || '');
   if (plan) {
-    const byTitle = new Map(w.nodes.map(n => [n.title, n]));
+    const byTitle = new Map(w.nodes.filter(n => !n.seed).map(n => [n.title, n]));
     const idOf = new Map();
+    let draft = w.nodes.find(n => n.seed) || null;
+    const planIn = plan.cards.find(c => c.kind === 'in') || plan.cards[0];   // 计划里顶头那张（输入卡）：起草卡并进去，别留两张输入
     for (const c of plan.cards) {
       let n = byTitle.get(c.title);
+      if (!n && draft && c === planIn) { n = adoptDraft(draft, c); draft = null; byTitle.set(c.title, n); }
       if (!n) { n = tempCardNode(c); w.nodes.push(n); paintOne(n); byTitle.set(c.title, n); }
       idOf.set(c.key, n.id);
     }
@@ -2200,7 +2276,7 @@ function finishTemp(text) {
   $('#flowName').value = w.name;
   $('#footStat').textContent = `${w.nodes.length} 卡 / ${w.edges.length} 连线`;
   renderTempBar(); queueLinkWrite(w);
-  if (w.nodes.length) fitView(false);     // 不折对话框：人正在对话框里跟它聊
+  if (w.nodes.length && anyCardOutOfView()) fitView(false);     // 不折对话框：人正在对话框里跟它聊；但卡不能被它盖住
 }
 
 // ---------- 导入导出 ----------

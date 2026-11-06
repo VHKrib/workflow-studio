@@ -39,6 +39,9 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   // 冷启动/刚 render 完的量测是中间态：先等布局与缩放稳下来
   await wait(300);
   const start = JSON.parse(await ev(`(() => { const w = document.querySelector('#wrap'); return JSON.stringify({ sl: w.scrollLeft, st: w.scrollTop, zoom }); })()`));
+  // pan 那条按 1 倍算卡片该在屏幕哪：别的脚本（fitView / 临时画布）可能把缩放留成 0.65，先归位再量，收尾再还原
+  await ev(`(() => { zoom = 1; applyZoom(); drawEdges(); return 1; })()`);
+  await wait(200);
 
   // 1) 平移范围：左上到底时卡片应被推到 ORIGIN 附近，右下到底能到 scrollWidth 尽头
   const pan = JSON.parse(await ev(`(() => {
@@ -126,7 +129,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   })()`));
   pass('layout', lay.overlaps === 0, `${lay.n} 张卡，重叠 ${lay.overlaps} 处`);
 
-  // 收尾：视野还原到打开时的位置
-  await ev(`(() => { const w = document.querySelector('#wrap'); w.scrollLeft = ${start.sl}; w.scrollTop = ${start.st}; return 1; })()`);
+  // 收尾：视野与缩放还原到打开时的样子
+  await ev(`(() => { zoom = ${start.zoom}; applyZoom(); const w = document.querySelector('#wrap'); w.scrollLeft = ${start.sl}; w.scrollTop = ${start.st}; drawEdges(); return 1; })()`);
   ws.close(); process.exit(0);
 })().catch(e => { console.error('ERR', e.message); process.exit(1); });
