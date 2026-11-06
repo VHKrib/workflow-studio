@@ -88,15 +88,19 @@ const READ_FAKE = process.env.WF_READ_FAKE || '';
 // 验收用：WF_CHAT_FAKE=hang 时，普通对话（卡片聊天 / 右下角对话框）也起一个不出声的子进程，
 // 用来验「对话正在跑的时候回滚，运行要被真的停掉」。平时不设就照常调 agent。
 const CHAT_FAKE = process.env.WF_CHAT_FAKE || '';
-ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000, toolsets }) => new Promise((resolve) => {
+// 只读预演固定用零工具工具组：主进程这边再盖一次——渲染层就算传错，也拿不到终端/文件/消息/MCP
+const PREVIEW_TOOLSETS = 'context_engine,no_mcp';
+ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000, toolsets, preview }) => new Promise((resolve) => {
   if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES });
+  if (preview) toolsets = PREVIEW_TOOLSETS;
   const args = ['-p', profile, 'chat', '--format', 'stream-json'];
   if (toolsets) args.push('-t', String(toolsets));     // 只给指定工具组（分析链路时 todo,no_mcp：不能跑命令、不能写文件、不碰 MCP 接口）
   args.push('-q', prompt);
   const fake = (READ_FAKE === 'hang' && toolsets === 'todo,no_mcp') || (CHAT_FAKE === 'hang' && !toolsets);
   const child = fake ? spawn('/bin/sleep', ['600'], { env: { ...process.env } }) : spawn(HERMES, args, { env: { ...process.env } });
   runs.set(runId, child);
-  let buf = '', finalText = '', tokens = null, err = '', killedByTimeout = false;
+  if (preview) console.log(`[预演] 起进程：hermes -p ${profile} chat --format stream-json -t ${toolsets}（零工具 · 只出结论）`);
+  let buf = '', finalText = '', tokens = null, err = '', killedByTimeout = false, toolCalls = 0;
   const send = ev => { try { if (!e.sender.isDestroyed()) e.sender.send('agent:event', { runId, ev }); } catch (_) { } };
   const timer = setTimeout(() => { killedByTimeout = true; try { child.kill('SIGTERM'); } catch (_) { } }, timeoutMs);
   child.stdout.on('data', d => {
@@ -107,6 +111,7 @@ ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000,
       if (!line) continue;
       let o; try { o = JSON.parse(line); } catch (_) { continue; }
       if (o.type === 'result') { finalText = o.text || ''; tokens = o.tokens || null; }
+      if (o.type === 'tool_use') toolCalls++;
       send(o);
     }
   });
@@ -114,7 +119,9 @@ ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000,
   child.on('error', e2 => { clearTimeout(timer); runs.delete(runId); resolve({ ok: false, error: String(e2) }); });
   child.on('close', code => {
     clearTimeout(timer); runs.delete(runId);
-    resolve({ ok: code === 0 && !killedByTimeout, code, text: finalText, tokens, error: err.slice(-2000), timedOut: killedByTimeout });
+    // 预演的证据落在主进程日志里：工具调用 0 次 = 这次确实没跑命令、没读写文件、没发消息
+    if (preview) console.log(`[预演] 结束：工具调用 ${toolCalls} 次 · 退出码 ${code}${killedByTimeout ? ' · 到点被杀' : ''}`);
+    resolve({ ok: code === 0 && !killedByTimeout, code, text: finalText, tokens, error: err.slice(-2000), timedOut: killedByTimeout, toolCalls });
   });
 }));
 ipcMain.handle('agent:cancel', (_e, runId) => {

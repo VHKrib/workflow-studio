@@ -80,6 +80,8 @@ Three ideas it is built around:
 - **Per-card validation pass** — walks the chain in edge order, marks each card `ok` / `needs work`, and
   writes the verdict into that card's chat so the history stays with the card.
 - **Multiple canvases** — left sidebar lists workflows; each has its own cards, edges and agent; export/import as JSON.
+- **Copy a workflow** — one click (`复制链路` or the `⧉` on any row) makes an independent copy: cards, edges, modules, wording, executor. Rename suffix keeps the list unambiguous; editing one never touches the other.
+- **Check before running** — a local static pass flags broken links, process cards missing an input or output, empty cards and chains split in two — each with the card name and how to fix it. A **read-only rehearsal** then asks the executor, card by card, what it would do and what it is missing; it runs with **zero tools** (no commands, no file writes, no messages, no publishing, no spending) and the answers land back on the cards. One click clears them.
 - **Radial menu** — press and hold right mouse button (or `Space`) for add / ask / duplicate / delete / validate / run.
 
 ## 读取一个 agent 的工作链路
@@ -122,6 +124,17 @@ Three ideas it is built around:
 输入时光标不会跳。改完再叫 agent，它读到的就是改过的新内容。
 
 ![版本与回滚](docs/versions.png)
+
+## 复制、选中、测一测
+
+**复制一条链路。** 顶栏「复制链路」（或右栏每条链路右上角的 `⧉`）就把当前这条复制成一条独立副本：卡片、连线、每张卡的模块、输入元素、加工方式、执行方全都带过去。副本叫「原名（副本）」，重名会继续往后编号。改副本不影响原件，改原件也不影响副本。
+
+**选中的那条。** 右栏里选中的行有一条橘色竖条和「选中」徽标，别的行不标记；关掉窗口重开，选中的还是上次那条。测试只测选中的这一条。
+
+**测试先做两件事。** 顶栏「测试」：
+
+- **静态体检**——不用调模型，本机就算。有没有断链（有卡喂不到、有卡没人接）、加工卡缺输入或缺产出、空卡（只有标题没正文）、连成两截、绕成圈；每条写清是哪张卡、什么问题、怎么补。
+- **只读预演**——让这条链路的执行方按卡片顺序走一遍，每张卡回答一句「按现在的写法这一步我会怎么做、缺什么材料」。它**没有任何工具**：跑不了命令、读写不了文件、发不了消息、不发布、不付费，只出结论。结论回填到那张卡上（卡片挂「预演 ✓」、左栏看全文），跑完可以一键「清空预演」，卡上不留残渣。
 
 ## Quickstart
 
@@ -197,6 +210,7 @@ node  = { id, kind: 'in'|'proc'|'out', title, body, impl, mods: [], checks: [], 
 mod   = { id, type: 'mat'|'tool'|'res', name }      // 素材 / 工具 / 成果，跟着卡片类型走
 edge  = [fromId, toId]                               // 插槽里显示什么由连线推出来，不单独存
 chat  = [{ role: 'me'|'agent', text, at, opts? }]   // 每张卡自己的对话，opts 是那次回答里的候选卡
+preview = { at, ok, secs, steps, text }             // 只读预演结论：只活在这台机器上，不进状态文件与版本快照
 ```
 
 Persisted to `localStorage['tcflow.v4']` (v3 boards are migrated on first load: `impl` is filled in,

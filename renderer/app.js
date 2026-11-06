@@ -30,6 +30,11 @@ const LINK = { paths: {}, timer: 0, pendingId: '', applying: false, delay: 350 }
 const VER = { max: 20, delay: 300, list: {}, sig: {}, paths: {}, timer: 0, pending: {}, busy: false };
 let changeBy = 'me';        // 这一批改动是谁做的：'me' 人 / 'agent' agent 提议后应用
 const RUNS = new Map();     // 正在跑的对话 runId → { flowId, cancelled }：回滚时按链路把它们停掉
+// 只读预演：一条链路按卡片顺序问执行方「这一步你会怎么做、缺什么材料」，只出结论。
+// 工具组固定为零工具（context_engine 解析不到任何工具 + no_mcp 关掉 MCP 连接）：跑不了命令、
+// 读写不了文件、发不了消息、碰不到任何对外接口。主进程还会把渲染层传来的工具组盖成这一份。
+const PREVIEW_TOOLSETS = 'context_engine,no_mcp';
+const PV = { busy: false, runId: null, done: 0, total: 0, cur: '', liveSteps: 0, cancel: false, error: '' };
 let store = { workflows: [], current: null };
 let selId = null;          // 只是选中（转盘/删除键用），不打开任何面板
 let panelCardId = null;     // 右栏正在看哪张卡：只有双击卡片（或卡上的按钮）才会打开
@@ -93,6 +98,12 @@ function cardLine(n, i) {
 
 function bindUI() {
   $('#btnNew').onclick = () => createWorkflow('新工作流 ' + (store.workflows.length + 1));
+  $('#btnCopy').onclick = () => { const w = flow(); if (w && !w.temp) duplicateWorkflow(w.id); };
+  $('#btnTest').onclick = openTest;
+  $('#tClose').onclick = closeTest;
+  $('#tCheck').onclick = () => paintTest();
+  $('#tRun').onclick = startPreview;
+  $('#tClear').onclick = clearPreviews;
   $('#btnTempChat').onclick = startTempCanvas;
   $('#tempSave').onclick = promoteTemp;
   $('#tempClose').onclick = closeTempCanvas;
@@ -267,6 +278,8 @@ function loadStore() {
     store.workflows.forEach(w => { hit += plainifyLegacy(w); hit += plainifySpecific(w); hit += seedMods(w); });
     if (hit) saveStore();
   }
+  // 选中的那条要记得住：上次选谁就是谁；链路被删掉了才退回第一条
+  if (!store.workflows.some(w => w.id === store.current)) store.current = store.workflows[0] ? store.workflows[0].id : null;
   store.workflows.forEach(w => { w.version = w.version || 1; w.updated_at = w.updated_at || Date.now(); });
 }
 // 画布改动 → 本地存储 + 共享状态文件（临时画布不写本地存储：关掉就没了）
@@ -360,7 +373,7 @@ function applyLinkDoc(doc) {
       title: String(c.title || ''), body: String(c.body || ''), impl: String(c.impl || ''),
       mods: (c.mods || []).map(m => ({ id: uid(), type: m.type || KIND_MOD[c.kind] || 'tool', name: String(m.name || '') })),
       checks: (prev.checks || []).slice(), chat: (prev.chat || []).slice(), status: prev.status || 'idle',
-      draft: !!c.draft, seed: !!c.seed,
+      preview: prev.preview || null, draft: !!c.draft, seed: !!c.seed,
       x: c.position ? Number(c.position.x) || 0 : 0, y: c.position ? Number(c.position.y) || 0 : 0,
     };
   });
@@ -380,7 +393,7 @@ function applyLinkDoc(doc) {
   return true;
 }
 // 只补变了的那部分：新卡追加、改过的卡换掉自己那块、删掉的移走；连线重画
-const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y, n.seed ? 1 : 0]);
+const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y, n.seed ? 1 : 0, n.preview ? 1 : 0]);
 function patchNodesDiff() {
   const w = flow(); if (!w) return;
   const live = new Map([...canvas.querySelectorAll('.node')].map(el => [el.dataset.id, el]));
@@ -597,6 +610,7 @@ function applyVerSnapshot(w, snap, keepPos) {
       title: String(c.title || ''), body: String(c.body || ''), impl: String(c.impl || ''),
       mods: (c.mods || []).map(m => ({ id: uid(), type: m.type || KIND_MOD[c.kind] || 'tool', name: String(m.name || '') })),
       checks: (c.checks || []).slice(), chat: (prev.chat || []).slice(), status: prev.status || 'idle',
+      preview: prev.preview || null,
       x: now ? now.x : (Number(c.x) || 0), y: now ? now.y : (Number(c.y) || 0),
     };
   });
@@ -674,6 +688,7 @@ function syncFoot(w) {
 // ---------- 工作流 ----------
 function createWorkflow(name, seed = false) {
   if (isTemp()) dropTemp();
+  stopPreview();
   const w = { id: 'w' + Date.now().toString(36), name, agent: '', nodes: [], edges: [], chat: [], version: 1, updated_at: Date.now() };
   if (seed) {
     const a = { id: uid(), kind: 'in',   title: '商品编号', body: '一件示例商品（编号 A-1001），加上它上次采集的那批图（主图 5 张、详情长图 3 张）和页面上的标题、价格、规格。', checks: [],
@@ -694,26 +709,73 @@ function createWorkflow(name, seed = false) {
   saveStore(); renderWorkflowList(); render();
   return w;
 }
-function switchWorkflow(id) { if (isTemp()) dropTemp(); store.current = id; selId = null; panelCardId = null; panelOpen = false; saveStore(false); renderWorkflowList(); render(); centerView(); }
+
+// ---------- 复制链路：一键复制成一条独立副本 ----------
+// 带过去：卡片（类型/名字/正文/内部实现/模块/校验/位置）、连线、执行方；不带的：对话、预演结果（那是原件这台机器上的记录）。
+// 副本的每张卡、每块模块、每条连线都换新 id —— 改副本不影响原件，改原件也不影响副本。
+function copyName(base) {
+  const b = String(base || '').trim() || '未命名';
+  let name = b + '（副本）', i = 2;
+  while (store.workflows.some(w => w.name === name)) name = b + `（副本 ${i++}）`;
+  return name;
+}
+function duplicateWorkflow(id) {
+  const src = store.workflows.find(w => w.id === id);
+  if (!src) return null;
+  if (isTemp()) dropTemp();
+  const idOf = new Map((src.nodes || []).map(n => [n.id, uid()]));
+  const w = {
+    id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    name: copyName(src.name),
+    agent: src.agent || '',
+    nodes: (src.nodes || []).map(n => ({
+      id: idOf.get(n.id), kind: n.kind, title: n.title, body: n.body || '', impl: implOf(n),
+      mods: modsOf(n).map(m => ({ id: uid(), type: m.type, name: m.name })),
+      checks: (n.checks || []).slice(), chat: [], status: 'idle',
+      x: Number(n.x) || 0, y: Number(n.y) || 0,
+    })),
+    edges: (src.edges || []).map(([a, b]) => [idOf.get(a), idOf.get(b)]).filter(([a, b]) => a && b),
+    chat: [], version: 1, updated_at: Date.now(),
+    copiedFrom: { id: src.id, name: src.name, at: Date.now() },
+  };
+  const at = store.workflows.indexOf(src);
+  store.workflows.splice(at + 1, 0, w);
+  store.current = w.id; selId = null; panelCardId = null; panelOpen = false;
+  // 副本从第 1 版起记：先写一份基线，后面改动才有回滚点（和启动时 initVersions 同一套）
+  const snap = verSnapshot(w);
+  VER.sig[w.id] = verContent(snap);
+  pushVersion(w.id, { v: 1, at: Date.now(), by: 'me', what: `复制自「${src.name}」`, snapshot: snap });
+  try { window.tcflow.linkPath(w.id).then(p => { if (p) LINK.paths[w.id] = p; }).catch(() => { }); } catch (e) { }
+  saveStore();                                   // 落本地存储 + 写副本自己的状态文件（内容没变，不会再记一版）
+  renderWorkflowList(); render(); centerView();
+  return w;
+}
+function switchWorkflow(id) { if (isTemp()) dropTemp(); stopPreview(); store.current = id; selId = null; panelCardId = null; panelOpen = false; saveStore(false); renderWorkflowList(); render(); centerView(); }
 function deleteWorkflow(id, ev) {
   ev.stopPropagation();
   if (store.workflows.length <= 1) return alert('至少保留一个工作流');
   if (!confirm('删除这个工作流？画布内容会一起删掉。')) return;
+  stopPreview();
   store.workflows = store.workflows.filter(w => w.id !== id);
   if (store.current === id) store.current = store.workflows[0].id;
   delete VER.list[id]; delete VER.sig[id]; delete VER.paths[id];
   try { window.tcflow.versionDrop(id); } catch (e) { }   // 链路删了，它的版本底稿也一起清掉
+  try { window.tcflow.linkDrop(id); delete LINK.paths[id]; } catch (e) { }   // 共享状态文件也不留（副本删掉后不残留文件）
   saveStore(false); renderWorkflowList(); render();
 }
 function renderWorkflowList() {
   const box = $('#wfList'); box.innerHTML = '';
   for (const w of store.workflows) {
     const el = document.createElement('div');
-    el.className = 'wf' + (w.id === store.current ? ' on' : '');
+    const on = w.id === store.current;
+    el.className = 'wf' + (on ? ' on' : '');
+    el.dataset.id = w.id;
     el.onclick = () => switchWorkflow(w.id);
-    el.innerHTML = `<div class="wn">${esc(w.name)}</div>
+    el.innerHTML = `<div class="wn">${esc(w.name)}${on ? '<span class="wsel">选中</span>' : ''}</div>
       <div class="ws">${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
+      <div class="dup" title="复制这条链路">⧉</div>
       <div class="x" title="删除">✕</div>`;
+    el.querySelector('.dup').onclick = (ev) => { ev.stopPropagation(); duplicateWorkflow(w.id); };
     el.querySelector('.x').onclick = (ev) => deleteWorkflow(w.id, ev);
     box.appendChild(el);
   }
@@ -836,7 +898,7 @@ function nodeEl(n) {
     <div class="body" data-ph="${esc(k.ph)}">${esc(n.body)}</div>
     ${modsHTML(n)}
     <div class="ft">
-      <div class="checks">${(n.checks || []).map(c => `<span class="chip">${esc(c)}</span>`).join('')}</div>
+      <div class="checks">${(n.checks || []).map(c => `<span class="chip">${esc(c)}</span>`).join('')}${n.preview ? `<span class="chip pvchip" title="这张卡有只读预演的结论（左栏 / 测试里看）">预演 ✓</span>` : ''}</div>
       ${implOf(n) ? '<span class="gar" data-act="impl" title="内部实现已封装：卡片上不显示，点开看">⚙</span>' : ''}
       <span class="mini" data-act="ask" title="在右栏问 agent 这张卡">? 问</span>
       <span class="mini" data-act="opt" title="让 agent 给下一步候选，选一个加进流程">✦ 下一步</span>
@@ -1344,6 +1406,8 @@ function renderPanel() {
       </div>
     </div>
 
+    ${n.preview ? `<div class="pvbox"><div class="pvhd"><b>预演结果</b><span>${hhmm(n.preview.at)} · 只读 · 工具调用 ${n.preview.steps || 0} 次</span></div><div class="pvtext">${esc(n.preview.text)}</div></div>` : ''}
+
     <details class="internal">
       <summary>⚙ 内部实现 · 校验 · 卡片上不显示</summary>
       <textarea id="pImpl" placeholder="执行时真正跑什么：命令 / 脚本 / 路径 / 字段名（例：hermes -p &lt;agent&gt; chat -q …、evidence/&lt;包&gt;/page-fields）">${esc(implOf(n))}</textarea>
@@ -1616,7 +1680,7 @@ const STEP_ICON = {
 };
 function stepLabel(name) { return (STEP_ICON[name] || '⚙') + ' ' + name; }
 
-async function runStream({ msgs, rerender, profile, prompt, toolsets, cards = true, runId, timeoutMs }) {
+async function runStream({ msgs, rerender, profile, prompt, toolsets, cards = true, runId, timeoutMs, preview = false }) {
   runId = runId || ('r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6));
   const flowId = (flow() || {}).id || '';
   const me = { flowId, cancelled: false };
@@ -1646,7 +1710,7 @@ async function runStream({ msgs, rerender, profile, prompt, toolsets, cards = tr
   });
   let r;
   if (USE_STREAM) {
-    try { r = await window.tcflow.askAgentStream({ profile, prompt, runId, toolsets, timeoutMs }); }
+    try { r = await window.tcflow.askAgentStream({ profile, prompt, runId, toolsets, timeoutMs, preview }); }
     catch (e) { r = { ok: false, error: String(e) }; }
   } else {
     const t0 = Date.now();
@@ -1928,6 +1992,199 @@ async function validateAll() {
   }
   openCard(firstFail || w.nodes[0]);
 }
+
+// ---------- 测试这条链路：静态体检 + 只读预演 ----------
+// 一次只测画布上选中的那条（flow()）。体检是纯本机计算，不调模型；预演只出结论、不写画布、不落文件。
+const CHECK_WORD = { link: '接不上', empty: '空卡', split: '断开', cycle: '成圈', agent: '执行方' };
+// 静态体检：断链 / 加工卡缺输入缺产出 / 空卡 / 连成两截 / 成圈 / 没执行方
+function checkFlow(w) {
+  const issues = [];
+  if (!w) return issues;
+  const nodes = w.nodes || [], edges = w.edges || [];
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const add = (n, what, fix, kind) => issues.push({ id: n ? n.id : '', title: n ? n.title : '', what, fix, kind: kind || 'link' });
+  if (!w.agent) add(null, '这条链路还没指派执行方', '在顶栏最上面的执行方里挑一个', 'agent');
+  if (!nodes.length) add(null, '这条链路还没有卡片', '从顶栏「+ 加卡片」开始，输入 → 加工 → 输出各来一张', 'empty');
+  // 连线指向不存在的卡（删卡后残留的线）
+  for (const e of edges) {
+    const a = Array.isArray(e) ? e[0] : '', b = Array.isArray(e) ? e[1] : '';
+    if (!byId.has(a) || !byId.has(b)) add(null, `有一条连线指向不存在的卡（${a || '?'} → ${b || '?'}）`, '删掉这条线，或者把两端的卡补回来');
+  }
+  const ok = edges.filter(e => Array.isArray(e) && byId.has(e[0]) && byId.has(e[1]) && e[0] !== e[1]);
+  const inn = id => ok.filter(([, b]) => b === id).length;
+  const out = id => ok.filter(([a]) => a === id).length;
+  for (const n of nodes) {
+    if (!String(n.body || '').trim()) add(n, '只有标题，没有正文（不知道这一步要什么、做什么、交出什么）', `在左栏把「${(KINDS[n.kind] || KINDS.proc).label}内容」补上一句具体的话`, 'empty');
+    const i = inn(n.id), o = out(n.id);
+    if (n.kind === 'in') {
+      if (!o) add(n, '输入卡没人接（没有卡用到它）', '把它拖进后面那张加工卡的素材槽');
+      if (i) add(n, '有东西连进输入卡（输入卡应该是源头）', '把连进来的那条线撤掉，改接到后面的加工卡上');
+    } else if (n.kind === 'proc') {
+      if (!i) add(n, '加工卡缺输入（没有东西喂给它）', '把前面的输入卡或上一步的成果拖进它的素材槽');
+      if (!o) add(n, '加工卡缺产出（做完没人接）', '接一张输出卡，或者把它拖进下一步的素材槽');
+    } else if (!i) {
+      add(n, '输出卡没人做（没有卡交给它）', '把它拖进前面那张加工卡的成果槽');
+    }
+  }
+  // 绕成圈：顺着线走回自己（自连的线单独点名）
+  for (const e of edges) {
+    const a = Array.isArray(e) ? e[0] : null;
+    if (a && a === e[1] && byId.has(a)) add(byId.get(a), '这张卡连到了自己（绕成圈）', '删掉这条自连的线', 'cycle');
+  }
+  const color = new Map(nodes.map(n => [n.id, 0])), stack = [], seenCycle = new Set();
+  const visit = id => {
+    if (color.get(id) === 1) {
+      const ring = stack.slice(stack.indexOf(id));
+      const key = ring.slice().sort().join('>');
+      if (seenCycle.has(key)) return;
+      seenCycle.add(key);
+      const list = ring.map(x => byId.get(x)).filter(Boolean);
+      if (list.length > 1) add(null, `链路绕成了圈：${list.map(x => '「' + x.title + '」').join(' → ')} → 回到「${list[0].title}」`, '断掉圈里任意一条线', 'cycle');
+      return;
+    }
+    if (color.get(id) === 2) return;
+    color.set(id, 1); stack.push(id);
+    ok.filter(([a]) => a === id).forEach(([, b]) => visit(b));
+    stack.pop(); color.set(id, 2);
+  };
+  nodes.forEach(n => { if (color.get(n.id) === 0) visit(n.id); });
+  // 断成几截：不分方向把卡连成一片，不止一片就是断了
+  if (nodes.length > 1) {
+    const adj = new Map(nodes.map(n => [n.id, []]));
+    ok.forEach(([a, b]) => { adj.get(a).push(b); adj.get(b).push(a); });
+    const comps = [], seen = new Set();
+    for (const n of nodes) {
+      if (seen.has(n.id)) continue;
+      const group = [], q = [n.id]; seen.add(n.id);
+      while (q.length) { const id = q.pop(); group.push(byId.get(id)); for (const nb of adj.get(id) || []) if (!seen.has(nb)) { seen.add(nb); q.push(nb); } }
+      comps.push(group);
+    }
+    if (comps.length > 1) {
+      const main = comps.reduce((a, b) => (b.length > a.length ? b : a));
+      comps.filter(c => c !== main).forEach(c => add(null,
+        `「${c.map(n => n.title).join('」「')}」这一截没接上主链路（整条被拆成 ${comps.length} 截）`,
+        '把这一截接到主链路上（输入 → 加工 → 输出），多余的卡删掉', 'split'));
+    }
+  }
+  return issues;
+}
+// 体检报告原文（一行一条：哪张卡、什么问题、怎么补）
+function checkText(w) {
+  const list = checkFlow(w);
+  if (!list.length) return '没有发现问题';
+  return list.map((x, i) => `${i + 1}. ${x.title ? '「' + x.title + '」' : '整条链路'}｜${x.what}｜怎么补：${x.fix}`).join('\n');
+}
+function openTest() { $('#testModal').classList.add('on'); paintTest(); }
+function closeTest() { stopPreview(); $('#testModal').classList.remove('on'); }
+// 预演只读提示词：只问「你会怎么做、缺什么材料」，不给任何工具
+function previewPrompt(w, n) {
+  return [
+    ...verHead(w),
+    '这是只读预演：你没有任何工具，不能跑命令、读写文件、发消息、发布、付费；只出结论，不许动手。',
+    PLAIN_RULE,
+    `工作流：${w.name}`,
+    `整条流程：\n${chainOrder(w).map(cardLine).join('\n')}`,
+    linkBrief(w),
+    `现在只看这张卡：[${(KINDS[n.kind] || KINDS.proc).label}] ${n.title}｜内容：${n.body || '(空)'}｜内部实现：${implOf(n) || '(未填)'}`,
+    '按现在的写法，这一步你会怎么做、缺什么材料？3 行以内、说人话：先写你会怎么干，再写缺什么（缺就写「缺：…」，不缺写「材料齐」）。',
+  ].filter(Boolean).join('\n');
+}
+function stopPreview() {
+  if (!PV.busy) return;
+  PV.cancel = true;
+  const id = PV.runId;
+  PV.runId = null;
+  if (id) { try { window.tcflow.cancelAgent(id); } catch (e) { } }
+}
+async function startPreview() {
+  const w = flow();
+  if (!w || PV.busy) return;
+  const order = chainOrder(w);
+  if (!order.length) { PV.error = '这条链路还没有卡片，先把卡片放上来'; paintTest(); return; }
+  if (!w.agent) { PV.error = '先给这条链路指派执行方'; paintTest(); return; }
+  Object.assign(PV, { busy: true, cancel: false, done: 0, total: order.length, cur: '', liveSteps: 0, error: '' });
+  paintTest();
+  for (const n of order) {
+    if (PV.cancel) break;
+    PV.cur = n.title; PV.liveSteps = 0; paintTestStat();
+    const runId = 'v' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    PV.runId = runId;
+    const msgs = [];
+    const live = await runStream({
+      msgs,
+      rerender: () => { PV.liveSteps = ((msgs[msgs.length - 1] || {}).steps || []).length; paintTestStat(); },
+      profile: w.agent, prompt: previewPrompt(w, n), toolsets: PREVIEW_TOOLSETS,
+      cards: false, runId, timeoutMs: 120000, preview: true,
+    });
+    PV.runId = null;
+    if (PV.cancel) break;
+    const text = String((live && live.text) || '').trim();
+    const steps = (live && live.steps) || [];
+    n.preview = {
+      at: Date.now(), ok: !!(live && live.ok && text), secs: (live && live.secs) || '',
+      steps: steps.length,
+      text: text || ((live && live.timedOut) ? '到点了，这一步没问出结论' : `这次没问出结论（${(live && live.error) || '中断'}）`),
+    };
+    PV.done++;
+    saveStore(false);                                   // 预演结果是这台机器上的记录：不涨版本、不写状态文件
+    paintOne(n);                                        // 卡片正面挂上「预演 ✓」（只重画这一张）
+    paintTest();
+    if (panelCardId === n.id) renderPanel();            // 左栏正开着这张卡：结论跟着回填
+  }
+  PV.busy = false; PV.runId = null;
+  if (PV.cancel) PV.error = '停掉了，已经问完的结论留着';
+  paintTest();
+}
+// 一键清空：卡片上的预演结论、卡片正面的「预演」标、左栏里的那段一起清掉
+function clearPreviews() {
+  const w = flow();
+  if (!w) return;
+  let n = 0;
+  (w.nodes || []).forEach(x => { if (x.preview) { delete x.preview; n++; } });
+  if (n) { saveStore(false); paintNodes(); if (panelCardId) renderPanel(); }
+  PV.error = n ? '' : '还没有预演结果';
+  paintTest();
+}
+function paintTest() {
+  const box = $('#testModal');
+  if (!box || !box.classList.contains('on')) return;
+  const w = flow(); if (!w) return;
+  $('#tTitle').textContent = `测试 · ${w.name}`;
+  const issues = checkFlow(w);
+  $('#tReport').innerHTML = `<div class="tsh">静态体检<span class="tcount">${issues.length ? issues.length + ' 处' : '没问题'}</span></div>` +
+    (issues.length ? issues.map(x => `<div class="trow">
+        <span class="tkw">${CHECK_WORD[x.kind] || '问题'}</span>
+        <div class="tc"><b>${esc(x.title || '整条链路')}</b><div class="tw">${esc(x.what)}</div><div class="tfix">怎么补：${esc(x.fix)}</div></div>
+      </div>`).join('') : '<div class="tnone">没有发现问题</div>');
+  const order = chainOrder(w);
+  const done = order.filter(n => n.preview).length;
+  $('#tPrev').innerHTML = `<div class="tsh">只读预演<span class="tcount">${done} / ${order.length} 张卡</span></div>` +
+    (order.length ? order.map((n, i) => `<div class="trow pv${n.preview ? (n.preview.ok ? ' ok' : ' bad') : ''}">
+        <span class="tnum">${i + 1}</span>
+        <div class="tc"><b>${esc(n.title)}</b><span class="tkind k-${n.kind}">${(KINDS[n.kind] || KINDS.proc).label}</span>
+          <div class="tptext">${n.preview ? esc(n.preview.text) : '还没预演'}</div>
+          ${n.preview ? `<div class="tpmeta">${hhmm(n.preview.at)} · ${n.preview.secs ? n.preview.secs + 's · ' : ''}工具调用 ${n.preview.steps || 0} 次</div>` : ''}
+        </div></div>`).join('') : '<div class="tnone">这条链路还没有卡片</div>');
+  paintTestStat();
+}
+function paintTestStat() {
+  const el = $('#tStat'); if (!el) return;
+  const w = flow(), order = w ? chainOrder(w) : [];
+  const done = order.filter(n => n.preview).length;
+  const tools = order.reduce((s, n) => s + ((n.preview && n.preview.steps) || 0), 0);
+  let text;
+  if (PV.busy) text = `正在预演 ${Math.min(PV.done + 1, PV.total)}/${PV.total}${PV.cur ? ' ·「' + PV.cur + '」' : ''} · 工具调用 ${PV.liveSteps} 次`;
+  else if (PV.error) text = PV.error;
+  else if (done && done === order.length) text = `预演完成：${done} 张卡都有结论 · 工具调用 ${tools} 次`;
+  else if (done) text = `已经预演 ${done} / ${order.length} 张卡`;
+  else text = w && w.agent ? `执行方：${execName(w.agent)}` : '先指派执行方';
+  el.textContent = text;
+  const run = $('#tRun'), clr = $('#tClear');
+  if (run) run.disabled = PV.busy || !order.length;
+  if (clr) clr.disabled = PV.busy || !done;
+}
+// 切链路 / 关窗口 / 回滚时，把正在跑的预演停掉（已经问完的结论留着）
+addEventListener('beforeunload', () => stopPreview());
 
 // ---------- 运行 ----------
 function openRunModal() {
@@ -2428,6 +2685,7 @@ function layoutChain(w) {
 function placeChain() {
   const p = rd.plan, c = rd.chain;
   if (!p || !c || rd.busy) return;
+  stopPreview();
   if (isTemp()) dropTemp();                      // 正在临时画布上也照常落卡：先把这张草稿画布收干净，别把它的卡带进正式工作流
   const tiles = new Map([...document.querySelectorAll('#rPrev .rtile[data-key]')].map(t => [t.dataset.key, t.getBoundingClientRect()]));
   $('#readModal').classList.remove('on');
@@ -2502,6 +2760,7 @@ async function startTempCanvas() {
   const i = $('#dockIn'); if (i) i.focus();
 }
 function dropTemp() {
+  stopPreview();
   const t = tempFlow;
   tempFlow = null;
   if (t) { delete LINK.paths[t.id]; try { window.tcflow.linkDrop(t.id); } catch (e) { } }   // 关掉就清干净：文件删掉，列表里什么都没多
@@ -2702,7 +2961,13 @@ async function importFlow() {
 }
 
 function onKey(e) {
-  if (document.querySelector('.modal.on')) { if (e.key === 'Escape' && $('#readModal').classList.contains('on')) closeRead(); return; }
+  if (document.querySelector('.modal.on')) {
+    if (e.key === 'Escape') {
+      if ($('#readModal').classList.contains('on')) closeRead();
+      if ($('#testModal').classList.contains('on')) closeTest();
+    }
+    return;
+  }
   if (e.key === 'Delete' && selId && !e.target.isContentEditable && !['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) delNode(selId);
   if (e.key === 'Escape') { selId = null; panelCardId = null; panelOpen = false; render(); }
 }

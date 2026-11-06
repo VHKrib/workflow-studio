@@ -30,6 +30,8 @@
     <button id="btnValidate">逐卡验证</button>
     <button id="btnTempChat">对话建链路</button>
     <button id="btnNew">新建工作流</button>
+    <button id="btnCopy" title="把当前这条链路复制成一条独立副本">复制链路</button>
+    <button id="btnTest">测试</button>
     <button id="btnOpen">导入</button>
     <button id="btnSave">导出</button>
     <button id="btnRun" class="primary">▶ 开始运行</button>
@@ -112,6 +114,22 @@
         <span style="flex:1"></span>
         <button id="rAgain">重来</button>
         <button id="rPlace" class="primary">放进画布</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="testModal" class="modal">
+    <div class="mbox tbox">
+      <div class="mhd"><b id="tTitle">测试</b><span id="tClose">✕</span></div>
+      <div class="tbody">
+        <div class="tacts">
+          <button id="tCheck">静态体检</button>
+          <button id="tRun" class="primary">只读预演</button>
+          <button id="tClear">清空预演</button>
+          <span id="tStat" class="tstat"></span>
+        </div>
+        <div id="tReport" class="treport"></div>
+        <div id="tPrev" class="tprev"></div>
       </div>
     </div>
   </div>
