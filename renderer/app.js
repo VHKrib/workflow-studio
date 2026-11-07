@@ -96,26 +96,45 @@ function cardLine(n, i) {
   await initVersions();                 // 版本：老链路先记一版基线，之后每次改动才有回滚点
 })();
 
-let liveBooting = false;
-async function showLiveView() {
-  const box = $('#liveView'), wv = $('#liveWV');
-  if (!box || !wv) return;
-  if (!wv.dataset.booted) {
-    wv.dataset.booted = '1';
-    // preload 必须是绝对路径；主进程那边靠 webContents id 认这个视图
-    let dir = '';
-    try { dir = await window.tcflow.appDir(); } catch (e) { }
-    wv.setAttribute('preload', (dir || '.') + '/preload.js');
-    wv.addEventListener('dom-ready', () => {
-      try { window.tcflow.liveAttach(wv.getWebContentsId()).catch(() => {}); } catch (e) { }
-    });
-    wv.setAttribute('src', 'live.html');
-  } else {
+// 实时工作流：和一条工作流一样占画布区，从右边列表切进来（不再另开窗口）
+let liveMode = false;
+let liveBooted = false;
+async function bootLiveView() {
+  const wv = $('#liveWV');
+  if (!wv || liveBooted) { return wv; }
+  liveBooted = true;
+  let dir = '';
+  try { dir = await window.tcflow.appDir(); } catch (e) { }
+  wv.setAttribute('preload', (dir || '.') + '/preload.js');   // preload 必须是绝对路径
+  wv.addEventListener('dom-ready', () => {
     try { window.tcflow.liveAttach(wv.getWebContentsId()).catch(() => {}); } catch (e) { }
-  }
-  box.classList.add('on');
+  });
+  wv.setAttribute('src', 'live.html');
+  return wv;
 }
-function hideLiveView() { const box = $('#liveView'); if (box) box.classList.remove('on'); }
+async function enterLive() {
+  liveMode = true;
+  const cw = document.querySelector('.canvaswrap');
+  if (cw) cw.classList.add('live');
+  const name = $('#flowName');
+  if (name) { name.value = '实时工作流'; name.readOnly = true; }
+  const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = 'none';
+  renderWorkflowList();
+  await bootLiveView();
+  const wv = $('#liveWV');
+  if (wv) { try { window.tcflow.liveAttach(wv.getWebContentsId()).catch(() => {}); } catch (e) { } }
+}
+function exitLive() {
+  if (!liveMode) return;
+  liveMode = false;
+  const cw = document.querySelector('.canvaswrap');
+  if (cw) cw.classList.remove('live');
+  const name = $('#flowName');
+  if (name) name.readOnly = false;
+  const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = '';
+  renderWorkflowList();
+  if (name) { const w = flow(); name.value = (w && w.name) || '未命名工作流'; }
+}
 
 function bindUI() {
   $('#btnNew').onclick = () => createWorkflow('新工作流 ' + (store.workflows.length + 1));
@@ -134,12 +153,9 @@ function bindUI() {
   document.querySelectorAll('#addMenu div').forEach(d => d.onclick = () => { addNode(d.dataset.kind); $('#addMenu').classList.remove('on'); });
   $('#btnSave').onclick = exportFlow;
   $('#btnOpen').onclick = importFlow;
-  $('#btnLive').onclick = () => showLiveView();
-  const lc = $('#liveCard');
-  if (lc) lc.onclick = () => showLiveView();
+  $('#btnLive').onclick = () => enterLive();
   // 实时画布：开在主窗口里（同一个窗口铺满一层），不再另开窗口
-  $('#lvBack').onclick = hideLiveView;
-  window.tcflow.onLiveShow(() => showLiveView());
+  window.tcflow.onLiveShow(() => enterLive());
 
   $('#btnValidate').onclick = () => validateAll();
   $('#btnRun').onclick = openRunModal;
@@ -822,7 +838,7 @@ function duplicateWorkflow(id) {
   renderWorkflowList(); render(); centerView();
   return w;
 }
-function switchWorkflow(id) { if (isTemp()) dropTemp(); stopPreview(); store.current = id; selId = null; panelCardId = null; panelOpen = false; saveStore(false); renderWorkflowList(); render(); centerView(); }
+function switchWorkflow(id) { exitLive(); if (isTemp()) dropTemp(); stopPreview(); store.current = id; selId = null; panelCardId = null; panelOpen = false; saveStore(false); renderWorkflowList(); render(); centerView(); }
 function deleteWorkflow(id, ev) {
   ev.stopPropagation();
   if (store.workflows.length <= 1) return alert('至少保留一个工作流');
@@ -837,9 +853,17 @@ function deleteWorkflow(id, ev) {
 }
 function renderWorkflowList() {
   const box = $('#wfList'); box.innerHTML = '';
+  const live = document.createElement('div');
+  live.className = 'wf live' + (liveMode ? ' on' : '');
+  live.dataset.live = '1';
+  live.title = '跟着一条 Hermes 对话，看它现在怎么做（只读）';
+  live.innerHTML = `<div class="wn">实时工作流${liveMode ? '<span class="wsel">当前</span>' : ''}</div>
+    <div class="ws">跟一条对话，看它现在怎么做</div>`;
+  live.onclick = () => enterLive();
+  box.appendChild(live);
   for (const w of store.workflows) {
     const el = document.createElement('div');
-    const on = w.id === store.current;
+    const on = w.id === store.current && !liveMode;
     el.className = 'wf' + (on ? ' on' : '');
     el.dataset.id = w.id;
     el.onclick = () => switchWorkflow(w.id);

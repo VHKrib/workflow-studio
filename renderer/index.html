@@ -37,7 +37,7 @@
       <div class="menu" id="moreMenu">
         <!-- 窄窗口时，顶栏放不下的按钮收在这里（JS 按宽度搬进来，宽窗口仍在顶栏） -->
         <div class="msep"></div>
-        <div id="btnLive" title="另开一个只读窗口，直播一条 Hermes 对话的动作">实时画布</div>
+        <div id="btnLive" title="切到实时工作流：跟着一条 Hermes 对话看它现在怎么做">实时工作流</div>
         <div id="btnOpen">导入</div>
         <div id="btnSave">导出</div>
       </div>
@@ -70,6 +70,10 @@
           <button id="dockSend" class="primary">发送</button>
         </div>
       </div>
+      <!-- 实时工作流：从右边列表切进来，占的就是这块画布 -->
+      <div id="liveView" class="liveview">
+        <webview id="liveWV"></webview>
+      </div>
       <div class="dock-fab" id="dockFab" title="展开：和平台主管聊">✍ 和 agent 聊</div>
       <div class="zoombar">
         <span id="zoomOut" title="缩小">−</span>
@@ -89,10 +93,6 @@
       </div>
       <h3>工作流 · 一块画布</h3>
       <div id="wfList"></div>
-      <div class="livecard" id="liveCard" title="另开一个只读窗口，跟着一条 Hermes 对话把链路长出来">
-        <div class="wn">实时工作流</div>
-        <div class="ws">跟一条对话，看它现在怎么做</div>
-      </div>
     </aside>
   </div>
 
@@ -148,14 +148,5 @@
 
 <script src="app.js"></script>
 
-<!-- 实时画布：不再另开窗口，直接在同一个窗口里铺满显示 -->
-<div id="liveView" class="liveview">
-  <div class="lvbar">
-    <button id="lvBack" class="ghost">← 回到工作台</button>
-    <span class="lvtitle">实时画布</span>
-    <span class="lvhint">只读：跟着一条 Hermes 对话把链路长出来</span>
-  </div>
-  <webview id="liveWV"></webview>
-</div>
 </body>
 </html>
