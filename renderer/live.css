@@ -109,28 +109,20 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
   background:var(--surface,#f7f5f1);border:1px solid var(--soft-line,#e7e1d6);font-family:var(--mono,ui-monospace,Menlo,monospace);
   font-size:11px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--ink-2)}
 
-/* 编辑面板：双击卡片从右边滑出来；只改这份解析结果，不动别人的对话 */
-.ledit{position:absolute;top:0;right:0;bottom:0;width:330px;display:none;flex-direction:column;
-  background:var(--card,#fffefa);border-left:1px solid var(--line-strong,#d9d3c7);box-shadow:-8px 0 24px rgba(17,17,17,.06);z-index:40}
-.ledit.on{display:flex}
-.ledit .lhd{display:flex;align-items:center;padding:12px 14px;border-bottom:1px solid var(--soft-line);font-size:12.5px}
-.ledit .lhd b{flex:1;font-weight:600}
-.ledit .lhd span{cursor:pointer;color:var(--ink-3)}
-.ledit .lbd{flex:1;overflow:auto;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
-.ledit label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--ink-3)}
-.ledit input,.ledit textarea{font:inherit;font-size:12.5px;color:var(--ink);background:var(--surface,#f7f5f1);
-  border:1px solid var(--line);border-radius:8px;padding:6px 8px;outline:none;resize:vertical}
-.ledit input:focus,.ledit textarea:focus{border-color:var(--accent);background:#fff}
-.ledit .lmlab{font-size:11px;color:var(--ink-3);margin-bottom:4px}
-.ledit .lmods{display:flex;flex-direction:column;gap:6px}
-.ledit .lrow{display:flex;gap:6px;align-items:center}
-.ledit .lrow input:first-child{flex:0 0 96px}
-.ledit .lrow input:nth-child(2){flex:1}
-.ledit .lft{display:flex;gap:8px;justify-content:flex-end;padding:10px 14px;border-top:1px solid var(--soft-line)}
-.ledit .lft button{font:inherit;font-size:12.5px;padding:5px 12px;border-radius:8px;border:1px solid var(--line-strong);background:var(--card);cursor:pointer}
-.ledit .lft button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
-.node.editable{cursor:pointer}
-
-/* 卡片可以拖：按住就抓手，拖起来抬一点、影子重一点 */
-body.live .node{cursor:grab}
-body.live .node.dragging{cursor:grabbing;z-index:20;box-shadow:0 10px 26px rgba(17,17,17,.18)}
+/* 编辑面板：双击卡片从右边滑出来；里面就是主画布那张卡片信息（复用 .panel 的样式） */
+.ledit{position:absolute;top:0;right:0;bottom:0;width:360px;display:none;z-index:40;
+  background:var(--surface);border-left:1px solid var(--line-strong);box-shadow:-10px 0 28px rgba(17,17,17,.08)}
+.ledit.on{display:block}
+.ledit .lpanel{height:100%;border:0;background:transparent}
+.ledit .ph{display:flex;align-items:center;gap:8px}
+.ledit .ph b{flex:1}
+.ledit .ph span{cursor:pointer;color:var(--ink-3);font-size:12px}
+.ledit .ph span:hover{color:var(--ink)}
+.ledit .pb{padding-bottom:24px}
+.ledit .pm-list{display:flex;flex-wrap:wrap;gap:6px}
+.ledit .pm-list .mod.ed{cursor:default}
+.ledit .prow{display:flex;gap:6px;align-items:center;margin:4px 0}
+.ledit .prow input{font-size:11.5px}
+.ledit .prow .pn{flex:0 0 92px}
+.ledit .prow .pp{flex:1}
+.node.dragging{cursor:grabbing}
