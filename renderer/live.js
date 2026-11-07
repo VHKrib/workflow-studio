@@ -171,21 +171,37 @@ function applyZoom() {
   $('#zoom').textContent = Math.round(zoom * 100) + '%';
 }
 
+// 卡片长相对齐主画布（同一个 .node 结构：头部 kind+标题+状态点、正文、模块行、底部 chips）
+// 区别只有一点：这个窗口只读，所以没有「问 / 下一步 / 连线」那几个按钮，也不能拖进插槽。
+const KIND_LABEL = { in: '输入', proc: '加工', out: '输出' };
+const KIND_PH = { in: '这一步要先有什么', proc: '这一步让人做什么', out: '最后交出什么' };
+const MOD_LAB = { in: '素材', proc: '工具', out: '成果' };
+const MOD_TYPE = { in: 'mat', proc: 'tool', out: 'res' };
+
 function cardEl(c) {
   const el = document.createElement('div');
-  el.className = 'node k-' + c.kind;
+  el.className = 'node k-' + c.kind + (c.branch && c.branch !== 'main' ? ' branch' : '');
   el.dataset.id = c.id;
-  const mods = (c.mods || []).map(m => `<span class="mod t-${esc(m.type)}">${esc(m.name)}</span>`).join('');
+  const type = MOD_TYPE[c.kind] || 'tool';
+  const mods = (c.mods && c.mods.length)
+    ? c.mods
+    : String(c.body || '').split('·').map(x => x.trim()).filter(Boolean).slice(0, 4).map(name => ({ type, name }));
+  const modsHTML = mods.length
+    ? `<div class="mods"><div class="mline"><span class="mlab">${MOD_LAB[c.kind] || '模块'}</span>` +
+      `<span class="mchips">${mods.map(m => `<span class="mod t-${m.type || type}">${esc(m.name)}</span>`).join('')}</span></div></div>`
+    : '';
+  const chips = c.note ? `<span class="chip" title="为什么改 / 和上一版差在哪">改 · ${esc(c.note)}</span>` : '';
   el.innerHTML = `
-    <div class="hd"><span class="kind">${KIND[c.kind] || '加工'}</span><div class="t">${esc(c.title)}</div></div>
-    <div class="body">${esc(c.body)}</div>
-    ${c.note ? `<div class="note">↳ ${esc(c.note)}</div>` : ''}
-    ${mods ? `<div class="mods"><div class="mline"><span class="mlab">${c.kind === 'in' ? '素材' : c.kind === 'out' ? '成果' : '工具'}</span><span class="mchips">${mods}</span></div></div>` : ''}
+    <div class="hd"><span class="kind">${KIND_LABEL[c.kind] || '加工'}</span><div class="t">${esc(c.title)}</div><div class="st"></div></div>
+    <div class="body" data-ph="${KIND_PH[c.kind] || ''}">${esc(c.body)}</div>
+    ${modsHTML}
+    <div class="ft"><div class="checks">${chips}</div>${c.impl ? '<span class="gar" title="内部实现已封装：卡片上不显示，点开看">⚙</span>' : ''}</div>
     ${c.impl ? `<details class="limpl"><summary>⚙ 内部实现</summary><pre>${esc(c.impl)}</pre></details>` : ''}`;
   const d = el.querySelector('details.limpl');
   if (d) d.addEventListener('toggle', () => { layout(); drawEdges(); });
   return el;
 }
+
 
 const sigOf = c => JSON.stringify([c.kind, c.title, c.body, c.impl, (c.mods || []).map(m => m.type + ':' + m.name), c.n]);
 

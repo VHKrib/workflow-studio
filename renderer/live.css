@@ -62,3 +62,12 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
 
 /* 精修理由（为什么改 / 和上一版差在哪） */
 .node .note{margin-top:6px;font-size:11.5px;line-height:1.5;color:var(--ink-2);opacity:.85;border-left:2px solid var(--soft-line);padding-left:6px}
+
+/* 分支卡：精修尝试，视觉上比主干轻一点（虚线边 + 稍淡） */
+.node.branch{border-style:dashed;opacity:.94}
+.node.branch .kind{opacity:.8}
+/* 内部实现折叠块（和主画布同口径：正面不露命令） */
+.node .limpl{margin:0 12px 10px}
+.node .limpl summary{cursor:pointer;font-size:11.5px;color:var(--ink-3)}
+.node .limpl pre{margin:6px 0 0;padding:8px;border-radius:8px;background:color-mix(in srgb, var(--foreground) 5%, transparent);
+  font-family:var(--mono);font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--ink-2);max-height:140px;overflow:auto}
