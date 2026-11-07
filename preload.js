@@ -3,6 +3,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('tcflow', {
   appDir: () => ipcRenderer.invoke('app:dir'),          // 内嵌 <webview> 要绝对路径的 preload
   liveAttach: (id) => ipcRenderer.invoke('live:attach', id),
+  liveOpenPath: (p) => ipcRenderer.invoke('live:open-path', p),
   listAgents: () => ipcRenderer.invoke('agents:list'),
   askAgent: (payload) => ipcRenderer.invoke('agent:ask', payload),
   // 流式：边跑边推事件（Hermes 的对话框效果）

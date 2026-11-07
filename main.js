@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, webContents } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, webContents, shell } = require('electron');
 const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -718,6 +718,16 @@ ipcMain.handle('live:doc:save', (_e, doc) => {
 });
 
 ipcMain.handle('live:open', () => openLiveWindow());
+ipcMain.handle('live:open-path', (_e, p) => {
+  try {
+    const f = String(p || '');
+    if (!f.startsWith('/')) return { ok: false, error: '不是绝对路径' };
+    const st = fs.statSync(f);
+    if (!st.isFile()) return { ok: false, error: '不是一个文件' };
+    shell.openPath(f);
+    return { ok: true, bytes: st.size };
+  } catch (e) { return { ok: false, error: String((e && e.code) || (e && e.message) || e) }; }
+});
 ipcMain.handle('live:attach', (_e, id) => attachLiveView(id));
 ipcMain.handle('app:dir', () => __dirname);
 ipcMain.handle('live:list', () => livefeed.listConversations().catch(err => ({ error: String(err && err.message || err) })));

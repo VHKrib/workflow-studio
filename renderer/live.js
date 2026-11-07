@@ -319,6 +319,7 @@ function openEditor(id) {
   $id('ledit').classList.add('on');
   wireEditor(card);
   wireChat(card);
+  paintExtras(card);
   const t = $id('pTitle');
   if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
 }
@@ -414,6 +415,130 @@ function wireChat(card) {
       : c.dataset.q === 'next' ? '下一步该做什么？给出具体做法。'
       : '把这条链路从头讲一遍，指出最可能出错的一步。';
     chatSend(card, q);
+  });
+}
+
+// ===== 双击面板里的三段：素材（全部）/ 模型与接口能力 / 成果预览 =====
+// 用户口径（2026-11-07）：面板里要看到这张卡的全部素材、模型能力边界、成果预览；
+// 位置不够就滚动（.pb 本身滚动）；没有确切数字的写「未取得」并注明要补哪份文档，不编数字。
+const EXT_IMG = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+const EXT_VID = /\.(mp4|mov|webm|mkv|avi)$/i;
+const fmtBytes = n => (!n ? '' : n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B');
+const baseName = p => String(p || '').split('/').pop();
+
+function upsOf(id) { return (doc.edges || []).filter(e => e[1] === id).map(e => find(e[0])).filter(Boolean); }
+function downsOf(id) { return (doc.edges || []).filter(e => e[0] === id).map(e => find(e[1])).filter(Boolean); }
+function firstPathOf(c) {
+  const bag = [String((c && c.impl) || '')].concat(modsOf(c).map(m => m.path || '')).join(' ');
+  const m = bag.match(/\/[^\s;；,，]+\.(?:png|jpe?g|webp|gif|mp4|mov|webm|pdf|md|txt|json|csv|svg)/i);
+  return m ? m[0] : '';
+}
+// kind: 'mat' 素材 / 'res' 成果 —— 自己的 mods + 连线带过来的那张卡，全部列出来（不截断）
+function itemsOf(card, kind) {
+  const out = [], seen = new Set();
+  const push = (name, path, from) => {
+    const k = path || name;
+    if (!k || seen.has(k)) return;
+    seen.add(k);
+    out.push({ name: String(name || baseName(path) || '（未命名）'), path: path || '', from: from || '' });
+  };
+  for (const m of modsOf(card)) if (m.type === kind) push(m.name, m.path || firstPathOf(card), card.title);
+  for (const c of (kind === 'mat' ? upsOf(card.id) : downsOf(card.id))) {
+    const ms = modsOf(c).filter(m => m.type === kind);
+    if (ms.length) for (const m of ms) push(m.name, m.path || firstPathOf(c), c.title);
+    else push(c.title, firstPathOf(c), c.title);
+  }
+  return out;
+}
+// 模型/接口能力：有 caps 就照写；没有就明确「未取得」+ 要补哪份文档（不编数字）
+const CAP_NEED = {
+  img: '单次生成张数 / 参考图上限 / 文本（提示词）上限 / 输出尺寸与画幅',
+  vid: '单次生成段数 / 参考图上限 / 文本上限 / 输出时长与画幅 / 并发与限速',
+  txt: '上下文长度上限 / 单次输出上限 / 并发与限速',
+};
+function capHTML(m) {
+  const name = String((m && m.name) || '模型');
+  const caps = String((m && m.caps) || '').trim();
+  const kind = /视频/.test(name) ? 'vid' : /文本/.test(name) ? 'txt' : 'img';
+  if (caps && !/未取得/.test(caps)) return `<div class="lxcap"><b>${esc(name)}</b> · ${esc(caps)}</div>`;
+  return `<div class="lxcap"><b>${esc(name)}</b> · <span class="unknown">能力未取得</span><br>` +
+    `要补：该接口的文档里 ${esc(CAP_NEED[kind])}（拿到后写进这里，不猜数字）</div>`;
+}
+
+function rowHTML(it, kind) {
+  const isImg = EXT_IMG.test(it.path || it.name);
+  const isVid = EXT_VID.test(it.path || it.name);
+  const tag = isImg ? '图' : isVid ? '视频' : (it.path ? '文件' : '—');
+  return `<div class="lxrow" data-path="${esc(it.path)}">
+    <div class="lxthumb" title="${isImg ? '点开放大' : '没有可预览的文件'}">${isImg ? '载入…' : tag}</div>
+    <div class="lxname">${esc(baseName(it.path) || it.name)}<em>${esc(it.from ? '来自「' + it.from + '」' : '')}</em></div>
+    <div class="lxmeta">${it.path ? '' : '未记录路径'}</div>
+    ${it.path ? '<button class="lxopen">打开</button>' : ''}
+  </div>`;
+}
+
+async function paintExtras(card) {
+  const box = $id('ledBody');
+  if (!box) return;
+  let host = $id('lxExtra');
+  if (!host) {
+    host = document.createElement('div');
+    host.className = 'lx';
+    host.id = 'lxExtra';
+    box.appendChild(host);
+  }
+  const mats = itemsOf(card, 'mat');
+  const ress = itemsOf(card, 'res');
+  const tools = modsOf(card).filter(m => m.type === 'tool');
+  const hows = modsOf(card).filter(m => m.type === 'how');
+
+  host.innerHTML = `
+    <h4>素材 <b>${mats.length}</b>${mats.length ? '' : '（这张卡没有记录素材）'}</h4>
+    <div class="lxlist">${mats.length ? mats.map(it => rowHTML(it, 'mat')).join('') : '<div class="lx-empty">—</div>'}</div>
+    <h4>模型与接口能力</h4>
+    <div class="lxlist">${tools.length ? tools.map(capHTML).join('') : '<div class="lxcap"><span class="unknown">这张卡没有记录模型/接口</span><br>要补：这一步实际调用的模型名与接口文档（' + esc(CAP_NEED.img) + '）</div>'}</div>
+    ${hows.length ? `<h4>做法</h4><div class="lxcap">${hows.map(m => esc(m.name)).join(' · ')}</div>` : ''}
+    <h4>成果 <b>${ress.length}</b>${ress.length ? '' : '（这张卡没有记录成果）'}</h4>
+    <div class="lxlist">${ress.length ? ress.map(it => rowHTML(it, 'res')).join('') : '<div class="lx-empty">—</div>'}</div>
+  `;
+
+  // 逐个补：文件大小 + 图片缩略图；点缩略图放大，点「打开」用系统程序打开
+  const rows = [...host.querySelectorAll('.lxrow')];
+  for (const row of rows) {
+    const p = row.dataset.path;
+    if (!p) continue;
+    try {
+      const r = await window.tcflow.livePeek({ path: p });
+      const meta = row.querySelector('.lxmeta');
+      if (r && r.ok) {
+        if (meta) meta.textContent = `${r.kind === 'image' ? '图片' : r.kind === 'video' ? '视频' : r.kind === 'text' ? '文本' : '文件'} · ${fmtBytes(r.bytes)}`;
+        const th = row.querySelector('.lxthumb');
+        if (th && r.kind === 'image') {
+          th.innerHTML = `<img src="${r.url}" alt="">`;
+          th.onclick = () => openViewer(r.url, r.name);
+        } else if (th && r.kind === 'video') {
+          th.textContent = '视频';
+        } else if (th) {
+          th.textContent = '文件';
+        }
+      } else if (meta) {
+        meta.textContent = '打不开：' + ((r && r.error) || '');
+      }
+    } catch (e) { }
+    const open = row.querySelector('.lxopen');
+    if (open) open.onclick = () => { window.tcflow.liveOpenPath(p).catch(() => { }); };
+  }
+}
+
+function openViewer(url, name) {
+  const box = document.getElementById('lview'), img = document.getElementById('lviewImg'), cap = document.getElementById('lviewCap');
+  if (!box || !img) return;
+  img.src = url;
+  if (cap) cap.textContent = name || '';
+  box.classList.add('on');
+  box.onclick = () => { box.classList.remove('on'); img.src = ''; };
+  document.addEventListener('keydown', function esc(ev) {
+    if (ev.key === 'Escape') { box.classList.remove('on'); img.src = ''; removeEventListener('keydown', esc); }
   });
 }
 
