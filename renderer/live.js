@@ -522,7 +522,8 @@ async function paintExtras(card) {
           th.textContent = '文件';
         }
       } else if (meta) {
-        meta.textContent = '打不开：' + ((r && r.error) || '');
+        const why = (r && r.error) || '';
+        meta.textContent = /ENOENT/.test(why) ? '文件已不在原处' : '打不开：' + why;
       }
     } catch (e) { }
     const open = row.querySelector('.lxopen');
