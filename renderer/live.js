@@ -314,6 +314,7 @@ function openEditor(id) {
   const card = (doc && doc.cards || []).find(c => c.id === id);
   if (!card || !$id('ledit')) return;
   editingId = id;
+  window.__undoneForEdit = false;
   $id('ledTitle').textContent = (KINDS[card.kind] || KINDS.proc).label + '卡 · ' + card.title;
   $id('ledBody').innerHTML = panelHTML(card, (doc && doc.conv && doc.conv.who) || '它的执行方');      // ← 主画布那段模板原样渲染
   $id('ledit').classList.add('on');
@@ -493,6 +494,7 @@ async function paintExtras(card) {
   const hows = modsOf(card).filter(m => m.type === 'how');
 
   host.innerHTML = `
+    <div class="lxhead"><button id="lxDelCard" class="lmini" title="删掉这张卡（⌘Z 可撤销）">删除这张卡</button></div>
     <h4>素材 <b>${mats.length}</b>${mats.length ? '' : '（这张卡没有记录素材）'}</h4>
     <div class="lxlist">${mats.length ? mats.map(it => rowHTML(it, 'mat')).join('') : '<div class="lx-empty">—</div>'}</div>
     <h4>模型与接口能力</h4>
@@ -503,7 +505,28 @@ async function paintExtras(card) {
   `;
 
   // 逐个补：文件大小 + 图片缩略图；点缩略图放大，点「打开」用系统程序打开
+  const delBtn = host.querySelector('#lxDelCard');
+  if (delBtn) delBtn.onclick = () => delCard(card.id);
+
   const rows = [...host.querySelectorAll('.lxrow')];
+  const tagged = mats.map(it => ({ it, type: 'mat' })).concat(ress.map(it => ({ it, type: 'res' })));
+  rows.forEach((row, i) => {
+    const t = tagged[i];
+    if (!t) return;
+    row.dataset.card = card.id;
+    row.dataset.type = t.type;
+    row.dataset.name = t.it.name;
+    const act = document.createElement('div');
+    act.className = 'lxact';
+    act.innerHTML = '<button title="改名">改</button><button title="删掉这一项">删</button>';
+    act.children[0].onclick = e => { e.stopPropagation(); renameMod(card.id, t.type, t.it.name); };
+    act.children[1].onclick = e => { e.stopPropagation(); delMod(card.id, t.type, t.it.name); };
+    row.appendChild(act);
+    row.onclick = () => {
+      host.querySelectorAll('.lxrow.sel').forEach(r => r.classList.remove('sel'));
+      row.classList.add('sel');
+    };
+  });
   for (const row of rows) {
     const p = row.dataset.path;
     if (!p) continue;
@@ -543,8 +566,151 @@ function openViewer(url, name) {
   });
 }
 
+// ===== 编辑 / 删除 / 撤销重做 / 保存（用户 2026-11-07 要的四件事） =====
+const HIST_MAX = 80;                     // 至少 50 步：这里留 80
+let undoStack = [], redoStack = [];
+
+const snapOf = () => JSON.stringify({ cards: doc.cards, edges: doc.edges });
+function pushUndo() {
+  if (!doc) return;
+  undoStack.push(snapOf());
+  if (undoStack.length > HIST_MAX) undoStack.shift();
+  redoStack.length = 0;
+  paintHist();
+}
+function applySnap(s) {
+  const o = JSON.parse(s);
+  doc.cards = o.cards;
+  doc.edges = o.edges;
+  renderDoc(doc, { keepView: true });
+}
+function undo() { if (!undoStack.length) return; redoStack.push(snapOf()); applySnap(undoStack.pop()); persist(); paintHist(); toast('已撤销'); }
+function redo() { if (!redoStack.length) return; undoStack.push(snapOf()); applySnap(redoStack.pop()); persist(); paintHist(); toast('已重做'); }
+function paintHist() {
+  const u = document.getElementById('lundo'), r = document.getElementById('lredo');
+  if (u) u.disabled = !undoStack.length;
+  if (r) r.disabled = !redoStack.length;
+}
+function toast(text, bad) {
+  const t = document.getElementById('ltoast');
+  if (!t) return;
+  t.textContent = text;
+  t.className = 'ltoast on' + (bad ? ' bad' : '');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => { t.className = 'ltoast' + (bad ? ' bad' : ''); }, 2600);
+}
+const pad2t = n => String(n).padStart(2, '0');
+async function saveNow() {
+  if (!doc) return;
+  const d = new Date();
+  const hhmmss = pad2t(d.getHours()) + ':' + pad2t(d.getMinutes()) + ':' + pad2t(d.getSeconds());
+  try {
+    const r = await window.tcflow.liveDocSave(doc);
+    if (r && r.ok === false) throw new Error(r.error || '服务端没写进去');
+    setStat(`已保存：${(doc.cards || []).length} 张卡`);
+    toast('已保存 ' + hhmmss);
+  } catch (e) {
+    toast('保存失败：' + ((e && e.message) || e), true);
+  }
+}
+
+// 删整张卡（连带它的边）
+function delCard(id) {
+  const c = find(id);
+  if (!c) return;
+  pushUndo();
+  doc.cards = doc.cards.filter(x => x.id !== id);
+  doc.edges = (doc.edges || []).filter(e => e[0] !== id && e[1] !== id);
+  if (editingId === id) closeEditor();
+  selId = null;
+  renderDoc(doc, { keepView: true });
+  persist();
+  toast('已删除这张卡（⌘Z 可撤销）');
+}
+
+// 改/删单个元素（素材、工具、做法、成果）
+function delMod(cardId, type, name) {
+  const c = find(cardId);
+  if (!c) return;
+  pushUndo();
+  c.mods = (c.mods || []).filter(m => !(m.type === type && m.name === name));
+  renderDoc(doc, { keepView: true });
+  if (editingId === cardId) openEditor(cardId);
+  persist();
+  toast('已删除元素「' + name + '」（⌘Z 可撤销）');
+}
+function renameMod(cardId, type, name) {
+  const c = find(cardId);
+  if (!c) return;
+  const m = (c.mods || []).find(x => x.type === type && x.name === name);
+  if (!m) return;
+  const next = window.prompt('改成什么名字？（留空=不改）', name);
+  if (next == null) return;
+  const nn = String(next).trim();
+  if (!nn || nn === name) return;
+  pushUndo();
+  m.name = nn;
+  renderDoc(doc, { keepView: true });
+  if (editingId === cardId) openEditor(cardId);
+  persist();
+  toast('已改名：' + nn);
+}
+
+// 素材 / 成果直接画在卡身上：缩略图 + 文件名 + 数量，放不下横向滚动
+async function paintMedia() {
+  if (!doc) return;
+  for (const el of canvas.querySelectorAll('.node')) {
+    const c = find(el.dataset.id);
+    if (!c || (c.kind !== 'in' && c.kind !== 'out')) continue;
+    const items = itemsOf(c, c.kind === 'in' ? 'mat' : 'res');
+    const old = el.querySelector('.mstrip');
+    if (!items.length) { if (old) old.remove(); continue; }
+    const sig = items.map(i => i.path || i.name).join('|');
+    let strip = old;
+    if (!strip || strip.dataset.sig !== sig) {
+      strip = document.createElement('div');
+      strip.className = 'mstrip';
+      strip.dataset.sig = sig;
+      strip.innerHTML = items.map((it, i) => `<div class="mstile" data-i="${i}" title="${esc(it.path ? it.path.split('/').pop() : it.name)}">
+          <div class="mt">${EXT_IMG.test(it.path || it.name) ? '…' : EXT_VID.test(it.path || it.name) ? '视频' : '文件'}</div>
+          <div class="mn">${esc((it.path ? it.path.split('/').pop() : it.name))}</div></div>`).join('');
+      const body = el.querySelector('.body');
+      if (body && body.nextSibling) el.insertBefore(strip, body.nextSibling);
+      else el.appendChild(strip);
+      // 数量标在标题旁
+      const hd = el.querySelector('.hd .t');
+      const badge = el.querySelector('.mcount');
+      if (badge) badge.remove();
+      if (hd && items.length) hd.insertAdjacentHTML('afterend', `<span class="mcount" title="${c.kind === 'in' ? '素材' : '成果'} ${items.length} 个">${items.length}</span>`);
+      [...strip.querySelectorAll('.mstile')].forEach(tile => {
+        const it = items[Number(tile.dataset.i)];
+        tile.onclick = () => { if (it.path) openItem(it.path); };
+      });
+    }
+    // 补缩略图（只补还没图的）
+    for (const tile of strip.querySelectorAll('.mstile')) {
+      const it = items[Number(tile.dataset.i)];
+      const mt = tile.querySelector('.mt');
+      if (!it.path || !mt || mt.querySelector('img')) continue;
+      try {
+        const r = await window.tcflow.livePeek({ path: it.path });
+        if (r && r.ok && r.kind === 'image') mt.innerHTML = `<img src="${r.url}" alt="">`;
+        else if (r && r.ok && r.kind === 'video') mt.textContent = '视频';
+        else if (!r || !r.ok) mt.textContent = '不在了';
+      } catch (e) { }
+    }
+  }
+}
+function openItem(path) {
+  window.tcflow.livePeek({ path }).then(r => {
+    if (r && r.ok && r.kind === 'image') openViewer(r.url, r.name);
+    else window.tcflow.liveOpenPath(path).catch(() => { });
+  }).catch(() => { });
+}
+
 function closeEditor() {
   editingId = '';
+  window.__undoneForEdit = false;
   clearTimeout(saveTimer);
   window.tcflow.liveDocSave(doc).catch(() => {});
   const box = $id('ledit');
@@ -665,6 +831,7 @@ function renderDoc(d, opts) {
   for (const c of manual) { const el = canvas.querySelector(`.node[data-id="${CSS.escape(c.id)}"]`); if (el) { el.style.left = (c.x + OX) + 'px'; el.style.top = (c.y + OY) + 'px'; } }
   drawEdges();
   annotateChips();
+  paintMedia();
   // 卡摆好之后一定要把视野对准它们：不然后打开的窗口停在空地上（卡在 ORIGIN 偏移那边，看起来就是空白）
   if (doc.cards.length) {
     const inside = (() => {
@@ -727,6 +894,48 @@ function bindCanvas() {
   const box = document.getElementById('ledit');
   if (box) box.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeEditor(); });
   addEventListener('resize', () => { drawEdges(); });
+
+  // 撤销 / 重做 / 保存
+  const bu = document.getElementById('lundo'), br = document.getElementById('lredo'), bs = document.getElementById('lsave');
+  if (bu) bu.onclick = undo;
+  if (br) br.onclick = redo;
+  if (bs) bs.onclick = saveNow;
+  paintHist();
+
+  // 面板里一动手就先记一版（一次编辑会话只记一次）
+  const lb = document.getElementById('ledBody');
+  if (lb) lb.addEventListener('focusin', () => {
+    if (editingId && !window.__undoneForEdit) { pushUndo(); window.__undoneForEdit = true; }
+  });
+
+  // 鼠标改东西（拖动卡、拖边）也进撤销栈：按下时记一版，松手发现变了才入栈
+  addEventListener('pointerdown', ev => {
+    if (!doc) return;
+    if (ev.target.closest && (ev.target.closest('#canvas .node') || ev.target.closest('#lxExtra'))) window.__pendSnap = snapOf();
+  }, true);
+  addEventListener('pointerup', () => {
+    const before = window.__pendSnap;
+    window.__pendSnap = '';
+    if (!before || !doc) return;
+    if (snapOf() !== before) { undoStack.push(before); if (undoStack.length > HIST_MAX) undoStack.shift(); redoStack.length = 0; paintHist(); }
+  }, true);
+
+  // 通用快捷键
+  addEventListener('keydown', ev => {
+    const t = ev.target || {};
+    const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '') || t.isContentEditable;
+    const meta = ev.metaKey || ev.ctrlKey;
+    const k = String(ev.key || '').toLowerCase();
+    if (meta && k === 'z') { ev.preventDefault(); if (ev.shiftKey) redo(); else undo(); return; }
+    if (meta && k === 'y') { ev.preventDefault(); redo(); return; }
+    if (meta && k === 's') { ev.preventDefault(); saveNow(); return; }
+    if (ev.key === 'Escape') { if (editingId) closeEditor(); else { selId = null; markSel(); } return; }
+    if ((ev.key === 'Delete' || ev.key === 'Backspace') && !inField) {
+      const selRow = document.querySelector('#lxExtra .lxrow.sel');
+      if (selRow && selRow.dataset.type) { ev.preventDefault(); delMod(selRow.dataset.card, selRow.dataset.type, selRow.dataset.name); return; }
+      if (selId) { ev.preventDefault(); delCard(selId); }
+    }
+  });
 }
 
 async function init() {
