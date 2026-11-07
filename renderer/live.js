@@ -105,7 +105,8 @@ async function analyzeNow(manual) {
       fitted = false;
       renderDoc(r.doc, { analyzed: true });
       analyzedKey = cur;
-      setStat(`已解析：${r.doc.cards.length} 张卡${r.name ? ' · ' + r.name : ''}`);
+      setStat(`已解析并保存：${r.doc.cards.length} 张卡${r.name ? ' · ' + r.name : ''}`);
+      if (btn) btn.textContent = '重新生成';
     } else {
       setStat('解析没成：' + ((r && r.error) || '未知原因'));
     }
@@ -113,7 +114,8 @@ async function analyzeNow(manual) {
     setStat('解析失败：' + (e && e.message || e));
   } finally {
     analyzing = false; lastAnalyzed = Date.now();
-    if (btn) { btn.disabled = false; btn.textContent = '解析链路'; }
+    const has = !!(doc && doc.cards && doc.cards.length);
+    if (btn) { btn.disabled = false; btn.textContent = has ? '重新生成' : '解析链路'; }
   }
 }
 
@@ -129,7 +131,13 @@ async function pick(key) {
   if (following) { await follow(true); return; }
   await stopFollow();
   const r = await window.tcflow.liveSnapshot({ profile: found.profile, session: found.session });
-  if (r && r.doc) renderDoc(r.doc);
+  if (r && r.doc && r.doc.cards && r.doc.cards.length) {
+    renderDoc(r.doc, { analyzed: true });            // 上次保存的那份：打开就能看，不用重新跑
+    analyzedKey = cur;
+    const btn = document.querySelector('#lana');
+    if (btn) btn.textContent = '重新生成';
+    setStat(`已保存：${r.doc.cards.length} 张卡${r.doc.name ? ' · ' + r.doc.name : ''}`);
+  } else if (r && r.doc) renderDoc(r.doc);
   else if (r && r.error) setStat(r.error);
   paintEmpty();
 }
@@ -160,30 +168,57 @@ async function stopFollow() {
   paintStat();
 }
 
-// 悬停素材/成果：浮层说清「是什么 · 来自哪张卡 · 明细」（明细是真路径/真参数，卡片正面不显示）
+// 悬停素材/成果：能拿到真文件就真预览——文本按文档、图片按看图、视频按播放器；
+// 拿不到文件（或打不开）就退回一行说明，不空着。
 (function wireTip() {
-  const tip = () => document.getElementById('ltip');
-  const show = (el, x, y) => {
-    const box = tip(); if (!box) return;
-    const raw = el.dataset.tip || '';
-    const [name, from, ...rest] = raw.split('\n');
-    box.innerHTML = `<b>${esc(name || '')}</b>${esc(from || '')}${rest.length ? '\n' + esc(rest.join('\n')) : ''}`;
-    box.classList.add('on');
-    const r = box.getBoundingClientRect();
-    const left = Math.min(x + 14, window.innerWidth - r.width - 12);
-    const top = Math.max(8, Math.min(y + 16, window.innerHeight - r.height - 12));
-    box.style.left = left + 'px'; box.style.top = top + 'px';
+  const box = () => document.getElementById('ltip');
+  let seq = 0;
+  const sizeOf = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
+  const place = (el, x, y) => {
+    const r = el.getBoundingClientRect();
+    el.style.left = Math.max(8, Math.min(x + 14, window.innerWidth - r.width - 12)) + 'px';
+    el.style.top = Math.max(8, Math.min(y + 16, window.innerHeight - r.height - 12)) + 'px';
   };
-  const hide = () => { const b = tip(); if (b) b.classList.remove('on'); };
+  const showText = (el, chip, x, y) => {
+    const raw = chip.dataset.tip || '';
+    const [name, from, ...rest] = raw.split('\n');
+    el.innerHTML = `<b>${esc(name || '')}</b>${esc(from || '')}${rest.length ? '\n' + esc(rest.join('\n')) : ''}`;
+    el.classList.add('on'); el.classList.remove('rich');
+    place(el, x, y);
+  };
+  const showPreview = (el, chip, r, x, y) => {
+    const head = `<b>${esc(r.name || chip.textContent)}</b>` +
+      `<span class="lmeta">${r.kind === 'image' ? '图片' : r.kind === 'video' ? '视频' : r.kind === 'text' ? '文本' : '文件'} · ${sizeOf(r.bytes || 0)}</span>`;
+    let body = '';
+    if (r.kind === 'image') body = `<img class="limg" src="${r.url}" alt="${esc(r.name || '')}">`;
+    else if (r.kind === 'video') body = `<video class="lvid" src="${r.url}" controls autoplay muted loop playsinline></video>`;
+    else if (r.kind === 'text') body = `<pre class="ltxt">${esc(String(r.text || '').slice(0, 4000))}${r.cut ? '\n…（后面还有，没全读）' : ''}</pre>`;
+    el.innerHTML = head + body;
+    el.classList.add('on', 'rich');
+    place(el, x, y);
+  };
+  const show = (chip, x, y) => {
+    const el = box(); if (!el) return;
+    showText(el, chip, x, y);                       // 先把说明摆出来，预览到了再换
+    const fp = chip.dataset.path;
+    if (!fp || !window.tcflow.livePeek) return;
+    const mine = ++seq;
+    window.tcflow.livePeek({ path: fp }).then(r => {
+      if (mine !== seq || !el.classList.contains('on')) return;   // 鼠标已经移走了
+      if (r && r.ok) showPreview(el, chip, r, x, y);
+    }).catch(() => {});
+  };
+  const hide = () => { seq++; const el = box(); if (el) { el.classList.remove('on', 'rich'); el.innerHTML = ''; } };
   document.addEventListener('mouseover', e => {
-    const el = e.target.closest && e.target.closest('.mod[data-tip]');
-    if (el) show(el, e.clientX, e.clientY); else hide();
+    const chip = e.target.closest && e.target.closest('.mod[data-tip]');
+    if (chip) show(chip, e.clientX, e.clientY); else hide();
   });
   document.addEventListener('mousemove', e => {
-    if (!tip() || !tip().classList.contains('on')) return;
-    const el = e.target.closest && e.target.closest('.mod[data-tip]');
-    if (!el) return hide();
-    show(el, e.clientX, e.clientY);
+    const el = box();
+    if (!el || !el.classList.contains('on')) return;
+    const chip = e.target.closest && e.target.closest('.mod[data-tip]');
+    if (!chip) return hide();
+    place(el, e.clientX, e.clientY);
   });
   document.addEventListener('mouseleave', hide);
   window.addEventListener('blur', hide);
@@ -234,6 +269,31 @@ function detailOf(card) {
   const pick = lines.find(x => /[/\\.]|字节|像素|尺寸|版本|张|份/.test(x)) || lines[0] || '';
   return (pick || String(card.body || '')).slice(0, 160);
 }
+// 从这张卡记的内部实现/正文里认出真文件：只认**绝对路径**（/Users、/Applications、/Volumes…），
+// 相对路径和「a/b/c.png」这种片段不算——否则会把 sketch-board-v1/v2/v3.png 当成 /v2/v3.png。
+const ABS_RE = /\/(?:Users|Applications|Volumes|tmp|private|opt|home)\/[^\s"'`；;，,（）()<>|]*?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|markdown|txt|json|jsonl|csv|ya?ml|pdf)/gi;
+const baseOf = p => String(p || '').split('/').pop();
+function absPaths(card) {
+  const s = String(card && card.impl || '') + '\n' + String(card && card.body || '');
+  const out = []; let m;
+  ABS_RE.lastIndex = 0;
+  while ((m = ABS_RE.exec(s))) out.push(m[0]);
+  return [...new Set(out)];
+}
+function bestPath(card, name) {
+  const ps = absPaths(card);
+  if (!ps.length) return '';
+  const key = String(name || '').split(/[·\s]/)[0];
+  const byName = ps.find(p => baseOf(p).includes(key) || p.includes(key));
+  if (byName) return byName;
+  // 芯片写的是文件名（v2.png）而卡里只有一个目录：按目录拼一次，再由预览侧确认文件在不在
+  if (/\.\w{2,5}$/.test(key)) {
+    const dir = ps[0].replace(/\/[^/]*$/, '');
+    return dir + '/' + key;
+  }
+  return ps.length === 1 ? ps[0] : '';
+}
+
 function socketRows(c, d) {
   const cards = (d && d.cards) || [];
   const byId = new Map(cards.map(x => [x.id, x]));
@@ -246,7 +306,8 @@ function socketRows(c, d) {
     (list.length ? list.map(m => {
       const src = m.src;
       const tipTxt = src ? `${m.name}\n来自「${src.title}」\n${detailOf(src)}` : m.name;
-      return `<span class="mod t-${m.t}" data-tip="${esc(tipTxt)}" title="${esc(tipTxt)}">${esc(m.name)}</span>`;
+      const fp = src ? bestPath(src, m.name) : '';
+      return `<span class="mod t-${m.t}" data-tip="${esc(tipTxt)}"${fp ? ` data-path="${esc(fp)}"` : ''} title="${esc(tipTxt)}">${esc(m.name)}</span>`;
     }).join('') : '') + '</span></div>';
   if (c.kind !== 'proc') {
     const ms = (c.mods || []).map(m => ({ name: m.name, t: m.type, src: c }));

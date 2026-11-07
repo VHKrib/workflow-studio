@@ -9,6 +9,7 @@ const { readChain } = require('./chain');
 const { createLinkStore } = require('./linkstore');
 const { createVersionStore } = require('./versions');
 const livefeed = require('./livefeed');
+const { pathToFileURL } = require('url');
 const HERMES = path.join(os.homedir(), '.hermes', 'hermes-agent', '.hermes', 'bin', 'hermes');
 
 // 共享链路状态文件：人和 agent 共用一份底稿（画布写、agent 读；外面改了画布认领回来）
@@ -229,6 +230,7 @@ async function liveLoad(profile, session) {
   LIVE.lastId = LIVE.msgs.reduce((n, m) => Math.max(n, Number(m.id) || 0), 0);
   console.log(`[实时画布] 只读读取「${conv.who} · ${conv.doing}」：${r.msgs.length} 条（sqlite3 -readonly file:…?mode=ro）`);
   // 卡只有一个来源：解析。跟随只在有新消息时把「已经解析好的那份」再推一遍，形状不会变成另一套。
+  if (!LIVE.doc) LIVE.doc = loadLiveDoc(profile, session);
   return { ok: true, doc: LIVE.doc || emptyDoc() };
 }
 function emptyDoc() {
@@ -266,6 +268,34 @@ function openLiveWindow() {
     console.log('[实时画布] 窗口关了：停止读取（选中的对话与开关状态已记住）');
   });
   return { ok: true };
+}
+
+// 解析结果落盘：跑完一次就存下来，重开窗口/切回来直接显示；不满意再点「重新生成」，
+// 新的没拆成功之前，旧的那份一直留着（不拿半份覆盖好的）。
+const LIVE_DOC_DIR = () => path.join(app.getPath('userData'), 'live');
+function liveDocFile(profile, session) {
+  const safe = x => String(x || '').replace(/[^\w.-]/g, '_').slice(0, 120);
+  return path.join(LIVE_DOC_DIR(), safe(profile) + '__' + safe(session) + '.json');
+}
+function saveLiveDoc(doc) {
+  try {
+    if (!doc || !doc.conv) return false;
+    fs.mkdirSync(LIVE_DOC_DIR(), { recursive: true });
+    const f = liveDocFile(doc.conv.profile, doc.conv.session);
+    const tmp = f + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(doc), 'utf8');
+    fs.renameSync(tmp, f);
+    console.log('[实时画布] 已保存解析结果：' + doc.cards.length + ' 张卡 → ' + f);
+    return true;
+  } catch (e) { console.log('[实时画布] 保存失败：' + (e && e.message || e)); return false; }
+}
+function loadLiveDoc(profile, session) {
+  try {
+    const f = liveDocFile(profile, session);
+    const d = JSON.parse(fs.readFileSync(f, 'utf8'));
+    if (d && Array.isArray(d.cards) && d.cards.length && d.conv) return d;
+  } catch (e) { }
+  return null;
 }
 
 // ---------- 从外面唤起：Hermes desktop 里点 workflow-studio://open 就能打开/前置这个窗口 ----------
@@ -362,7 +392,7 @@ const LIVE_PLAIN = [
 ].join('');
 const LIVE_MODS = 'mods 把这张卡用到的东西拆成短词模块（每块 8 个字以内，说人话）：输入卡写素材（哪几张图、哪些数据），加工卡写工具（怎么挑、怎么比、怎么查），输出卡写成果（交出的文件里有哪几样）。';
 
-const livePrompt = ({ who, topic, ask, steps, reads, writes, said }) => [
+const livePrompt = ({ who, topic, ask, steps, reads, writes, said, paths }) => [
   '【实时画布】你是平台主管，在把一条真实工作对话，画成工作流开发平台里的卡片。',
   '只做分析：不执行、不跑命令、不读写文件、不发消息、不付费。下面是只读出来的材料。',
   '',
@@ -386,7 +416,11 @@ const livePrompt = ({ who, topic, ask, steps, reads, writes, said }) => [
   '   每张加工卡至少有一个来源（输入卡或上一张加工/输出），至少交出一张输出卡；整条连成一片，不能断成几截。',
   LIVE_PLAIN,
   LIVE_MODS,
-  '4. impl 写执行时真正用到的：技能名、目录、工具、字段名（这些不进卡片正文）。',
+  '4. impl 写执行时真正用到的：技能名、工具、字段名。**并且原样抄上这一步用到/产出的文件完整路径**（下面「这次碰过的文件」里有的，一个字都不要改），',
+  '   路径只放 impl，不进卡片正文——鼠标停在素材/成果上要靠它做预览。',
+  '',
+  '这次碰过的文件（原样可用）：',
+  (paths && paths.length ? paths.join('\n') : '（没有识别到绝对路径）'),
   '5. 只输出一个 JSON 对象，不要解释，不要代码块标记。格式：',
   '{"name":"工作流名（12 字内）","summary":"一句话说清这条链路","cards":[{"key":"c1","kind":"in","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"技能/目录/工具/字段","mods":["模块短词"]}],"edges":[["c1","c2"]]}',
 ].join('\n');
@@ -501,9 +535,11 @@ function cardProblem(p) {
 }
 
 // 把这条对话整理成和读取链路同一形状的结构化原料
+const ABS_ANY = /\/(?:Users|Applications|Volumes|tmp|private|opt|home)\/[^\s"'`；;，,（）()<>|]*?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|markdown|txt|json|jsonl|csv|ya?ml|pdf)/gi;
 function liveMaterial(msgs) {
   const base = p => String(p || '').replace(/\/+$/, '').split('/').pop();
-  const reads = new Map(), writes = new Map(), steps = [], said = [];
+  const reads = new Map(), writes = new Map(), steps = [], said = [], paths = new Set();
+  let cur = '';                                   // 最近的 cd 目录：命令里的裸文件名按它拼绝对路径
   let ask = '';
   for (const m of msgs) {
     if (m.role === 'user') { if (!ask) ask = String(m.text || '').replace(/\s+/g, ' ').slice(0, 900); continue; }
@@ -511,6 +547,18 @@ function liveMaterial(msgs) {
       const a = t.args || {};
       const arg = a.path || a.file_path || a.command || a.name || a.query || a.url || '';
       steps.push(`${t.name}${arg ? ' ' + String(arg).slice(0, 70) : ''}`);
+      // 这次真的碰到的文件：绝对路径直接收；命令行里「cd 到某目录 + 裸文件名」按当前目录拼成绝对路径
+      const blob = String(JSON.stringify(a));
+      for (const m of blob.matchAll(ABS_ANY)) paths.add(m[0]);
+      if (a.command) {
+        const cd = /\bcd\s+["']?([^"'&;|]{2,300})/.exec(String(a.command));
+        if (cd) cur = cd[1].trim().replace(/\/+$/, '');
+        for (const m of String(a.command).matchAll(/([\w\u4e00-\u9fa5][\w\u4e00-\u9fa5.\-]*?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|txt|json|csv|ya?ml))\b/g)) {
+          const f = m[1];
+          if (cur && !f.startsWith('/')) paths.add(cur + '/' + f);
+        }
+      }
+      if (a.path && String(a.path).startsWith('/')) paths.add(String(a.path));
       const f = base(a.path || a.file_path || '');
       if (f && /^(read_file|vision_analyze|file_read)$/.test(t.name)) reads.set(f, (reads.get(f) || 0) + 1);
       if (f && /^(write_file|patch|edit_file|apply_patch)$/.test(t.name)) writes.set(f, (writes.get(f) || 0) + 1);
@@ -519,7 +567,8 @@ function liveMaterial(msgs) {
     if (txt.length > 60) said.push(txt.slice(0, 300));
   }
   const fmt = m => [...m.entries()].sort((x, y) => y[1] - x[1]).slice(0, 12).map(([n, c]) => (c > 1 ? `${n}×${c}` : n)).join('、');
-  return { ask, steps: steps.slice(-140).join('\n'), reads: fmt(reads), writes: fmt(writes), said: said.slice(-6).join('\n---\n') };
+  return { ask, steps: steps.slice(-140).join('\n'), reads: fmt(reads), writes: fmt(writes), said: said.slice(-6).join('\n---\n'),
+    paths: [...paths].slice(0, 60) };
 }
 
 ipcMain.handle('live:analyze', async (_e, { profile, session, topic }) => {
@@ -546,21 +595,67 @@ ipcMain.handle('live:analyze', async (_e, { profile, session, topic }) => {
       if (!why) plan = cand;
     }
     if (!plan) { LIVE.plan = null; return { ok: false, error: (why ? '链路没拆好：' + why : '分析没给出可用的链路'), retried: true, raw: lastText.slice(-400), secs: (Date.now() - t0) / 1000 }; }
+    // 模型没把路径抄进 impl 时兜一次：卡名/正文里提到的文件名，对到这次真的碰过的绝对路径上
+    const allPaths = mat.paths || [];
+    const baseName = x => String(x || '').split('/').pop();
+    for (const c of plan.cards) {
+      const has = (String(c.impl || '').match(ABS_ANY) || []).length > 0;
+      if (has || !allPaths.length) continue;
+      const hay = c.title + ' ' + c.body;
+      const hit = allPaths.find(x => {
+        const b = baseName(x);
+        return b && (hay.includes(b) || hay.includes(b.replace(/\.[^.]+$/, '')));
+      });
+      if (hit) c.impl = [String(c.impl || '').trim(), hit].filter(Boolean).join('\n').slice(0, 400);
+    }
     LIVE.plan = plan;
     LIVE.doc = {
       conv: LIVE.conv, at: Math.round(Date.now() / 1000),
       cards: plan.cards.map(c => ({ ...c, n: 1 })), edges: plan.edges,
       name: plan.name, summary: plan.summary, stats: { messages: LIVE.msgs.length },
     };
+    saveLiveDoc(LIVE.doc);
     console.log(`[实时画布] 解析完成：${LIVE.doc.cards.length} 张卡 / ${LIVE.doc.edges.length} 条连线 · ${plan.name || ''} · 用时 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
     return { ok: true, doc: LIVE.doc, name: plan.name, summary: plan.summary, secs: (Date.now() - t0) / 1000 };
   } catch (e) { return { ok: false, error: String(e && e.message || e), secs: (Date.now() - t0) / 1000 }; }
 });
 
+// 悬停素材/成果时的只读预览：只读文件本身，不写、不执行、不联网
+const PEEK_IMG = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+const PEEK_VID = /\.(mp4|mov|webm|m4v)$/i;
+const PEEK_TXT = /\.(md|markdown|txt|json|jsonl|csv|ya?ml|log|js|mjs|cjs|ts|py|sh|html?|css|ini|conf)$/i;
+ipcMain.handle('live:peek', (_e, { path: p } = {}) => {
+  try {
+    const f = String(p || '');
+    if (!f.startsWith('/')) return { ok: false, error: '不是绝对路径' };
+    const st = fs.statSync(f);
+    if (!st.isFile()) return { ok: false, error: '不是一个文件' };
+    const base = path.basename(f);
+    if (PEEK_IMG.test(f)) return { ok: true, kind: 'image', url: pathToFileURL(f).href, bytes: st.size, name: base };
+    if (PEEK_VID.test(f)) return { ok: true, kind: 'video', url: pathToFileURL(f).href, bytes: st.size, name: base };
+    if (PEEK_TXT.test(f)) {
+      const n = Math.min(st.size, 8000);
+      const fd = fs.openSync(f, 'r');
+      const buf = Buffer.alloc(n);
+      fs.readSync(fd, buf, 0, n, 0);
+      fs.closeSync(fd);
+      return { ok: true, kind: 'text', text: buf.toString('utf8'), bytes: st.size, name: base, cut: st.size > n };
+    }
+    return { ok: true, kind: 'file', name: base, bytes: st.size };
+  } catch (e) { return { ok: false, error: String((e && e.code) || (e && e.message) || e) }; }
+});
+
 ipcMain.handle('live:open', () => openLiveWindow());
 ipcMain.handle('live:list', () => livefeed.listConversations().catch(err => ({ error: String(err && err.message || err) })));
 ipcMain.handle('live:state', () => ({ profile: LIVE_STATE.profile, session: LIVE_STATE.session, on: LIVE_STATE.on, following: !!LIVE.timer, dir: livefeed.ROOT }));
-ipcMain.handle('live:snapshot', async (_e, { profile, session }) => liveLoad(profile, session));
+ipcMain.handle('live:snapshot', async (_e, { profile, session }) => {
+  const r = await liveLoad(profile, session);
+  if (r && r.ok && (!r.doc || !r.doc.cards || !r.doc.cards.length)) {
+    const saved = loadLiveDoc(profile, session);
+    if (saved) return { ok: true, doc: saved, saved: true };
+  }
+  return r;
+});
 ipcMain.handle('live:follow', async (_e, { profile, session, on }) => {
   if (!on) {
     LIVE_STATE.on = false; saveLiveState(); stopLiveTimer();

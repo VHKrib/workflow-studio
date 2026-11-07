@@ -97,3 +97,12 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
   font-size:11.5px;line-height:1.65;color:var(--ink-2);white-space:pre-wrap;word-break:break-word;pointer-events:none}
 .ltip.on{display:block}
 .ltip b{display:block;font-size:12px;color:var(--ink);margin-bottom:2px}
+
+/* 能预览就真预览：图片按看图、视频按播放器、文本按文档段落 */
+.ltip.rich{padding:8px}
+.ltip .lmeta{display:block;font-size:10.5px;color:var(--ink-3);margin:-1px 0 6px}
+.ltip .limg{display:block;max-width:360px;max-height:260px;border-radius:8px;object-fit:contain;background:#fff}
+.ltip .lvid{display:block;width:360px;max-height:260px;border-radius:8px;background:#000}
+.ltip .ltxt{max-width:360px;max-height:240px;overflow:auto;margin:0;padding:8px 10px;border-radius:8px;
+  background:var(--surface,#f7f5f1);border:1px solid var(--soft-line,#e7e1d6);font-family:var(--mono,ui-monospace,Menlo,monospace);
+  font-size:11px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--ink-2)}
