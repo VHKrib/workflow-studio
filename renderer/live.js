@@ -421,6 +421,30 @@ function closeEditor() {
 }
 
 // ---------- 画布 ----------
+// 卡片、连线、拖动全部用 cardsys.js（从主画布原样搬来的 nodeEl / modsHTML / drawEdges / dragCard）。
+// 这个文件只负责：把 doc 变成主画布那套 flow()/{nodes,edges}、排版、以及保存。
+const CANVAS = { w: 12000, h: 8000 };
+let selId = null;
+
+const find = id => ((doc && doc.cards) || []).find(c => c.id === id) || null;
+const flow = () => (doc ? { id: doc.conv.key, nodes: doc.cards, edges: (doc.edges || []).map(e => [e[0], e[1]]) } : null);
+const modsOf = n => (n && Array.isArray(n.mods) ? n.mods : []);
+const implOf = n => String((n && n.impl) || '').trim();
+const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y]);
+function findDock() { return null; }                     // 实时窗口不接插槽（连线是解析出来的，不靠拖）
+function saveStore() { persist(); }              // 拖动收尾：存位置
+function openCard(n) { openEditor(n.id); }       // 双击 / ⚙ 都进同一个面板
+function chatAsk() { const i = document.getElementById('chatIn'); if (i) i.focus(); }
+
+// 只读窗口里的「连线」按钮：不建新关系，只提示一句
+function noLink() { setStat('实时画布的连线是解析出来的，不能手动加'); }
+function startLink() { noLink(); }     // 覆盖 cardsys 里那份（它要写连线）
+// cardsys 的 nodeEl 会调这两个：选中高亮 + 从插槽里拖出来断开（实时窗口不接插槽，后者是空操作）
+function markSel() {
+  document.querySelectorAll('#canvas .node').forEach(el => el.classList.toggle('sel', el.dataset.id === selId));
+}
+function unplugDrag() { setStat('实时画布的模块是从对话里解析出来的，不能在卡片上拖动断开'); }
+
 function applyZoom() {
   const cw = wrap.clientWidth, ch = wrap.clientHeight;
   const changed = zoom !== lastZoom;
@@ -429,308 +453,146 @@ function applyZoom() {
   canvas.style.transform = `scale(${zoom})`;
   if (changed && cw && ch) { wrap.scrollLeft = cx * zoom - cw / 2; wrap.scrollTop = cy * zoom - ch / 2; }
   lastZoom = zoom;
-  $('#zoom').textContent = Math.round(zoom * 100) + '%';
+  const z = $('#zoom'); if (z) z.textContent = Math.round(zoom * 100) + '%';
 }
 
-// 卡片长相对齐主画布（同一个 .node 结构：头部 kind+标题+状态点、正文、模块行、底部 chips）
-// 区别只有一点：这个窗口只读，所以没有「问 / 下一步 / 连线」那几个按钮，也不能拖进插槽。
-const KIND_LABEL = { in: '输入', proc: '加工', out: '输出' };
-const KIND_PH = { in: '这一步要先有什么', proc: '这一步让人做什么', out: '最后交出什么' };
-const MOD_LAB = { in: '素材', proc: '工具', out: '成果' };
-const MOD_TYPE = { in: 'mat', proc: 'tool', out: 'res' };
-
-// 卡面三块和主画布同一套含义：素材 / 工具 / 成果（由真实边反推，都在 doc.cards[].mods 里）
-const MOD_LABEL = { mat: '素材', tool: '工具', res: '成果' };
-function modsRow(c) {
-  const ms = Array.isArray(c.mods) ? c.mods : [];
-  if (!ms.length) return '';
-  const order = c.kind === 'in' ? ['mat'] : c.kind === 'out' ? ['res'] : ['mat', 'tool', 'res'];
-  const lines = order.map(t => {
-    const list = ms.filter(m => m.type === t);
-    if (!list.length) return '';
-    return `<div class="mline"><span class="mlab">${MOD_LABEL[t]}</span><span class="mchips">${list.map(m => `<span class="mod t-${t}">${esc(m.name)}</span>`).join('')}</span></div>`;
-  }).join('');
-  return lines ? `<div class="mods">${lines}</div>` : '';
-}
-
-// 加工卡和主画布一样是「三段」：素材（哪张上游卡喂进来的）/ 工具（自己怎么做）/ 成果（交出去的是什么）。
-// 只读窗口不能拖插槽，但「用什么 → 出来什么」必须看得见。
-// 悬停要能看到「具体的输入/产出」：chip 的 title 里写清 它是什么、来自哪张卡、卡里记的素材明细。
-// 明细优先取那张卡自己的内部实现（里面是真路径/真参数），没有就用正文第一句。
-function detailOf(card) {
-  if (!card) return '';
-  const lines = String(card.impl || '').split('\n').map(x => x.trim()).filter(Boolean)
-    .filter(x => !/^证据[:：]/.test(x));
-  const pick = lines.find(x => /[/\\.]|字节|像素|尺寸|版本|张|份/.test(x)) || lines[0] || '';
-  return (pick || String(card.body || '')).slice(0, 160);
-}
-// 从这张卡记的内部实现/正文里认出真文件：只认**绝对路径**（/Users、/Applications、/Volumes…），
-// 相对路径和「a/b/c.png」这种片段不算——否则会把 sketch-board-v1/v2/v3.png 当成 /v2/v3.png。
-const ABS_RE = /\/(?:Users|Applications|Volumes|tmp|private|opt|home)\/[^\s"'`；;，,（）()<>|]*?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|markdown|txt|json|jsonl|csv|ya?ml|pdf)/gi;
-const baseOf = p => String(p || '').split('/').pop();
-function pathsOf(card) {                     // 这张卡上记着的真文件（绝对路径、去重、保持出现顺序）
-  const s = String(card && card.impl || '') + '\n' + String(card && card.body || '');
-  const out = []; let m;
-  ABS_RE.lastIndex = 0;
-  while ((m = ABS_RE.exec(s))) out.push(m[0]);
-  ABS_RE.lastIndex = 0;
-  return [...new Set(out)];
-}
-// 一张卡里常有好几份素材/成果：每个 chip 要对应到**它自己那一份**，不能都指到第一张。
-// 认法：chip 名对上文件名/文件名词 → 得高分；卡内那句话里出现过这个名字 → 加分；
-// 分数一样就按顺序各取一份（同一行里已经用过的先跳过）。
-function scorePath(path, name, text) {
-  const base = baseOf(path);
-  const stem = base.replace(/\.[^.]+$/, '');
-  let score = 0;
-  if (name && (name.includes(stem) || stem.includes(name) || name.includes(base))) score += 8;
-  const chars = [...stem].filter(c => /[\u4e00-\u9fa5A-Za-z0-9]/.test(c));
-  score += Math.min(chars.length, chars.filter(c => name && name.includes(c)).length) * 0.6;
-  if (text && base && text.includes(base)) score += 2;
-  if (text && stem && text.includes(stem)) score += 1;
-  // 反义词撞车要扣分：「下落前线稿」不能配到「线稿-下落后.png」
-  const pairs = [['前', '后'], ['上', '下'], ['装配', '落'], ['左', '右'], ['素描', '线稿'], ['草图', '线稿']];
-  for (const [x, y] of pairs) {
-    if (name && name.includes(x) && stem.includes(y) && !stem.includes(x)) score -= 4;
-    if (name && name.includes(y) && stem.includes(x) && !stem.includes(y)) score -= 4;
+// 排版：从入口走几步分列；人拖过的卡按它自己的坐标，不参与自动成列
+function layout() {
+  const COLW = 340, ROWGAP = 26, MAXBAND = 1500, GAPY = 160;
+  const cards = (doc && doc.cards) || [];
+  if (!cards.length) return;
+  const ids = cards.map(c => c.id);
+  const out = new Map(ids.map(i => [i, []]));
+  const indeg = new Map(ids.map(i => [i, 0]));
+  for (const e of (doc.edges || [])) {
+    const [x, y] = e;
+    if (!out.has(x) || !out.has(y) || x === y) continue;
+    out.get(x).push(y); indeg.set(y, (indeg.get(y) || 0) + 1);
   }
-  return score;
-}
-function bestPath(card, name, used) {
-  const ps = pathsOf(card);
-  if (!ps.length) return '';
-  const text = String(card && card.body || '') + '\n' + String(card && card.impl || '');
-  const pool = ps.filter(x => !used || !used.has(x));
-  const list = pool.length ? pool : ps;
-  let best = '', bestScore = -1;
-  for (const p2 of list) {
-    const sc = scorePath(p2, String(name || ''), text);
-    if (sc > bestScore) { bestScore = sc; best = p2; }
+  const depth = new Map();
+  const queue = ids.filter(i => (indeg.get(i) || 0) === 0);
+  if (!queue.length) queue.push(ids[0]);
+  for (const i of queue) depth.set(i, 0);
+  let guard = 0;
+  while (queue.length && guard++ < ids.length * 8 + 2000) {
+    const i = queue.shift();
+    for (const j of out.get(i) || []) if (!depth.has(j)) { depth.set(j, (depth.get(i) || 0) + 1); queue.push(j); }
   }
-  return best;
+  for (const i of ids) if (!depth.has(i)) depth.set(i, 0);
+  const byDepth = new Map();
+  for (const c of cards) {
+    const d = depth.get(c.id) || 0;
+    if (!byDepth.has(d)) byDepth.set(d, []);
+    byDepth.get(d).push(c);
+  }
+  for (const [d, list] of [...byDepth.entries()].sort((x, y) => x[0] - y[0])) {
+    let y = 0;
+    for (const c of list) {
+      if (c.manual && Number.isFinite(c.x) && Number.isFinite(c.y)) continue;   // 人拖过：保持原位
+      c.x = d * COLW; c.y = y;
+      y += (c.h || 150) + ROWGAP;
+    }
+  }
 }
 
-function socketRows(c, d) {
-  const cards = (d && d.cards) || [];
-  const byId = new Map(cards.map(x => [x.id, x]));
-  const ups = ((d && d.edges) || []).filter(e => e[1] === c.id).map(e => byId.get(e[0])).filter(Boolean);
-  const downs = ((d && d.edges) || []).filter(e => e[0] === c.id).map(e => byId.get(e[1])).filter(Boolean);
-  const chips = (list, fallback) => list.flatMap(src =>
-    (src.mods && src.mods.length) ? src.mods.map(m => ({ name: m.name, t: m.type, src, mod: m })) : [{ name: src.title, t: fallback, src, mod: null }]
-  ).filter(x => x.name).slice(0, 6);
-  const assign = pairs => {                      // 同一行里每个 chip 各拿一份，尽量不重复
-    const used = new Set();
-    return pairs.map(({ name, t, src, mod }) => {
-      const path = (mod && mod.path) || (src ? bestPath(src, name, used) : '');   // 人改过的文件优先
-      if (mod && !mod.path && path) mod.path = path;
-      if (path) used.add(path);
-      return { name, t, src, path };
+// 存盘（拖动、改内容都走这里）
+function persist() {
+  if (!doc) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { window.tcflow.liveDocSave(doc).catch(() => {}); }, 400);
+}
+
+function detailOf(c) {
+  const imp = implOf(c);
+  return imp || c.body || '';
+}
+// 这颗药丸指向的文件：模块上带 path 就用它；没有就从标题/名字里找（找不到返回 '' 就不显示预览）
+function bestPath(c, name, used) {
+  const ms = modsOf(c);
+  const hit = ms.find(m => m.name === name && m.path && !used.has(m.path));
+  if (hit) return hit.path;
+  const any = ms.find(m => m.path && !used.has(m.path));
+  if (any) return any.path;
+  const imp = implOf(c);
+  return imp && /^\//.test(imp) && !used.has(imp) ? imp : '';
+}
+
+// 卡片上每个药丸对应哪份文件（悬停预览要用）
+function annotateChips() {
+  const cards = (doc && doc.cards) || [];
+  const byId = new Map(cards.map(c => [c.id, c]));
+  const ups = id => ((doc.edges || []).filter(e => e[1] === id).map(e => byId.get(e[0])).filter(Boolean));
+  const downs = id => ((doc.edges || []).filter(e => e[0] === id).map(e => byId.get(e[1])).filter(Boolean));
+  for (const n of canvas.querySelectorAll('#canvas .node')) {
+    const c = find(n.dataset.id);
+    if (!c) continue;
+    const rows = [...n.querySelectorAll('.mline')];
+    rows.forEach(row => {
+      const lab = (row.querySelector('.mlab') || {}).textContent || '';
+      const chips = [...row.querySelectorAll('.mod')];
+      const srcList = c.kind !== 'proc' ? [c] : lab === '素材' ? ups(c.id) : lab === '成果' ? downs(c.id) : [];
+      const used = new Set();
+      chips.forEach((chip, i) => {
+        const src = srcList[i % Math.max(1, srcList.length)];
+        if (!src) return;
+        const path = bestPath(src, chip.textContent, used);
+        if (!path) return;
+        used.add(path);
+        chip.dataset.path = path;
+        const tipTxt = `${chip.textContent}\n来自「${src.title}」\n${detailOf(src)}`;
+        chip.dataset.tip = tipTxt;
+        chip.title = tipTxt;
+      });
     });
-  };
-  const line = (lab, list, ph) => `<div class="mline"><span class="mlab">${lab}</span><span class="mchips"${list.length ? '' : ` data-ph="${ph}"`}>` +
-    (list.length ? list.map(m => {
-      const src = m.src;
-      const tipTxt = src ? `${m.name}\n来自「${src.title}」\n${detailOf(src)}` : m.name;
-      const fp = m.path || '';
-      return `<span class="mod t-${m.t}" data-tip="${esc(tipTxt)}"${fp ? ` data-path="${esc(fp)}"` : ''} title="${esc(tipTxt)}">${esc(m.name)}</span>`;
-    }).join('') : '') + '</span></div>';
-  if (c.kind !== 'proc') {
-    const ms = assign((c.mods || []).map(m => ({ name: m.name, t: m.type, src: c })));
-    if (!ms.length) return '';
-    return `<div class="mods">${line(MOD_LAB[c.kind] || '模块', ms, '')}</div>`;
   }
-  return `<div class="mods">${line('素材', assign(chips(ups, 'mat')), '没接到素材')}` +
-    `${line('工具', (c.mods || []).map(m => ({ name: m.name, t: m.type })), '没写怎么做')}` +
-    `${line('成果', assign(chips(downs, 'res')), '没有产出')}</div>`;
 }
-
-function cardEl(c, d) {
-  const el = document.createElement('div');
-  el.className = 'node k-' + c.kind;
-  el.dataset.id = c.id;
-  el.innerHTML = `
-    <div class="hd"><span class="kind">${KIND_LABEL[c.kind] || '加工'}</span><div class="t">${esc(c.title)}</div><div class="st"></div></div>
-    <div class="body" data-ph="${KIND_PH[c.kind] || ''}">${esc(c.body)}</div>
-    ${socketRows(c, d)}
-    <div class="ft"><div class="checks"></div>${c.impl ? '<span class="gar" title="内部实现已封装：卡片上不显示，点开看">⚙</span>' : ''}</div>
-    ${c.impl ? `<details class="limpl"><summary>⚙ 内部实现</summary><pre>${esc(c.impl)}</pre></details>` : ''}`;
-  const det = el.querySelector('details.limpl');
-  if (det) det.addEventListener('toggle', () => { layout(); drawEdges(); });
-  return el;
-}
-
-const sigOf = c => JSON.stringify([c.kind, c.title, c.body, c.impl, (c.mods || []).map(m => m.type + ':' + m.name)]);
 
 function renderDoc(d, opts) {
   if (!d || !Array.isArray(d.cards)) return;
-  // 已经解析出正式链路，就别让「按消息粗归并」的版本把它盖掉（解析结果自己带 opts.analyzed）
-  if (analyzedKey && analyzedKey === cur && !(opts && opts.analyzed)) return;
   const switched = doc && doc.conv && d.conv && doc.conv.key !== d.conv.key;
-  const before = (doc && doc.cards || []).length;
   doc = d;
+  for (const c of doc.cards) { if (!Number.isFinite(c.x)) c.x = 0; if (!Number.isFinite(c.y)) c.y = 0; c.checks = c.checks || []; }
   if (switched) { fitted = false; canvas.querySelectorAll('.node').forEach(el => el.remove()); edgesSvg.innerHTML = ''; }
-
-  const live = new Map([...canvas.querySelectorAll('.node')].map(el => [el.dataset.id, el]));
-  const keep = new Set();
-  for (const c of d.cards) {
-    keep.add(c.id);
-    const sig = sigOf(c);
-    const old = live.get(c.id);
-    if (!old) { const el = cardEl(c, d); el.dataset.sig = sig; canvas.appendChild(el); continue; }
-    if (old.dataset.sig !== sig) { const el = cardEl(c, d); el.dataset.sig = sig; old.replaceWith(el); }
-  }
-  for (const [id, el] of live) if (!keep.has(id)) el.remove();
-
   layout();
-  if (!fitted && d.cards.length) { fit(); fitted = true; }
-  else if (d.cards.length > before) keepLastInView();
+  const keep = new Set();
+  for (const c of doc.cards) {
+    keep.add(c.id);
+    const old = canvas.querySelector(`.node[data-id="${CSS.escape(c.id)}"]`);
+    if (!old) { canvas.appendChild(nodeEl(c)); continue; }
+    if (old.dataset.sig !== nodeSig(c)) { const el = nodeEl(c); old.replaceWith(el); }
+    else { old.style.left = (c.x + OX) + 'px'; old.style.top = (c.y + OY) + 'px'; }
+  }
+  for (const el of [...canvas.querySelectorAll('.node')]) if (!keep.has(el.dataset.id)) el.remove();
   drawEdges();
-  paintStat(); paintEmpty(); paintEnts(d);
-}
-
-// 排布：按「从入口走了几步」分列，同一列上下堆。分叉自然在同一列错开，读成树枝。
-// 「改」和「新版」是回指/版本链，不推后一列（否则同一文件的新版本会被推到很远的右边）。
-function layout() {
-  const COLW = 340, ROWGAP = 26, MAXBAND = 1500, GAPY = 160;
-  pos.clear();
-  const cards = doc ? doc.cards : [];
-  if (!cards.length) return;
-  const byId = new Map(cards.map(c => [c.id, c]));
-  const ids = cards.map(c => c.id);
-  // 每一段（互不相干的一截）单独排，按段上下分开——不硬连成一条长蛇
-  const segs = ((doc.segments && doc.segments.length) ? doc.segments : [ids])
-    .map(s => s.filter(id => byId.has(id))).filter(s => s.length);
-  let top = 0;
-  for (const seg of segs) {
-    const inSeg = new Set(seg);
-    const outE = new Map(seg.map(i => [i, []]));
-    const indeg = new Map(seg.map(i => [i, 0]));
-    for (const e of (doc.edges || [])) {
-      const [a, b, k] = e;
-      if (!inSeg.has(a) || !inSeg.has(b) || a === b) continue;
-      if (k === 'revise' || k === 'evolve') continue;
-      outE.get(a).push(b);
-      indeg.set(b, (indeg.get(b) || 0) + 1);
-    }
-    // 层数用**最短**路径算，不用最长：有环时最长会一直把卡片往右推（实测一张卡被推到第 296 列）
-    const depth = new Map();
-    const queue = seg.filter(i => (indeg.get(i) || 0) === 0);
-    if (!queue.length) queue.push(seg[0]);
-    for (const i of queue) depth.set(i, 0);
-    while (queue.length) {
-      const i = queue.shift();
-      for (const j of outE.get(i) || []) if (!depth.has(j)) { depth.set(j, (depth.get(i) || 0) + 1); queue.push(j); }
-    }
-    for (const i of seg) if (!depth.has(i)) depth.set(i, 0);
-    const maxD = Math.max(0, ...seg.map(i => depth.get(i)));
-    const colY = new Map();
-    let band = 0, bottom = 0;
-    for (const id of seg) {
-      const el = canvas.querySelector(`.node[data-id="${CSS.escape(id)}"]`);
-      if (!el) continue;
-      const d = depth.get(id) || 0;
-      const h = el.offsetHeight || 150;
-      // 人拖过就按人摆的位置，不再参与自动成列
-      const card = byId.get(id);
-      if (card && Number.isFinite(card.x) && Number.isFinite(card.y)) {
-        el.style.left = (card.x + OX) + 'px';
-        el.style.top = (card.y + OY) + 'px';
-        pos.set(id, { x: card.x + OX, y: card.y + OY, w: el.offsetWidth || 244, h });
-        continue;
-      }
-      let key = band + ':' + d;
-      let y = colY.get(key) || 0;
-      if (y + h > MAXBAND) { band++; key = band + ':' + d; y = 0; }   // 一列太高：本段里另起一条带
-      const x = d * COLW + band * (maxD + 1.5) * COLW;
-      el.style.left = (x + OX) + 'px';
-      el.style.top = (top + y + OY) + 'px';
-      pos.set(id, { x: x + OX, y: top + y + OY, w: el.offsetWidth || 244, h });
-      colY.set(key, y + h + ROWGAP);
-      bottom = Math.max(bottom, y + h);
-    }
-    top += bottom + GAPY;
-  }
-}
-
-
-// 四种关系都画成真线（不是写在文字里）：
-// use 用的材料/旧产物 → 加工（实线）；make 加工 → 产物（实线）；revise 看了哪一版才改（橘色虚线 + 「改」）；
-// evolve 同一个文件的新版本（紫色细线 + 「vN」）。
-const EDGE_STYLE = {
-  use: { stroke: 'rgba(17,17,17,.30)', width: 1.6, dash: '', label: '' },
-  make: { stroke: 'rgba(17,17,17,.34)', width: 1.8, dash: '', label: '' },
-  revise: { stroke: 'rgba(255,90,31,.62)', width: 1.6, dash: '5 4', label: '改' },
-  evolve: { stroke: 'rgba(122,86,168,.5)', width: 1.4, dash: '2 3', label: '新版' },
-};
-function drawEdges() {
-  if (!doc) return;
-  const end = id => pos.get(id);
-  let h = `<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="rgba(17,17,17,.42)"/></marker>` +
-    `<marker id="ar-or" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="rgba(255,90,31,.75)"/></marker></defs>`;
-  for (const e of (doc.edges || [])) {
-    const [a, b, k] = e;
-    const st = EDGE_STYLE[k] || EDGE_STYLE.use;
-    const pa = end(a), pb = end(b);
-    if (!pa || !pb) continue;
-    const forward = pb.x > pa.x + pa.w - 20;
-    const x1 = forward ? pa.x + pa.w : pa.x + pa.w / 2;
-    const y1 = forward ? pa.y + pa.h / 2 : pa.y + pa.h;
-    const x2 = forward ? pb.x : pb.x + pb.w / 2;
-    const y2 = forward ? pb.y + pb.h / 2 : pb.y;
-    const dx = Math.max(50, Math.abs(x2 - x1) / 2);
-    const d = forward
-      ? `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`
-      : (k === 'revise' || k === 'evolve')
-        // 「改」「新版」是往回指的：从上一版的底部绕到加工卡/新版卡的上方，别和材料流混在一起
-        ? `M${pa.x + pa.w / 2},${pa.y} C${pa.x + pa.w / 2 - 90},${pa.y - 60} ${pb.x + pb.w / 2 + 90},${pb.y + pb.h + 60} ${pb.x + pb.w / 2},${pb.y + pb.h}`
-        : `M${x1},${y1} C${x1},${y1 + 70} ${x2},${y2 - 70} ${x2},${y2}`;
-    h += `<path class="edge e-${k || 'use'}" d="${d}" fill="none" stroke="${st.stroke}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''} marker-end="url(#${k === 'revise' ? 'ar-or' : 'ar'})"/>`;
-    if (st.label) {
-      const lx = forward ? (x1 + x2) / 2 : pa.x + pa.w / 2 - 18;
-      const ly = forward ? (y1 + y2) / 2 - 6 : pa.y - 10;
-      h += `<text class="elab ${k}" x="${lx}" y="${ly}" font-size="10" fill="${st.stroke}">${st.label}</text>`;
-    }
-  }
-  edgesSvg.innerHTML = h;
+  annotateChips();
+  if (!fitted && doc.cards.length) { fit(); fitted = true; }
+  paintStat(); paintEmpty();
 }
 
 function bbox() {
-  const ps = [...pos.values()];
-  if (!ps.length) return null;
-  return {
-    x0: Math.min(...ps.map(p => p.x)), y0: Math.min(...ps.map(p => p.y)),
-    x1: Math.max(...ps.map(p => p.x + p.w)), y1: Math.max(...ps.map(p => p.y + p.h)),
-  };
+  const ns = [...canvas.querySelectorAll('#canvas .node')];
+  if (!ns.length) return null;
+  const rs = ns.map(n => n.getBoundingClientRect());
+  return { x0: Math.min(...rs.map(r => r.left)), y0: Math.min(...rs.map(r => r.top)), x1: Math.max(...rs.map(r => r.right)), y1: Math.max(...rs.map(r => r.bottom)) };
 }
 function fit() {
-  const b = bbox(); if (!b) return;
-  const pad = 60, W = wrap.clientWidth, H = wrap.clientHeight;
-  const need = Math.min(W / (b.x1 - b.x0 + 2 * pad), H / (b.y1 - b.y0 + 2 * pad));
-  zoom = Math.max(0.42, Math.min(1, Math.floor(need * 20) / 20));    // 太小的缩放字看不清：宁可超出视口让人平移
-  applyZoom();
-  const wide = (b.x1 - b.x0 + 2 * pad) * zoom > W, tall = (b.y1 - b.y0 + 2 * pad) * zoom > H;
-  // pos 里的坐标已经含 ORIGIN 了，这里不要再加一次（加了会整体滚出 6000*zoom，画面一片空）
-  wrap.scrollLeft = wide ? Math.max(0, (b.x0 - pad) * zoom) : Math.max(0, ((b.x0 + b.x1) / 2) * zoom - W / 2);
-  wrap.scrollTop = tall ? Math.max(0, (b.y0 - pad) * zoom) : Math.max(0, ((b.y0 + b.y1) / 2) * zoom - H / 2);
-}
-// 长卡时视野跟着走：最新那张卡不在视口里就滚过去（不折缩放，不打扰人）
-function keepLastInView() {
-  if (!doc || !doc.cards.length) return;
-  const last = pos.get(doc.cards[doc.cards.length - 1].id);
-  if (!last) return;
-  const wr = wrap.getBoundingClientRect();
-  const sl = last.x * zoom, st = last.y * zoom, sr = (last.x + last.w) * zoom, sb = (last.y + last.h) * zoom;
-  const pad = 40;
-  if (sl < wrap.scrollLeft + pad) wrap.scrollLeft = Math.max(0, sl - pad);
-  else if (sr > wrap.scrollLeft + wr.width - pad) wrap.scrollLeft = sr - wr.width + pad;
-  if (st < wrap.scrollTop + pad) wrap.scrollTop = Math.max(0, st - pad);
-  else if (sb > wrap.scrollTop + wr.height - pad) wrap.scrollTop = sb - wr.height + pad;
+  const ns = (doc && doc.cards) || [];
+  if (!ns.length) return;
+  const W = wrap.clientWidth, H = wrap.clientHeight;
+  const xs = ns.map(c => c.x), ys = ns.map(c => c.y);
+  const x0 = Math.min(...xs), y0 = Math.min(...ys);
+  const x1 = Math.max(...xs) + 260, y1 = Math.max(...ys) + 190;
+  const pad = 80;
+  const z = Math.min(1, Math.max(0.25, Math.min((W - pad * 2) / Math.max(1, x1 - x0), (H - pad * 2) / Math.max(1, y1 - y0))));
+  zoom = z; applyZoom();
+  wrap.scrollLeft = (OX + x0 - pad) * z;      // 卡画在 ORIGIN 偏移之后的坐标上，滚动量要带上它
+  wrap.scrollTop = (OY + y0 - pad) * z;
 }
 
 function bindCanvas() {
   let panning = false, sx = 0, sy = 0, ox = 0, oy = 0;
   wrap.addEventListener('pointerdown', e => {
-    if (e.button !== 0 || e.target.closest('.node')) return;
+    if (e.button !== 0 || e.target.closest('.node') || e.target.closest('.zoombar')) return;
     panning = true; sx = e.clientX; sy = e.clientY; ox = wrap.scrollLeft; oy = wrap.scrollTop;
     wrap.classList.add('panning');
   });
@@ -747,65 +609,13 @@ function bindCanvas() {
     applyZoom(); drawEdges();
   }, { passive: false });
   $('#zoomIn').onclick = () => { zoom = Math.min(1.8, zoom + 0.1); applyZoom(); drawEdges(); };
-  $('#lana').onclick = () => analyzeNow(true);
-  // 按住卡片拖动：位置写进这份解析结果；空白处拖动仍然是平移画板
-  let drag = null;
-  canvas.addEventListener('pointerdown', ev => {
-    if (ev.button !== 0) return;
-    if (ev.target.closest('details') || ev.target.closest('.mod')) return;
-    const el = ev.target.closest('.node');
-    if (!el) return;
-    const id = el.dataset.id;
-    const p0 = pos.get(id);
-    if (!p0) return;
-    const wr = wrap.getBoundingClientRect();
-    drag = { el, id, moved: false, sx: ev.clientX, sy: ev.clientY,
-      dx: (ev.clientX - wr.left + wrap.scrollLeft) / zoom - p0.x,
-      dy: (ev.clientY - wr.top + wrap.scrollTop) / zoom - p0.y };
-    // 不要在 pointerdown 上 preventDefault：那会把随后的 click/dblclick 一起吃掉（双击就打不开了）
-  });
-  canvas.addEventListener('pointermove', ev => {
-    if (!drag) return;
-    if (!drag.moved) {                       // 动过 3px 才算拖，否则让双击照常发生
-      if (Math.abs(ev.clientX - drag.sx) < 3 && Math.abs(ev.clientY - drag.sy) < 3) return;
-      drag.moved = true;
-      drag.el.classList.add('dragging');
-    }
-    const wr = wrap.getBoundingClientRect();
-    const x = (ev.clientX - wr.left + wrap.scrollLeft) / zoom - drag.dx;
-    const y = (ev.clientY - wr.top + wrap.scrollTop) / zoom - drag.dy;
-    drag.el.style.left = (x + OX) + 'px';
-    drag.el.style.top = (y + OY) + 'px';
-    const p1 = pos.get(drag.id);
-    if (p1) { p1.x = x + OX; p1.y = y + OY; }
-    drawEdges();
-  });
-  const drop = async () => {
-    if (!drag) return;
-    const wasMoved = drag.moved;
-    const { el, id } = drag;
-    el.classList.remove('dragging');
-    if (!wasMoved) { drag = null; return; }        // 只是点了一下：不存位置
-    const p1 = pos.get(id);
-    const card = (doc && doc.cards || []).find(c => c.id === id);
-    if (card && p1) { card.x = Math.round(p1.x - OX); card.y = Math.round(p1.y - OY); }
-    drag = null;
-    layout(); drawEdges();
-    if (card) { try { await window.tcflow.liveDocSave(doc); } catch (e) { } }
-  };
-  canvas.addEventListener('pointerup', drop);
-  canvas.addEventListener('pointercancel', drop);
-  const box = document.getElementById('ledit');
-  if (box) {
-    document.getElementById('ledClose').onclick = closeEditor;
-    box.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeEditor(); });
-    canvas.addEventListener('dblclick', ev => {
-      const n = ev.target.closest && ev.target.closest('.node');
-      if (n && n.dataset.id) { ev.preventDefault(); openEditor(n.dataset.id); }
-    });
-  }   // 常驻在这里，别塞进 follow()（不然不拨开关就点不动）
   $('#zoomOut').onclick = () => { zoom = Math.max(0.3, zoom - 0.1); applyZoom(); drawEdges(); };
-  $('#zoomReset').onclick = () => { zoom = 1; applyZoom(); fit(); drawEdges(); };
+  $('#zoomReset').onclick = () => { zoom = 1; applyZoom(); layout(); fit(); drawEdges(); };
+  const lana = $('#lana'); lana.onclick = () => analyzeNow(true);
+  const closeBtn = document.getElementById('ledClose');
+  if (closeBtn) closeBtn.onclick = closeEditor;
+  const box = document.getElementById('ledit');
+  if (box) box.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeEditor(); });
   addEventListener('resize', () => { drawEdges(); });
 }
 
