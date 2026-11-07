@@ -122,6 +122,8 @@ async function analyzeNow(manual) {
 }
 
 // 打开窗口/切对话：先把上次保存的解析结果摆上来（不用重新跑模型）；没有就等解析
+window.__renderDoc = (d) => renderDoc(d, { analyzed: true });   // 调试用：把保存过的一份直接摆上来，不跑模型
+
 async function hydrate(key) {
   const found = list.find(c => c.key === key);
   if (!found) return false;
@@ -299,25 +301,46 @@ function detailOf(card) {
 // 相对路径和「a/b/c.png」这种片段不算——否则会把 sketch-board-v1/v2/v3.png 当成 /v2/v3.png。
 const ABS_RE = /\/(?:Users|Applications|Volumes|tmp|private|opt|home)\/[^\s"'`；;，,（）()<>|]*?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|markdown|txt|json|jsonl|csv|ya?ml|pdf)/gi;
 const baseOf = p => String(p || '').split('/').pop();
-function absPaths(card) {
+function pathsOf(card) {                     // 这张卡上记着的真文件（绝对路径、去重、保持出现顺序）
   const s = String(card && card.impl || '') + '\n' + String(card && card.body || '');
   const out = []; let m;
   ABS_RE.lastIndex = 0;
   while ((m = ABS_RE.exec(s))) out.push(m[0]);
+  ABS_RE.lastIndex = 0;
   return [...new Set(out)];
 }
-function bestPath(card, name) {
-  const ps = absPaths(card);
-  if (!ps.length) return '';
-  const key = String(name || '').split(/[·\s]/)[0];
-  const byName = ps.find(p => baseOf(p).includes(key) || p.includes(key));
-  if (byName) return byName;
-  // 芯片写的是文件名（v2.png）而卡里只有一个目录：按目录拼一次，再由预览侧确认文件在不在
-  if (/\.\w{2,5}$/.test(key)) {
-    const dir = ps[0].replace(/\/[^/]*$/, '');
-    return dir + '/' + key;
+// 一张卡里常有好几份素材/成果：每个 chip 要对应到**它自己那一份**，不能都指到第一张。
+// 认法：chip 名对上文件名/文件名词 → 得高分；卡内那句话里出现过这个名字 → 加分；
+// 分数一样就按顺序各取一份（同一行里已经用过的先跳过）。
+function scorePath(path, name, text) {
+  const base = baseOf(path);
+  const stem = base.replace(/\.[^.]+$/, '');
+  let score = 0;
+  if (name && (name.includes(stem) || stem.includes(name) || name.includes(base))) score += 8;
+  const chars = [...stem].filter(c => /[\u4e00-\u9fa5A-Za-z0-9]/.test(c));
+  score += Math.min(chars.length, chars.filter(c => name && name.includes(c)).length) * 0.6;
+  if (text && base && text.includes(base)) score += 2;
+  if (text && stem && text.includes(stem)) score += 1;
+  // 反义词撞车要扣分：「下落前线稿」不能配到「线稿-下落后.png」
+  const pairs = [['前', '后'], ['上', '下'], ['装配', '落'], ['左', '右'], ['素描', '线稿'], ['草图', '线稿']];
+  for (const [x, y] of pairs) {
+    if (name && name.includes(x) && stem.includes(y) && !stem.includes(x)) score -= 4;
+    if (name && name.includes(y) && stem.includes(x) && !stem.includes(y)) score -= 4;
   }
-  return ps[0];          // 名字对不上也给一个：宁可预览第一份，也不要什么都不显示
+  return score;
+}
+function bestPath(card, name, used) {
+  const ps = pathsOf(card);
+  if (!ps.length) return '';
+  const text = String(card && card.body || '') + '\n' + String(card && card.impl || '');
+  const pool = ps.filter(x => !used || !used.has(x));
+  const list = pool.length ? pool : ps;
+  let best = '', bestScore = -1;
+  for (const p2 of list) {
+    const sc = scorePath(p2, String(name || ''), text);
+    if (sc > bestScore) { bestScore = sc; best = p2; }
+  }
+  return best;
 }
 
 function socketRows(c, d) {
@@ -328,21 +351,29 @@ function socketRows(c, d) {
   const chips = (list, fallback) => list.flatMap(src =>
     (src.mods && src.mods.length) ? src.mods.map(m => ({ name: m.name, t: m.type, src })) : [{ name: src.title, t: fallback, src }]
   ).filter(x => x.name).slice(0, 6);
+  const assign = pairs => {                      // 同一行里每个 chip 各拿一份，尽量不重复
+    const used = new Set();
+    return pairs.map(({ name, t, src }) => {
+      const path = src ? bestPath(src, name, used) : '';
+      if (path) used.add(path);
+      return { name, t, src, path };
+    });
+  };
   const line = (lab, list, ph) => `<div class="mline"><span class="mlab">${lab}</span><span class="mchips"${list.length ? '' : ` data-ph="${ph}"`}>` +
     (list.length ? list.map(m => {
       const src = m.src;
       const tipTxt = src ? `${m.name}\n来自「${src.title}」\n${detailOf(src)}` : m.name;
-      const fp = src ? bestPath(src, m.name) : '';
+      const fp = m.path || '';
       return `<span class="mod t-${m.t}" data-tip="${esc(tipTxt)}"${fp ? ` data-path="${esc(fp)}"` : ''} title="${esc(tipTxt)}">${esc(m.name)}</span>`;
     }).join('') : '') + '</span></div>';
   if (c.kind !== 'proc') {
-    const ms = (c.mods || []).map(m => ({ name: m.name, t: m.type, src: c }));
+    const ms = assign((c.mods || []).map(m => ({ name: m.name, t: m.type, src: c })));
     if (!ms.length) return '';
     return `<div class="mods">${line(MOD_LAB[c.kind] || '模块', ms, '')}</div>`;
   }
-  return `<div class="mods">${line('素材', chips(ups, 'mat'), '没接到素材')}` +
+  return `<div class="mods">${line('素材', assign(chips(ups, 'mat')), '没接到素材')}` +
     `${line('工具', (c.mods || []).map(m => ({ name: m.name, t: m.type })), '没写怎么做')}` +
-    `${line('成果', chips(downs, 'res'), '没有产出')}</div>`;
+    `${line('成果', assign(chips(downs, 'res')), '没有产出')}</div>`;
 }
 
 function cardEl(c, d) {
