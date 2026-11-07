@@ -82,6 +82,28 @@ function askAgent({ profile, prompt, timeoutMs = 120000, toolsets }) {
   });
 }
 
+// 只要干净答案：走 stream-json，取 result 事件里的正文（不带回显、不带思考过程）
+function askAgentClean({ profile, prompt, toolsets, timeoutMs = 240000 }) {
+  return new Promise((resolve) => {
+    if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在' });
+    const args = ['-p', profile, 'chat', '--format', 'stream-json'];
+    if (toolsets) args.push('-t', String(toolsets));
+    args.push('-q', prompt);
+    execFile(HERMES, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, env: { ...process.env } }, (err, stdout) => {
+      const lines = String(stdout || '').split('\n');
+      let text = '';
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t.startsWith('{')) continue;
+        let o; try { o = JSON.parse(t); } catch (_) { continue; }
+        if (o.type === 'result' && o.text) text = o.text;
+        else if (o.type === 'assistant' && o.text) text = o.text;
+      }
+      resolve({ ok: !!text, text, code: err ? (err.code || 'err') : 0 });
+    });
+  });
+}
+
 /** 流式：边跑边把事件推给渲染层（Hermes 的对话框效果靠它） */
 const runs = new Map();
 // 验收用：WF_READ_FAKE=hang 时，分析这条链路起一个不出声的子进程，用来验「没有输出时到点自己收场」。
@@ -288,6 +310,82 @@ ipcMain.handle('version:push', (e, { id, entry }) => {
 });
 ipcMain.handle('version:drop', (e, id) => { if (liveSender(e)) return { ok: false, error: '实时画布是只读窗口' }; return versions().drop(id); });
 // 独立实时画布：开窗 / 列最近有活动的对话 / 上次的选中与开关 / 跟随（只读） / 单次取一份
+// 实时画布：让平台主管把一条对话解析成链路——**用到的文件 → 加工方式 → 产出的文件**。
+// 对话本身不成为卡片（用户口径）；卡片正面只写人话，命令/路径进实现。
+const livePrompt = (who, lines) => [
+  `下面是一条真实工作对话（岗位：${who}）。请把它解析成一条**工作流链路**，并标出人在哪些环节做了「精修」。`,
+  '',
+  '先认出这条链路本来的样子（主干）：',
+  '- 输入 = 这条工作流真正调用的文件/素材（图片、数据文件、货号、画板、视频…）',
+  '- 加工 = 加工过程中实际采用的做法（哪个技能、哪个脚本、哪几步），名字要短、要人话（例：找证据包、出卖点卡、出五区画板）',
+  '- 输出 = 按要求产出的文件（写出的文件、渲染的图、导出的视频、成片）',
+  '',
+  '再认出「精修」——这是重点：',
+  '- 同一个素材被**换了一种做法重做**（换参考图、换技能、改参数、换个风格），就是一条**分支**。',
+  '- 每条分支记下：从哪个节点分出来、这次的加工是什么、产出了什么、和上一版差在哪（用一句人话，例：参考换成蓝色视频 / 齿部这次分开了）。',
+  '- 人在对话里否掉上一版的那些话（「不对」「换那个」「不要用 GPT」）就是分支的理由，写进 note。',
+  '',
+  '输出要求：',
+  '- 卡片标题 3～10 个字，说清「这一步干什么」，不要写文件名当标题；',
+  '- 卡片正文一句话 + 关键文件（文件名可以写，命令和绝对路径不许写）；',
+  '- 分支用同一条边表表示：父节点 → 多个子节点就是分叉；',
+  '- 总卡数控制在 6～14 张：主干一条 + 每条精修一两个节点，别把琐碎步骤都画出来。',
+  '',
+  '只输出一个 JSON，别的什么都不要：',
+  '{"name":"链路名","cards":[{"key":"c1","kind":"in|proc|out","title":"找证据包","body":"一句话","note":"（可选）为什么改 / 和上一版差在哪","branch":"main 或 try1"}],"edges":[["c1","c2"]]}',
+  '',
+  '对话：',
+  lines.slice(0, 14000),
+].join('\n');
+
+function extractPlan(text) {
+  const t = String(text || '');
+  const tries = [];
+  for (const m of t.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) tries.push(m[1]);   // 围栏里的（从后往前试）
+  tries.reverse();
+  const a = t.indexOf('{'), b = t.lastIndexOf('}');
+  if (a >= 0 && b > a) tries.push(t.slice(a, b + 1));
+  let o = null;
+  for (const cand of tries) {
+    try { const x = JSON.parse(cand.trim()); if (x && Array.isArray(x.cards) && x.cards.length) { o = x; break; } } catch (_) { }
+  }
+  if (!o) return null;
+  const cards = (Array.isArray(o.cards) ? o.cards : []).map((c, i) => ({
+    id: String(c.key || c.id || 'c' + (i + 1)),
+    key: String(c.key || c.id || 'c' + (i + 1)),
+    kind: c.kind === 'in' || c.kind === 'proc' || c.kind === 'out' ? c.kind : 'proc',
+    title: String(c.title || '').slice(0, 24) || '一步',
+    body: String(c.body || '').slice(0, 220),
+    note: String(c.note || '').slice(0, 120),
+    branch: String(c.branch || 'main').slice(0, 12),
+    mods: [], impl: '',
+  })).filter(c => c.title && c.title !== '一步');
+  if (!cards.length) return null;
+  const byKey = new Map(cards.map(c => [c.key, c.id]));
+  const edges = (Array.isArray(o.edges) ? o.edges : [])
+    .map(e => [byKey.get(String(e && e[0])), byKey.get(String(e && e[1]))])
+    .filter(([x, y]) => x && y && x !== y);
+  return { name: String(o.name || '').slice(0, 40), cards, edges };
+}
+
+ipcMain.handle('live:analyze', async (_e, { profile, session }) => {
+  try {
+    const r = await livefeed.readMessages(profile, session, 0, { limit: 120 });
+    if (r.error) return { ok: false, error: r.error };
+    if (!r.msgs || !r.msgs.length) return { ok: false, error: '这条对话还没有内容' };
+    const lines = r.msgs.map(m => {
+      const who = m.role === 'user' ? '人' : m.role === 'tool' ? '结果' : 'agent';
+      const tools = (m.tools || []).map(t => t.name + '(' + JSON.stringify(t.args || {}).slice(0, 80) + ')').join(' ');
+      return `[${who}] ${String(m.text || '').replace(/\s+/g, ' ').slice(0, 200)}${tools ? ' ⚙' + tools.slice(0, 160) : ''}`;
+    }).join('\n');
+    const res = await askAgentClean({ profile: 'default', prompt: livePrompt(livefeed.whoOf(profile), lines), toolsets: 'todo,no_mcp', timeoutMs: 240000 });
+    if (!res.ok) return { ok: false, error: '分析没跑完（' + res.code + '）' };
+    const plan = extractPlan(res.text);
+    if (!plan) return { ok: false, error: '分析没给出可用的链路', raw: String(res.text || '').slice(-600) };
+    return { ok: true, plan };
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+});
+
 ipcMain.handle('live:open', () => openLiveWindow());
 ipcMain.handle('live:list', () => livefeed.listConversations().catch(err => ({ error: String(err && err.message || err) })));
 ipcMain.handle('live:state', () => ({ profile: LIVE_STATE.profile, session: LIVE_STATE.session, on: LIVE_STATE.on, following: !!LIVE.timer, dir: livefeed.ROOT }));
