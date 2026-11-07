@@ -605,11 +605,13 @@ button:disabled{opacity:.45;cursor:default;pointer-events:none}
 .trow.pv.bad{border-left:3px solid var(--danger);background:var(--danger-soft)}
 .tnone{font-size:12px;color:var(--ink-3);padding:4px 2px 6px}
 
-/* 实时画布：铺满主窗口的一层（不再开第二个窗口） */
-.liveview{position:fixed;inset:0;display:none;flex-direction:column;background:var(--paper);z-index:120}
-.liveview.on{display:flex}
-.lvbar{height:46px;flex:none;display:flex;align-items:center;gap:12px;padding:0 14px;
-  border-bottom:1px solid var(--line);background:var(--card);padding-left:88px}   /* 左边留出红绿灯 */
-.lvtitle{font-size:12.5px;font-weight:600;color:var(--ink)}
-.lvhint{font-size:11px;color:var(--ink-3)}
+/* 实时工作流：和一条工作流一样，占画布区；从右边列表切进来 */
+.liveview{position:absolute;inset:0;display:none;flex-direction:column;background:var(--paper);z-index:6;border-radius:0}
+.canvaswrap.live .liveview{display:flex}
+.canvaswrap.live > #wrap,.canvaswrap.live > .zoombar,.canvaswrap.live > .dock,
+.canvaswrap.live > .dock-fab,.canvaswrap.live > #emptyRead{display:none !important}
 .liveview webview{flex:1 1 auto;border:0;display:flex;background:var(--paper)}
+/* 列表里那一行「实时工作流」 */
+.wf.live{border-style:dashed}
+.wf.live .wn{color:var(--ink)}
+.wf.live.on{border-style:solid;border-color:var(--accent);background:var(--accent-soft)}
