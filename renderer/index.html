@@ -147,5 +147,15 @@
   </div>
 
 <script src="app.js"></script>
+
+<!-- 实时画布：不再另开窗口，直接在同一个窗口里铺满显示 -->
+<div id="liveView" class="liveview">
+  <div class="lvbar">
+    <button id="lvBack" class="ghost">← 回到工作台</button>
+    <span class="lvtitle">实时画布</span>
+    <span class="lvhint">只读：跟着一条 Hermes 对话把链路长出来</span>
+  </div>
+  <webview id="liveWV"></webview>
+</div>
 </body>
 </html>

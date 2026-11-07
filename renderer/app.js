@@ -96,6 +96,27 @@ function cardLine(n, i) {
   await initVersions();                 // 版本：老链路先记一版基线，之后每次改动才有回滚点
 })();
 
+let liveBooting = false;
+async function showLiveView() {
+  const box = $('#liveView'), wv = $('#liveWV');
+  if (!box || !wv) return;
+  if (!wv.dataset.booted) {
+    wv.dataset.booted = '1';
+    // preload 必须是绝对路径；主进程那边靠 webContents id 认这个视图
+    let dir = '';
+    try { dir = await window.tcflow.appDir(); } catch (e) { }
+    wv.setAttribute('preload', (dir || '.') + '/preload.js');
+    wv.addEventListener('dom-ready', () => {
+      try { window.tcflow.liveAttach(wv.getWebContentsId()).catch(() => {}); } catch (e) { }
+    });
+    wv.setAttribute('src', 'live.html');
+  } else {
+    try { window.tcflow.liveAttach(wv.getWebContentsId()).catch(() => {}); } catch (e) { }
+  }
+  box.classList.add('on');
+}
+function hideLiveView() { const box = $('#liveView'); if (box) box.classList.remove('on'); }
+
 function bindUI() {
   $('#btnNew').onclick = () => createWorkflow('新工作流 ' + (store.workflows.length + 1));
   $('#btnCopy').onclick = () => { const w = flow(); if (w && !w.temp) duplicateWorkflow(w.id); };
@@ -113,9 +134,13 @@ function bindUI() {
   document.querySelectorAll('#addMenu div').forEach(d => d.onclick = () => { addNode(d.dataset.kind); $('#addMenu').classList.remove('on'); });
   $('#btnSave').onclick = exportFlow;
   $('#btnOpen').onclick = importFlow;
-  $('#btnLive').onclick = () => { window.tcflow.openLive(); };
+  $('#btnLive').onclick = () => showLiveView();
   const lc = $('#liveCard');
-  if (lc) lc.onclick = () => { window.tcflow.openLive(); };
+  if (lc) lc.onclick = () => showLiveView();
+  // 实时画布：开在主窗口里（同一个窗口铺满一层），不再另开窗口
+  $('#lvBack').onclick = hideLiveView;
+  window.tcflow.onLiveShow(() => showLiveView());
+
   $('#btnValidate').onclick = () => validateAll();
   $('#btnRun').onclick = openRunModal;
   $('#btnRead').onclick = openRead;
