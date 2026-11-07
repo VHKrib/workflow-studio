@@ -69,11 +69,17 @@ function modsHTML(n) {
   const downs = w.edges.filter(([a]) => a === n.id).map(([, b]) => find(b)).filter(Boolean);
   const sock = (key, list, ph) => `<div class="sock ${list.length ? 'on' : 'empty'}" data-sock="${key}">` +
     `<div class="mline"><span class="mlab">${key === 'in' ? '素材' : '成果'}</span><span class="mchips" data-ph="${ph}">${list.map(s => plugChips(s, key)).join('')}</span></div></div>`;
-  const tools = modsOf(n);
-  return `<div class="mods">${sock('in', ups, '拖输入卡进来')}${tools.length ? line('工具', tools.map(chipHTML).join(''), ' tools') : ''}${sock('out', downs, '拖输出卡进来')}</div>`;
+  const tools = modsOf(n).filter(m => m.type === 'tool');      // 工具 = 模型 / 接口（带能力说明）
+  const hows = modsOf(n).filter(m => m.type === 'how');        // 做法 = 排版、重画、逐张核对这类
+  return `<div class="mods">${sock('in', ups, '拖输入卡进来')}${tools.length ? line('工具', tools.map(chipHTML).join(''), ' tools') : ''}${
+    hows.length ? line('做法', hows.map(chipHTML).join(''), ' hows') : ''}${sock('out', downs, '拖输出卡进来')}</div>`;
 }
 
-function chipHTML(m) { return `<span class="mod t-${m.type}" title="${esc(m.name)}">${esc(m.name)}</span>`; }
+function chipHTML(m) {
+  // 模型/接口这类带能力说明的，后面挂一个小 ⓘ，悬停看「输入→输出 + 上下限」
+  const tip = m.caps ? esc(m.name + '\n' + m.caps) : esc(m.name);
+  return `<span class="mod t-${m.type}" title="${tip}" data-caps="${m.caps ? esc(m.caps) : ''}">${esc(m.name)}${m.caps ? '<i class="cap">ⓘ</i>' : ''}</span>`;
+}
 // 接进插槽的卡：它带的模块就是插在槽里的东西（没有模块就用卡名）
 function plugChips(src, dir) {
   const ms = src.kind === 'proc' ? [] : modsOf(src);

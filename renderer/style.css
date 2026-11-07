@@ -472,6 +472,9 @@ details.internal textarea{font:11.8px/1.55 var(--mono);background:#fff;min-heigh
 .mod.t-mat{color:var(--in);background:var(--in-soft);border-color:var(--in-line)}
 .mod.t-tool{color:var(--accent-ink);background:var(--accent-soft);border-color:var(--accent-line)}
 .mod.t-res{color:var(--out);background:var(--out-soft);border-color:var(--out-line)}
+.mod.t-how{color:var(--ink-3);background:transparent;border-style:dashed}
+.mod .cap{font-style:normal;font-size:9.5px;margin-left:3px;color:var(--accent-ink);opacity:.75}
+.mod[data-caps]:not([data-caps=""]){border-bottom-style:dashed}
 .mod.plug{cursor:grab}
 .mod.plug:hover{box-shadow:0 0 0 2px var(--accent-soft);border-color:var(--accent-line)}
 .mod.ghost{opacity:.5;border-style:dashed;animation:ghostIn .18s ease-out}
