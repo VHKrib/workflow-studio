@@ -73,7 +73,7 @@ function isChatter(text, pics) {
 // 素材 = 图片 / 文件 / 货号 / 画板分镜；实现路径 = 技能 / 脚本 / 工具；结果 = 写出的文件 / 出片交付。
 const E_FILE = /(?<![\w.\/-])([\w\u4e00-\u9fa5-][\w\u4e00-\u9fa5.\-]*\.(?:png|jpe?g|webp|gif|mp4|mov|json|jsonl|js|mjs|sh|py|md|csv|xlsx|ya?ml|pdf))(?!\w)/gi;
 const E_OFFER = /(?<![\d.])(\d{11,20})(?!\d)/g;
-const E_MATWORD = /(素材|原图|白底图|主图|详情图|参考图|画板|分镜|货号|商品图)/g;
+const E_MATWORD = /(原图|白底图|主图|详情图|参考图|画板|分镜|货号|商品图)/g;   // 只说「素材」两个字不算实体
 const E_SCRIPT = /(?<![\w.\/-])([\w\-]+\.(?:js|mjs|sh|py))(?!\w)/gi;
 const E_OUTWORD = /(出片|生成|渲染|导出|交付|产出|打包|成片)/g;
 
