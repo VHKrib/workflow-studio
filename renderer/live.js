@@ -95,7 +95,7 @@ async function analyzeNow(manual) {
       const d = {
         conv: { key: cur, who: found.who, doing: found.doing },
         at: doc ? doc.at : Math.floor(Date.now() / 1000),
-        cards: r.plan.cards.map(c => ({ id: c.id, kind: c.kind, title: c.title, body: c.body, mods: c.mods || [], impl: c.impl || '', n: 1 })),
+        cards: r.plan.cards.map(c => ({ id: c.id, kind: c.kind, title: c.title, body: c.body, note: c.note || '', branch: c.branch || 'main', mods: c.mods || [], impl: c.impl || '', n: 1 })),
         edges: r.plan.edges || [],
         name: r.plan.name || '',
         entities: doc && doc.entities,
