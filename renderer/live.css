@@ -71,3 +71,7 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
 .node .limpl summary{cursor:pointer;font-size:11.5px;color:var(--ink-3)}
 .node .limpl pre{margin:6px 0 0;padding:8px;border-radius:8px;background:color-mix(in srgb, var(--foreground) 5%, transparent);
   font-family:var(--mono);font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--ink-2);max-height:140px;overflow:auto}
+
+/* 点评卡：人的评价 + 要求怎么改，颜色和加工卡分开 */
+.node.review .hd{background:color-mix(in srgb, var(--accent) 55%, #fff)}
+.node .chip.rev{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}

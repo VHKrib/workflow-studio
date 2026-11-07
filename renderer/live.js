@@ -180,7 +180,7 @@ const MOD_TYPE = { in: 'mat', proc: 'tool', out: 'res' };
 
 function cardEl(c) {
   const el = document.createElement('div');
-  el.className = 'node k-' + c.kind + (c.branch && c.branch !== 'main' ? ' branch' : '');
+  el.className = 'node k-' + c.kind + (c.branch && c.branch !== 'main' ? ' branch' : '') + (/^点评/.test(c.title || '') ? ' review' : '');
   el.dataset.id = c.id;
   const type = MOD_TYPE[c.kind] || 'tool';
   const mods = (c.mods && c.mods.length)
@@ -190,7 +190,9 @@ function cardEl(c) {
     ? `<div class="mods"><div class="mline"><span class="mlab">${MOD_LAB[c.kind] || '模块'}</span>` +
       `<span class="mchips">${mods.map(m => `<span class="mod t-${m.type || type}">${esc(m.name)}</span>`).join('')}</span></div></div>`
     : '';
-  const chips = c.note ? `<span class="chip" title="为什么改 / 和上一版差在哪">改 · ${esc(c.note)}</span>` : '';
+  const isReview = /^点评/.test(c.title || '');
+  const chips = (isReview ? '<span class="chip rev">点评</span>' : '') +
+    (c.note ? `<span class="chip" title="为什么改 / 和上一版差在哪">改 · ${esc(c.note)}</span>` : '');
   el.innerHTML = `
     <div class="hd"><span class="kind">${KIND_LABEL[c.kind] || '加工'}</span><div class="t">${esc(c.title)}</div><div class="st"></div></div>
     <div class="body" data-ph="${KIND_PH[c.kind] || ''}">${esc(c.body)}</div>
