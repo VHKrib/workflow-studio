@@ -160,6 +160,36 @@ async function stopFollow() {
   paintStat();
 }
 
+// 悬停素材/成果：浮层说清「是什么 · 来自哪张卡 · 明细」（明细是真路径/真参数，卡片正面不显示）
+(function wireTip() {
+  const tip = () => document.getElementById('ltip');
+  const show = (el, x, y) => {
+    const box = tip(); if (!box) return;
+    const raw = el.dataset.tip || '';
+    const [name, from, ...rest] = raw.split('\n');
+    box.innerHTML = `<b>${esc(name || '')}</b>${esc(from || '')}${rest.length ? '\n' + esc(rest.join('\n')) : ''}`;
+    box.classList.add('on');
+    const r = box.getBoundingClientRect();
+    const left = Math.min(x + 14, window.innerWidth - r.width - 12);
+    const top = Math.max(8, Math.min(y + 16, window.innerHeight - r.height - 12));
+    box.style.left = left + 'px'; box.style.top = top + 'px';
+  };
+  const hide = () => { const b = tip(); if (b) b.classList.remove('on'); };
+  document.addEventListener('mouseover', e => {
+    const el = e.target.closest && e.target.closest('.mod[data-tip]');
+    if (el) show(el, e.clientX, e.clientY); else hide();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!tip() || !tip().classList.contains('on')) return;
+    const el = e.target.closest && e.target.closest('.mod[data-tip]');
+    if (!el) return hide();
+    show(el, e.clientX, e.clientY);
+  });
+  document.addEventListener('mouseleave', hide);
+  window.addEventListener('blur', hide);
+  window.addEventListener('scroll', hide, true);
+})();
+
 // ---------- 画布 ----------
 function applyZoom() {
   const cw = wrap.clientWidth, ch = wrap.clientHeight;
@@ -195,24 +225,37 @@ function modsRow(c) {
 
 // 加工卡和主画布一样是「三段」：素材（哪张上游卡喂进来的）/ 工具（自己怎么做）/ 成果（交出去的是什么）。
 // 只读窗口不能拖插槽，但「用什么 → 出来什么」必须看得见。
+// 悬停要能看到「具体的输入/产出」：chip 的 title 里写清 它是什么、来自哪张卡、卡里记的素材明细。
+// 明细优先取那张卡自己的内部实现（里面是真路径/真参数），没有就用正文第一句。
+function detailOf(card) {
+  if (!card) return '';
+  const lines = String(card.impl || '').split('\n').map(x => x.trim()).filter(Boolean)
+    .filter(x => !/^证据[:：]/.test(x));
+  const pick = lines.find(x => /[/\\.]|字节|像素|尺寸|版本|张|份/.test(x)) || lines[0] || '';
+  return (pick || String(card.body || '')).slice(0, 160);
+}
 function socketRows(c, d) {
   const cards = (d && d.cards) || [];
   const byId = new Map(cards.map(x => [x.id, x]));
   const ups = ((d && d.edges) || []).filter(e => e[1] === c.id).map(e => byId.get(e[0])).filter(Boolean);
   const downs = ((d && d.edges) || []).filter(e => e[0] === c.id).map(e => byId.get(e[1])).filter(Boolean);
   const chips = (list, fallback) => list.flatMap(src =>
-    (src.mods && src.mods.length) ? src.mods.map(m => ({ name: m.name, t: m.type })) : [{ name: src.title, t: fallback }]
+    (src.mods && src.mods.length) ? src.mods.map(m => ({ name: m.name, t: m.type, src })) : [{ name: src.title, t: fallback, src }]
   ).filter(x => x.name).slice(0, 6);
-  const line = (lab, list, fallback, ph) => `<div class="mline"><span class="mlab">${lab}</span><span class="mchips"${list.length ? '' : ` data-ph="${ph}"`}>` +
-    (list.length ? list.map(m => `<span class="mod t-${m.t}">${esc(m.name)}</span>`).join('') : '') + '</span></div>';
+  const line = (lab, list, ph) => `<div class="mline"><span class="mlab">${lab}</span><span class="mchips"${list.length ? '' : ` data-ph="${ph}"`}>` +
+    (list.length ? list.map(m => {
+      const src = m.src;
+      const tipTxt = src ? `${m.name}\n来自「${src.title}」\n${detailOf(src)}` : m.name;
+      return `<span class="mod t-${m.t}" data-tip="${esc(tipTxt)}" title="${esc(tipTxt)}">${esc(m.name)}</span>`;
+    }).join('') : '') + '</span></div>';
   if (c.kind !== 'proc') {
-    const ms = (c.mods || []).map(m => ({ name: m.name, t: m.type }));
+    const ms = (c.mods || []).map(m => ({ name: m.name, t: m.type, src: c }));
     if (!ms.length) return '';
-    return `<div class="mods">${line(MOD_LAB[c.kind] || '模块', ms, '', '')}</div>`;
+    return `<div class="mods">${line(MOD_LAB[c.kind] || '模块', ms, '')}</div>`;
   }
-  return `<div class="mods">${line('素材', chips(ups, 'mat'), 'mat', '没接到素材')}` +
-    `${line('工具', (c.mods || []).map(m => ({ name: m.name, t: m.type })), 'tool', '没写怎么做')}` +
-    `${line('成果', chips(downs, 'res'), 'res', '没有产出')}</div>`;
+  return `<div class="mods">${line('素材', chips(ups, 'mat'), '没接到素材')}` +
+    `${line('工具', (c.mods || []).map(m => ({ name: m.name, t: m.type })), '没写怎么做')}` +
+    `${line('成果', chips(downs, 'res'), '没有产出')}</div>`;
 }
 
 function cardEl(c, d) {
