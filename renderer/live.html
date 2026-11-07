@@ -25,26 +25,11 @@
     <div id="wrap"><div id="canvas"><svg id="edges"></svg></div></div>
     <div class="lempty" id="lempty">选一条对话，再打开「跟随」</div>
     <div class="ltip" id="ltip"></div>
-    <!-- 双击卡片打开：长得和主画布那张卡片信息一样（名字 / 类型 / 内容 / 模块 / 内部实现） -->
+    <!-- 双击卡片打开：里面就是主画布那张卡片信息（同一段模板、同一套样式） -->
     <aside class="ledit" id="ledit">
       <div class="panel lpanel">
         <div class="ph"><b id="ledTitle">卡片</b><span id="ledClose" title="关掉">✕</span></div>
-        <div class="pb">
-          <input class="titleinp" id="ledName" maxlength="24" placeholder="卡片名">
-          <div class="kindrow"><span class="lab">类型</span><select id="ledKind"></select></div>
-          <div class="pgroup" id="ledGroup"><span class="lab" id="ledLab">内容</span>
-            <textarea id="ledBody" rows="4" maxlength="260"></textarea>
-          </div>
-          <div class="pmods"><span class="lab" id="ledModLab">模块</span>
-            <div class="pm-list" id="ledMods"></div>
-          </div>
-          <details class="internal"><summary>⚙ 每个模块对应的文件（悬停预览用）</summary>
-            <div id="ledPaths"></div>
-          </details>
-          <details class="internal"><summary>⚙ 内部实现 · 卡片上不显示</summary>
-            <textarea id="ledImpl" rows="3" maxlength="600"></textarea>
-          </details>
-        </div>
+        <div class="pb" id="ledBody"></div>
       </div>
     </aside>
     <div class="zoombar">

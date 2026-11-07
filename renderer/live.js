@@ -253,10 +253,40 @@ async function stopFollow() {
   window.addEventListener('scroll', hide, true);
 })();
 
-// 双击卡片：右边滑出和主画布一样的卡片信息（名字 / 类型 / 内容 / 模块 / 内部实现）。
-// 改一个字就更新这份解析结果（400ms 后写盘），不用按保存。
-const KIND_OPTS = [['in', '输入'], ['proc', '加工'], ['out', '输出']];
-const KIND_MOD_LAB = { in: '素材', proc: '工具', out: '成果' };
+
+
+// ===== 面板：主画布 renderer/app.js 的 paintPanel() 原样搬来的（去掉聊天/预演）=====
+// 主画布改字段或样式时，这里跟着搬一次；不要再另写一套。
+const KINDS = {
+  in:   { label: '输入', cls: 'in',   ph: '这一步要先有什么（说人话，例：一个商品编号，加它现成的证据资料）' },
+  proc: { label: '加工', cls: 'proc', ph: '这一步让人做什么（说人话，例：找到这个商品最新最全的那份证据）' },
+  out:  { label: '输出', cls: 'out',  ph: '最后交出什么（说人话，例：一份能直接拿去用的证据目录）' },
+};
+const KIND_MOD = { in: 'mat', proc: 'tool', out: 'res' };
+const MOD_T = { mat: '素材', tool: '工具', res: '成果' };
+const modsOfCard = card => (card.mods || []).map(m => ({ ...m, type: m.type || KIND_MOD[card.kind] }));
+const implOfCard = card => String(card.impl || '');
+function panelHTML(card) {
+  const kind = KINDS[card.kind] || KINDS.proc;
+  return `
+    <input id="pTitle" class="titleinp" value="${esc(card.title)}" spellcheck="false" placeholder="卡片名">
+    <div class="kindrow"><span class="lab">类型</span>
+      <select id="pKind">${Object.entries(KINDS).map(([kk, v]) => `<option value="${kk}" ${kk === card.kind ? 'selected' : ''}>${v.label}</option>`).join('')}</select></div>
+    <div class="pgroup ${kind.cls}"><span class="lab">${kind.label}内容</span>
+      <textarea id="pBody" placeholder="${esc(kind.ph)}">${esc(card.body)}</textarea>
+</div>
+    <div class="pmods"><span class="lab">${MOD_T[KIND_MOD[card.kind]]}</span>
+      <div class="pm-list" id="pMods">${modsOfCard(card).map((m, i) => `<span class="mod t-${m.type} ed"><span class="mn" contenteditable="plaintext-only" spellcheck="false" data-i="${i}">${esc(m.name)}</span><b class="mx" data-x="${i}" title="删掉这块">✕</b></span>`).join('')}<input id="pModAdd" class="pm-add" placeholder="+ ${MOD_T[KIND_MOD[card.kind]]}（回车添加）"></div>
+    </div>
+
+    <details class="internal">
+      <summary>⚙ 内部实现 · 校验 · 卡片上不显示</summary>
+      <textarea id="pImpl" placeholder="执行时真正跑什么：命令 / 脚本 / 路径 / 字段名（例：hermes -p &lt;agent&gt; chat -q …、evidence/&lt;包&gt;/page-fields）">${esc(implOfCard(card))}</textarea>
+      <input id="pChecks" value="${esc((card.checks || []).join(', '))}" placeholder="校验项，逗号分隔（例：sha256, schema）">
+    </details>`;
+}
+
+// 双击卡片：右边滑出「和主画布同一张卡」的面板（结构、字段、样式都照搬 paintPanel）
 let editingId = '', saveTimer = 0;
 const $id = x => document.getElementById(x);
 
@@ -264,68 +294,53 @@ function openEditor(id) {
   const card = (doc && doc.cards || []).find(c => c.id === id);
   if (!card || !$id('ledit')) return;
   editingId = id;
-  $id('ledTitle').textContent = (KIND_LABEL[card.kind] || '加工') + '卡 · ' + card.title;
-  $id('ledName').value = card.title || '';
-  $id('ledKind').innerHTML = KIND_OPTS.map(([v, l]) => `<option value="${v}"${v === card.kind ? ' selected' : ''}>${l}</option>`).join('');
-  $id('ledGroup').className = 'pgroup ' + card.kind;
-  $id('ledLab').textContent = (KIND_LABEL[card.kind] || '加工') + '内容';
-  $id('ledBody').value = card.body || '';
-  $id('ledModLab').textContent = KIND_MOD_LAB[card.kind] || '模块';
-  $id('ledMods').innerHTML = (card.mods || []).map((m, i) =>
-    `<span class="mod t-${m.type} ed"><span class="mn" contenteditable="plaintext-only" spellcheck="false" data-i="${i}">${esc(m.name)}</span>` +
-    `<b class="mx" data-x="${i}" title="删掉这块">✕</b></span>`).join('') +
-    `<input id="ledModAdd" class="pm-add" placeholder="+ ${KIND_MOD_LAB[card.kind] || '模块'}（回车添加）">`;
-  $id('ledPaths').innerHTML = (card.mods || []).map((m, i) =>
-    `<div class="prow"><input class="pn" data-pi="${i}" data-k="name" value="${esc(m.name || '')}">` +
-    `<input class="pp" data-pi="${i}" data-k="path" value="${esc(m.path || '')}" placeholder="文件路径（可留空）"></div>`).join('')
-    || '<div class="lmlab">这张卡没有模块</div>';
-  $id('ledImpl').value = card.impl || '';
+  $id('ledTitle').textContent = (KINDS[card.kind] || KINDS.proc).label + '卡 · ' + card.title;
+  $id('ledBody').innerHTML = panelHTML(card);      // ← 主画布那段模板原样渲染
   $id('ledit').classList.add('on');
-  $id('ledName').focus();
   wireEditor(card);
+  const t = $id('pTitle');
+  if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
 }
 
-// 改完 400ms 落盘；画布跟着立刻变
 function touch(card, rerender) {
   if (rerender) renderDoc(doc, { analyzed: true });
   setStat(`已保存：${(doc.cards || []).length} 张卡（改过）`);
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => { window.tcflow.liveDocSave(doc).catch(() => {}); }, 400);
 }
+
 function wireEditor(card) {
-  $id('ledName').oninput = e => { card.title = e.target.value.slice(0, 24); touch(card, true); $id('ledTitle').textContent = (KIND_LABEL[card.kind] || '加工') + '卡 · ' + card.title; };
-  $id('ledKind').onchange = e => {
+  const bind = (sel, ev, fn) => { const el = $id(sel); if (el) el[ev] = fn; };
+  bind('pTitle', 'oninput', e => {
+    card.title = e.target.value.slice(0, 24);
+    $id('ledTitle').textContent = (KINDS[card.kind] || KINDS.proc).label + '卡 · ' + card.title;
+    touch(card, true);
+  });
+  bind('pKind', 'onchange', e => {
     card.kind = e.target.value;
-    card.mods = (card.mods || []).map(m => ({ ...m, type: { in: 'mat', proc: 'tool', out: 'res' }[card.kind] }));
+    card.mods = (card.mods || []).map(m => ({ ...m, type: KIND_MOD[card.kind] }));
     openEditor(card.id); touch(card, true);
-  };
-  $id('ledBody').oninput = e => { card.body = e.target.value.slice(0, 260); touch(card, false); };
-  $id('ledImpl').oninput = e => { card.impl = e.target.value.slice(0, 600); touch(card, false); };
-  $id('ledMods').querySelectorAll('.mn').forEach(sp => {
+  });
+  bind('pBody', 'oninput', e => { card.body = e.target.value.slice(0, 260); touch(card, false); });
+  bind('pImpl', 'oninput', e => { card.impl = e.target.value.slice(0, 600); touch(card, false); });
+  bind('pChecks', 'oninput', e => { card.checks = String(e.target.value || '').split(',').map(x => x.trim()).filter(Boolean); touch(card, false); });
+
+  $id('pMods').querySelectorAll('.mn').forEach(sp => {
     sp.oninput = () => { const m = card.mods[Number(sp.dataset.i)]; if (m) { m.name = sp.textContent.trim().slice(0, 16); touch(card, true); } };
   });
-  $id('ledMods').querySelectorAll('.mx').forEach(x => x.onclick = () => {
+  $id('pMods').querySelectorAll('.mx').forEach(x => x.onclick = () => {
     card.mods.splice(Number(x.dataset.x), 1); openEditor(card.id); touch(card, true);
   });
-  const add = $id('ledModAdd');
-  if (add) add.onkeydown = e => {
+  bind('pModAdd', 'onkeydown', e => {
     if (e.key !== 'Enter') return;
-    const name = add.value.trim().slice(0, 16);
+    const name = e.target.value.trim().slice(0, 16);
     if (!name) return;
     card.mods = card.mods || [];
-    card.mods.push({ type: { in: 'mat', proc: 'tool', out: 'res' }[card.kind], name });
+    card.mods.push({ type: KIND_MOD[card.kind], name });
     openEditor(card.id); touch(card, true);
-  };
-  $id('ledPaths').querySelectorAll('input').forEach(inp => {
-    inp.oninput = () => {
-      const m = card.mods[Number(inp.dataset.pi)];
-      if (!m) return;
-      if (inp.dataset.k === 'name') m.name = inp.value.slice(0, 16);
-      if (inp.dataset.k === 'path') m.path = inp.value.trim();
-      touch(card, true);
-    };
   });
 }
+
 function closeEditor() {
   editingId = '';
   clearTimeout(saveTimer);
