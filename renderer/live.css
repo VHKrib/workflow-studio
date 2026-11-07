@@ -72,6 +72,21 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
 .node .limpl pre{margin:6px 0 0;padding:8px;border-radius:8px;background:color-mix(in srgb, var(--foreground) 5%, transparent);
   font-family:var(--mono);font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;color:var(--ink-2);max-height:140px;overflow:auto}
 
-/* 点评卡：人的评价 + 要求怎么改，颜色和加工卡分开 */
-.node.review .hd{background:color-mix(in srgb, var(--accent) 55%, #fff)}
+/* 点评卡的老样式留给历史数据；新图里意见是加工卡上的「改 · 原因」标签 */
 .node .chip.rev{background:var(--accent-soft);color:var(--accent-ink);font-weight:600}
+
+/* 状态 / 版本 / 次数 / 原因 标签（都在卡片底部一行，多了会换行） */
+.node .chip{display:inline-flex;align-items:center;gap:3px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.node .chip.ver{background:color-mix(in srgb,var(--foreground) 8%,transparent);color:var(--ink-2);font-variant-numeric:tabular-nums}
+.node .chip.use{background:color-mix(in srgb,var(--foreground) 6%,transparent);color:var(--ink-3)}
+.node .chip.note{background:var(--accent-soft);color:var(--accent-ink);flex:1 1 100%}
+.node .chip.br{background:color-mix(in srgb,#7a56a8 14%,transparent);color:#5c3f86}
+.node .chip.st-failed{background:color-mix(in srgb,#c0392b 14%,transparent);color:#a33025}
+.node .chip.st-proposed{background:color-mix(in srgb,#7a56a8 14%,transparent);color:#5c3f86}
+.node .chip.st-doing{background:color-mix(in srgb,var(--accent) 14%,transparent);color:var(--accent-ink)}
+.node .chip.st-unfinished,.node .chip.st-pending{background:color-mix(in srgb,#b58900 16%,transparent);color:#7a5c00}
+/* 只提了做法没执行：卡身也收一档，别和已完成的混在一起 */
+.node.st-proposed{opacity:.82;border-style:dashed}
+.node.st-failed{border-color:color-mix(in srgb,#c0392b 34%,var(--line))}
+/* 连线上的「改」「新版」小字 */
+#edges .elab{font-family:var(--sans,inherit);opacity:.9;user-select:none;pointer-events:none}
