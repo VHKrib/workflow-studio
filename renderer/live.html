@@ -25,6 +25,17 @@
     <div id="wrap"><div id="canvas"><svg id="edges"></svg></div></div>
     <div class="lempty" id="lempty">选一条对话，再打开「跟随」</div>
     <div class="ltip" id="ltip"></div>
+    <!-- 双击卡片打开：改标题/正文/内部实现，以及每个药丸的名字与文件 -->
+    <aside class="ledit" id="ledit">
+      <div class="lhd"><b id="ledTitle">编辑卡片</b><span id="ledClose" title="关掉">✕</span></div>
+      <div class="lbd">
+        <label>标题<input id="ledName" maxlength="24"></label>
+        <label>正文<textarea id="ledBody" rows="5" maxlength="260"></textarea></label>
+        <label>内部实现<textarea id="ledImpl" rows="4" maxlength="600"></textarea></label>
+        <div class="lmods"><div class="lmlab">模块（名字 / 文件）</div><div id="ledMods"></div></div>
+      </div>
+      <div class="lft"><button id="ledCancel">取消</button><button id="ledSave" class="primary">保存</button></div>
+    </aside>
     <div class="zoombar">
       <span id="zoomOut" title="缩小">−</span>
       <span id="zoom">100%</span>
