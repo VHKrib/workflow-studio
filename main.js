@@ -645,6 +645,18 @@ ipcMain.handle('live:peek', (_e, { path: p } = {}) => {
   } catch (e) { return { ok: false, error: String((e && e.code) || (e && e.message) || e) }; }
 });
 
+// 人在实时画布上改过的卡片：存回同一份文件（下次打开就是改后的样子）
+ipcMain.handle('live:doc:save', (_e, doc) => {
+  if (!doc || !doc.conv || !Array.isArray(doc.cards)) return { ok: false, error: '内容不完整' };
+  const okSave = saveLiveDoc(doc);
+  if (okSave) {
+    LIVE.doc = doc;
+    LIVE.conv = doc.conv;
+    sendLive(doc);
+  }
+  return { ok: okSave };
+});
+
 ipcMain.handle('live:open', () => openLiveWindow());
 ipcMain.handle('live:list', () => livefeed.listConversations().catch(err => ({ error: String(err && err.message || err) })));
 ipcMain.handle('live:state', () => ({ profile: LIVE_STATE.profile, session: LIVE_STATE.session, on: LIVE_STATE.on, following: !!LIVE.timer, dir: livefeed.ROOT }));

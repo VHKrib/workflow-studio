@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld('tcflow', {
   liveSnapshot: (payload) => ipcRenderer.invoke('live:snapshot', payload),
   liveAnalyze: (payload) => ipcRenderer.invoke('live:analyze', payload),
   livePeek: (payload) => ipcRenderer.invoke('live:peek', payload),
+  liveDocSave: (doc) => ipcRenderer.invoke('live:doc:save', doc),
   onLiveDoc: (cb) => {
     const h = (_e, doc) => cb(doc);
     ipcRenderer.on('live:doc', h);

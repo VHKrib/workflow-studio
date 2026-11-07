@@ -253,6 +253,58 @@ async function stopFollow() {
   window.addEventListener('scroll', hide, true);
 })();
 
+// 双击卡片编辑：改标题/正文/内部实现，以及每个药丸的名字和文件；保存回同一份解析结果
+let editingId = '';
+function editorEls() {
+  return {
+    box: document.getElementById('ledit'),
+    name: document.getElementById('ledName'),
+    body: document.getElementById('ledBody'),
+    impl: document.getElementById('ledImpl'),
+    mods: document.getElementById('ledMods'),
+    title: document.getElementById('ledTitle'),
+  };
+}
+function openEditor(id) {
+  const card = (doc && doc.cards || []).find(c => c.id === id);
+  const e = editorEls();
+  if (!card || !e.box) return;
+  editingId = id;
+  e.title.textContent = '编辑卡片 · ' + (KIND_LABEL[card.kind] || '加工');
+  e.name.value = card.title || '';
+  e.body.value = card.body || '';
+  e.impl.value = card.impl || '';
+  e.mods.innerHTML = (card.mods || []).map((m, i) =>
+    `<div class="lrow"><input data-mi="${i}" data-k="name" value="${esc(m.name || '')}" placeholder="名字">` +
+    `<input data-mi="${i}" data-k="path" value="${esc(m.path || '')}" placeholder="文件路径（可留空）"></div>`).join('')
+    || '<div class="lmlab">这张卡没有模块</div>';
+  e.box.classList.add('on');
+  e.name.focus();
+}
+function closeEditor() {
+  const e = editorEls();
+  editingId = '';
+  if (e.box) e.box.classList.remove('on');
+}
+async function saveEditor() {
+  const card = (doc && doc.cards || []).find(c => c.id === editingId);
+  const e = editorEls();
+  if (!card || !e.box) return;
+  card.title = String(e.name.value || '').trim().slice(0, 24) || card.title;
+  card.body = String(e.body.value || '').trim().slice(0, 260);
+  card.impl = String(e.impl.value || '').trim().slice(0, 600);
+  e.mods.querySelectorAll('input').forEach(inp => {
+    const m = (card.mods || [])[Number(inp.dataset.mi)];
+    if (!m) return;
+    if (inp.dataset.k === 'name') m.name = String(inp.value || '').trim().slice(0, 16);
+    if (inp.dataset.k === 'path') m.path = String(inp.value || '').trim();
+  });
+  closeEditor();
+  renderDoc(doc, { analyzed: true });
+  setStat(`已保存：${doc.cards.length} 张卡（改过）`);
+  try { await window.tcflow.liveDocSave(doc); } catch (err) { setStat('保存失败：' + (err && err.message || err)); }
+}
+
 // ---------- 画布 ----------
 function applyZoom() {
   const cw = wrap.clientWidth, ch = wrap.clientHeight;
@@ -349,12 +401,13 @@ function socketRows(c, d) {
   const ups = ((d && d.edges) || []).filter(e => e[1] === c.id).map(e => byId.get(e[0])).filter(Boolean);
   const downs = ((d && d.edges) || []).filter(e => e[0] === c.id).map(e => byId.get(e[1])).filter(Boolean);
   const chips = (list, fallback) => list.flatMap(src =>
-    (src.mods && src.mods.length) ? src.mods.map(m => ({ name: m.name, t: m.type, src })) : [{ name: src.title, t: fallback, src }]
+    (src.mods && src.mods.length) ? src.mods.map(m => ({ name: m.name, t: m.type, src, mod: m })) : [{ name: src.title, t: fallback, src, mod: null }]
   ).filter(x => x.name).slice(0, 6);
   const assign = pairs => {                      // 同一行里每个 chip 各拿一份，尽量不重复
     const used = new Set();
-    return pairs.map(({ name, t, src }) => {
-      const path = src ? bestPath(src, name, used) : '';
+    return pairs.map(({ name, t, src, mod }) => {
+      const path = (mod && mod.path) || (src ? bestPath(src, name, used) : '');   // 人改过的文件优先
+      if (mod && !mod.path && path) mod.path = path;
       if (path) used.add(path);
       return { name, t, src, path };
     });
@@ -571,7 +624,18 @@ function bindCanvas() {
     applyZoom(); drawEdges();
   }, { passive: false });
   $('#zoomIn').onclick = () => { zoom = Math.min(1.8, zoom + 0.1); applyZoom(); drawEdges(); };
-  $('#lana').onclick = () => analyzeNow(true);   // 常驻在这里，别塞进 follow()（不然不拨开关就点不动）
+  $('#lana').onclick = () => analyzeNow(true);
+  const e = editorEls();
+  if (e.box) {
+    document.getElementById('ledClose').onclick = closeEditor;
+    document.getElementById('ledCancel').onclick = closeEditor;
+    document.getElementById('ledSave').onclick = saveEditor;
+    e.box.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeEditor(); });
+    canvas.addEventListener('dblclick', ev => {
+      const n = ev.target.closest && ev.target.closest('.node');
+      if (n && n.dataset.id) { ev.preventDefault(); openEditor(n.dataset.id); }
+    });
+  }   // 常驻在这里，别塞进 follow()（不然不拨开关就点不动）
   $('#zoomOut').onclick = () => { zoom = Math.max(0.3, zoom - 0.1); applyZoom(); drawEdges(); };
   $('#zoomReset').onclick = () => { zoom = 1; applyZoom(); fit(); drawEdges(); };
   addEventListener('resize', () => { drawEdges(); });
