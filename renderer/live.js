@@ -90,7 +90,7 @@ async function analyzeNow(manual) {
   const btn = document.querySelector('#lana');
   if (btn) { btn.disabled = true; btn.textContent = '解析中…'; }
   try {
-    const r = await window.tcflow.liveAnalyze({ profile: found.profile, session: found.session });
+    const r = await window.tcflow.liveAnalyze({ profile: found.profile, session: found.session, topic: found.doing });
     if (r && r.ok && r.plan && r.plan.cards.length) {
       const d = {
         conv: { key: cur, who: found.who, doing: found.doing },

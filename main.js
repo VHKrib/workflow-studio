@@ -312,42 +312,94 @@ ipcMain.handle('version:drop', (e, id) => { if (liveSender(e)) return { ok: fals
 // 独立实时画布：开窗 / 列最近有活动的对话 / 上次的选中与开关 / 跟随（只读） / 单次取一份
 // 实时画布：让平台主管把一条对话解析成链路——**用到的文件 → 加工方式 → 产出的文件**。
 // 对话本身不成为卡片（用户口径）；卡片正面只写人话，命令/路径进实现。
-const livePrompt = (who, lines) => [
-  `下面是一条真实工作对话（岗位：${who}）。请解析成一条**工作流链路**，要能看出「素材 → 加工 → 输出 → 点评 → 改做法 → 新输出」这一层。`,
+// 实时画布的解析 = 读取 agent 链路那套方法：先把这条对话**结构化**，
+// 再按同一套拆卡规矩（只画主线、4–9 张、输入→加工→输出、连成一片）让平台主管拆。
+// 额外多一条：输出之后接「点评」——人的评价驱动下一轮加工调整。
+const livePrompt = ({ who, topic, ask, steps, reads, writes, said, review }) => [
+  '【实时画布】你是平台主管，在把一条真实工作对话，画成工作流开发平台里的卡片。',
+  '只做分析：不执行、不跑命令、不读写文件、不发消息、不付费。下面是只读出来的材料。',
   '',
-  '四条硬规则：',
+  `岗位：${who}`,
+  `这件事：${topic || '（无题）'}`,
   '',
-  '① 素材卡（kind=in）：一条链路里的每个素材只出现**一张**卡；它被反复使用时，从这张卡**分多条边**连到每次用到它的加工卡，',
-  '   正文末尾写清「被调用 N 次」。不要把同一素材画成好几张输入卡。',
+  '派活原文（节选）：', String(ask || '（没有）').slice(0, 900),
   '',
-  '② 加工卡（kind=proc）：标题 3～10 个字说清这一步干什么（例：补实拍定槽距、弃模型改线渲染），不要用文件名当标题。',
-  '   正文写清这次用什么做法，一句话。',
+  '真正做过的步骤（按顺序，工具名 + 参数要点）：', String(steps || '（没有）').slice(0, 3200),
   '',
-  '③ 输出卡（kind=out）：**每一次加工都必须立刻跟一张输出卡**，写清这次产出了什么文件（文件名可以写）。',
-  '   加工没有产出，就不是一次真加工——不许留「只有加工、没有输出」的节点。',
+  `读过的文件：${String(reads || '').slice(0, 700) || '（没有）'}`,
+  `写出的文件：${String(writes || '').slice(0, 700) || '（没有）'}`,
   '',
-  '④ 点评卡（kind=proc，标题以「点评」开头）：输出之后，如果人看了结果说了什么（不满意的地方 / 要改什么 / 换什么参考 / 别用什么模型），',
-  '   就紧接一张点评卡，正文写**人的原话要点 + 要求怎么改**。点评卡 → 下一张加工卡（改做法）→ 下一张输出卡，形成一轮精修。',
-  '   人没评价的那次输出，就不用点评卡。',
+  '它的交付（节选）：', String(said || '（没有）').slice(0, 1600),
   '',
-  '形状参考（照这个结构，内容照对话填）：',
-  '{"name":"隔板草图板重出","cards":[',
-  ' {"key":"m1","kind":"in","title":"参考素材","body":"白模线稿、商品实拍、蓝橙视频、锁版模板；被调用 4 次","branch":"main"},',
-  ' {"key":"p1","kind":"proc","title":"按模板重出","body":"按锁版四格重画三件","branch":"main"},',
-  ' {"key":"o1","kind":"out","title":"三张草图板","body":"抽屉隔板/水杯架/黑胶架 设计草图板.png","branch":"main"},',
-  ' {"key":"c1","kind":"proc","title":"点评：形体脱离实拍","body":"人说「参考了什么」；要求补商品实拍和组合视频","branch":"main"},',
-  ' {"key":"p2","kind":"proc","title":"补实拍定槽距","body":"用实拍定槽密度、视频帧定咬合","branch":"main"},',
-  ' {"key":"o2","kind":"out","title":"草图板第二版","body":"设计草图板.png 第二版","branch":"main"},',
-  ' {"key":"c2","kind":"proc","title":"点评：不要用 GPT 生成","body":"人要求改用 skill 做线，不许经过图像模型","branch":"try1"},',
-  ' {"key":"p3","kind":"proc","title":"弃模型改线渲染","body":"Freestyle 纯几何出线","branch":"try1"},',
-  ' {"key":"o3","kind":"out","title":"双帧线渲染","body":"线渲染-下落前.png / 线渲染-下落后.png","branch":"try1"}',
-  '],"edges":[["m1","p1"],["p1","o1"],["o1","c1"],["m1","p2"],["c1","p2"],["p2","o2"],["o2","c2"],["c2","p3"],["m1","p3"],["p3","o3"]]}',
+  '人在过程中说的话（评价 / 纠正 / 换做法），按时间顺序：', String(review || '（没有）').slice(0, 2200),
   '',
-  '硬要求：总卡数 10～18 张；只输出一个 JSON，别的什么都不要；正文一句话，命令和绝对路径不许写。',
-  '',
-  '对话：',
-  lines.slice(0, 14000),
+  '请这样画（和读取链路同一套规矩）：',
+  '1. 只画反复在做的主线，4–9 张卡；一次性的寒暄、测试、系统通知不画。',
+  '2. 输入卡写「它真正调用的文件/素材」，同一素材只出现一张，被反复用到时正文写「被调用 N 次」；',
+  '   加工卡写「具体怎么干」；输出卡写「交出了什么文件」。',
+  '3. **每一个加工后面必须跟一张输出卡**（加工没有产出，就不是一次真加工）。',
+  '4. 输出之后，如果人说了什么（不对/换参考/别用某个模型/要改哪里），紧接一张**点评卡**（kind=proc，标题以「点评」开头），',
+  '   正文写人的原话要点 + 要求怎么改；点评卡后面接「改做法」的加工卡 → 再一张输出卡。人没说话的那次输出不用点评卡。',
+  '5. 连线只按这条路走：输入 → 加工 → 输出（输出也可以喂给下一张加工）。输入卡只往外连，什么都不连进输入卡；',
+  '   每张加工卡至少一个来源、至少交出一张输出卡；整条连成一片，不能断成几截。',
+  '6. 卡片正文说人话、说具体：用什么素材、怎么做、交出什么。命令、绝对路径、字段名一律放进 impl，不进正文。',
+  '7. 只输出一个 JSON，不要解释、不要代码块标记：',
+  '{"name":"12 字内的名字","summary":"一句话","cards":[{"key":"c1","kind":"in|proc|out","title":"短标题","body":"人话","impl":"技能/目录/工具","mods":["短词"]}],"edges":[["c1","c2"]]}',
 ].join('\n');
+
+// 和「读取链路」同一套质量闸：缺来源/缺产出的补线，断成几截或三类不全就判不合格
+function normalizePlan(p) {
+  const cards = p.cards || [];
+  const has = k => cards.some(c => c.kind === k);
+  const edges = (p.edges || []).filter(([a, b]) => a && b && a !== b);
+  const hasE = (a, b) => edges.some(([x, y]) => x === a && y === b);
+  const cyc = (a, b) => {                       // a 能不能走到 b（防成环）
+    const seen = new Set([a]), todo = [a];
+    while (todo.length) {
+      const k = todo.pop();
+      if (k === b) return true;
+      for (const [x, y] of edges) if (x === k && !seen.has(y)) { seen.add(y); todo.push(y); }
+    }
+    return false;
+  };
+  const add = (a, b) => { if (!a || !b || a === b) return false; if (hasE(a, b) || cyc(b, a)) return false; edges.push([a, b]); return true; };
+
+  cards.forEach((c, i) => {
+    const inn = () => edges.some(([, b]) => b === c.id);
+    const out = () => edges.some(([a]) => a === c.id);
+    if (c.kind === 'proc') {
+      if (!inn()) {
+        const prev = cards.slice(0, i).reverse();
+        add((prev.find(x => x.kind === 'out') || prev.find(x => x.kind === 'in') || prev.find(x => x.kind === 'proc') || {}).id, c.id);
+      }
+      if (!out()) {
+        const next = cards.slice(i + 1);
+        add(c.id, (next.find(x => x.kind === 'out') || next.find(x => x.kind === 'proc') || {}).id);
+      }
+    }
+    if (c.kind === 'in' && !out()) {
+      const p = cards.slice(i + 1).find(x => x.kind === 'proc') || cards.find(x => x.kind === 'proc');
+      add(c.id, p && p.id);
+    }
+    if (c.kind === 'out' && !inn()) {
+      const p = cards.slice(0, i).reverse().find(x => x.kind === 'proc' || x.kind === 'in');
+      add(p && p.id, c.id);
+    }
+  });
+
+  let problem = '';
+  if (cards.length < 3 || !has('in') || !has('proc') || !has('out')) problem = '拆出来的卡不全（输入、加工、输出都得有）';
+  else {
+    const dangling = cards.filter(c => (c.kind === 'proc' && (!edges.some(([, b]) => b === c.id) || !edges.some(([a]) => a === c.id))));
+    if (dangling.length) problem = '这些加工卡没接上：' + dangling.map(c => c.title).join('、');
+    else {
+      const seen = new Set([cards[0].id]), todo = [cards[0].id];
+      while (todo.length) { const k = todo.pop(); for (const [a, b] of edges) { const o = a === k ? b : b === k ? a : null; if (o && !seen.has(o)) { seen.add(o); todo.push(o); } } }
+      if (seen.size < cards.length) problem = '链路断成了几截';
+    }
+  }
+  return Object.assign({}, p, { edges, problem });
+}
 
 function extractPlan(text) {
   const t = String(text || '');
@@ -379,20 +431,55 @@ function extractPlan(text) {
   return { name: String(o.name || '').slice(0, 40), cards, edges };
 }
 
-ipcMain.handle('live:analyze', async (_e, { profile, session }) => {
+ipcMain.handle('live:analyze', async (_e, { profile, session, topic }) => {
   try {
-    const r = await livefeed.readMessages(profile, session, 0, { limit: 120 });
+    const r = await livefeed.readMessages(profile, session, 0, { limit: 200 });
     if (r.error) return { ok: false, error: r.error };
-    if (!r.msgs || !r.msgs.length) return { ok: false, error: '这条对话还没有内容' };
-    const lines = r.msgs.map(m => {
-      const who = m.role === 'user' ? '人' : m.role === 'tool' ? '结果' : 'agent';
-      const tools = (m.tools || []).map(t => t.name + '(' + JSON.stringify(t.args || {}).slice(0, 80) + ')').join(' ');
-      return `[${who}] ${String(m.text || '').replace(/\s+/g, ' ').slice(0, 200)}${tools ? ' ⚙' + tools.slice(0, 160) : ''}`;
-    }).join('\n');
-    const res = await askAgentClean({ profile: 'default', prompt: livePrompt(livefeed.whoOf(profile), lines), toolsets: 'todo,no_mcp', timeoutMs: 240000 });
+    const msgs = r.msgs || [];
+    if (!msgs.length) return { ok: false, error: '这条对话还没有内容' };
+
+    // 只读地把这条对话整理成「结构化原料」——和读取 agent 链路同一个思路
+    const base = p => String(p || '').replace(/\/+$/, '').split('/').pop();
+    const reads = new Map(), writes = new Map(), steps = [], said = [], saidRev = [];
+    let ask = '';
+    for (const m of msgs) {
+      if (m.role === 'user' && !ask) {
+        ask = String(m.text || '').replace(/\s+/g, ' ').slice(0, 900);
+        continue;
+      }
+      if (m.role === 'user') {
+        const t = String(m.text || '').replace(/\s+/g, ' ').trim();
+        if (t.length >= 4) saidRev.push(t.slice(0, 240));
+        continue;
+      }
+      for (const t of (m.tools || [])) {
+        const a = t.args || {};
+        const arg = a.path || a.file_path || a.command || a.name || a.query || a.url || '';
+        steps.push(`${t.name}${arg ? ' ' + String(arg).slice(0, 70) : ''}`);
+        const f = base(a.path || a.file_path || '');
+        if (f && /^(read_file|vision_analyze|file_read)$/.test(t.name)) reads.set(f, (reads.get(f) || 0) + 1);
+        if (f && /^(write_file|patch|edit_file|apply_patch)$/.test(t.name)) writes.set(f, (writes.get(f) || 0) + 1);
+      }
+      const txt = String(m.text || '').replace(/\s+/g, ' ').trim();
+      if (txt.length > 60) said.push(txt.slice(0, 300));
+    }
+    const fmt = m => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([n, c]) => (c > 1 ? `${n}×${c}` : n)).join('、');
+    const prompt = livePrompt({
+      who: livefeed.whoOf(profile),
+      topic,
+      ask,
+      steps: steps.slice(-140).join('\n'),
+      reads: fmt(reads),
+      writes: fmt(writes),
+      said: said.slice(-6).join('\n---\n'),
+      review: saidRev.join('\n'),
+    });
+    const res = await askAgentClean({ profile: 'default', prompt, toolsets: 'todo,no_mcp', timeoutMs: 300000 });
     if (!res.ok) return { ok: false, error: '分析没跑完（' + res.code + '）' };
-    const plan = extractPlan(res.text);
+    let plan = extractPlan(res.text);
     if (!plan) return { ok: false, error: '分析没给出可用的链路', raw: String(res.text || '').slice(-600) };
+    plan = normalizePlan(plan);
+    if (plan.problem) return { ok: false, error: '链路没拆好：' + plan.problem };
     return { ok: true, plan };
   } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 });
