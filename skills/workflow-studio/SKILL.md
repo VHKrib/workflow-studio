@@ -16,8 +16,9 @@ description: Use when changing the Workflow Studio (工作流开发平台) Elect
 cd <仓库根目录>                                   # 在 dev 工作副本里改；正在用的那份不在里面改
 node --check renderer/app.js && node --check main.js      # 语法
 export CDP_PORT=9333                               # 实现 9333 / 验收 9334 / 主管 9335；9222 是用户在用的窗口：不连、不关
-pkill -f "remote-debugging-port=$CDP_PORT"; sleep 1        # 只关自己端口的实例——不带端口的 pkill 会把用户的窗口一起关掉
-./node_modules/.bin/electron . --remote-debugging-port=$CDP_PORT --user-data-dir=$TMPDIR/wf-$CDP_PORT &   # 隔离实例：独立端口 + 独立数据
+lsof -nP -iTCP:$CDP_PORT -sTCP:LISTEN -t | xargs kill 2>/dev/null; sleep 1   # 只关自己端口的实例；别用 pkill -f（见常见坑）
+# 用 terminal(background=true) 起；前台命令里的 & 会被工具直接拒掉
+env -u WF_LIVE_DIR ./node_modules/.bin/electron . --remote-debugging-port=$CDP_PORT --user-data-dir=$TMPDIR/wf-$CDP_PORT   # 隔离实例：独立端口 + 独立数据
 sleep 8
 # tools/shot.js 读 CDP_PORT（不写就是 9222 = 用户的窗口，所以先 export）；tools/eval.js 仍写死 9222，别用。有的 scripts/ 不设 CDP_PORT 也默认连 9222，所以先 export
 node skills/workflow-studio/scripts/cdp-await.js probe.js         # 要 await 页面异步函数时
@@ -29,6 +30,8 @@ node skills/workflow-studio/scripts/cdp-version.js                # 版本与回
 node skills/workflow-studio/scripts/cdp-edit.js                   # 编辑即版本：改正文/标题/内部实现/模块各一版 + 连打只 1 版 + 1 秒内同步（不调 agent）
 node skills/workflow-studio/scripts/cdp-copy.js                   # 复制链路 / 选中标记与记忆 / 静态体检抓断链空卡两截（不调 agent）
 node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加一次只读预演（真调执行方，一张卡一次）
+node skills/workflow-studio/scripts/cdp-livewin.js --setup && node skills/workflow-studio/scripts/cdp-livewin.js   # 独立实时画布（配 WF_LIVE_DIR 样本库，见下）
+node tools/verify-actmap.js                                       # 对话 → 卡片的离线映射（不联网、不调模型）
 ```
 
 `tools/eval.js` 只是同步求值（没有 `awaitPromise`），等不到 `chatSend` / agent 回答。要断言异步结果
@@ -68,6 +71,11 @@ CDP 不会连到用户那扇窗。`tools/shot.js` / `tools/eval.js` 把端口写
 交付时给：改了哪些文件（字节）+ 上面命令的真实输出 + 截图路径。正文说人话（先给“改了什么 / 现在能不能用”），
 命令、路径、字节数放列表里，不要把实现细节堆在开头。界面有变化就顺手刷新
 `docs/screenshot.png`（README 引用它）；`preview.png` 不进 git。
+
+**先给效果，再跑长回归**（用户嫌过「测试时间太长，我要快速看到改动效果」）：顺序固定为——改完 → 重启实例 →
+拿**真实对话/真实数据**截一张图发出去 → 再跑断言脚本与老功能回归。验收项再多也不许挡住「先看一眼对不对」；
+脚本可以后补，截图不能等。截图前先想好自己要看什么（卡面上有没有命令/路径/JSON、链路连没连成一条），
+一张图能省掉一整轮返工。
 
 ## 三层结构（不要混）
 
@@ -450,6 +458,73 @@ node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加两次真实 
 # agent-sees-facts / agent-facts-kept = 问事实答得对且原回答没被「给你 N 个候选卡」顶掉
 ```
 
+## 独立实时画布：直播一条选定的 Hermes 对话（只读）
+
+主窗口「⋯ → 实时画布」另开一个**只读**窗口：选一条最近有活动的对话，打开「跟随」，画布就把那条对话里真实发生的事一张张变成链路卡。
+
+### 数据从哪来（只读，硬边界）
+
+- `livefeed.js`（主进程）跨岗位列「最近有活动的对话」：`~/.hermes/state.db`（平台主管 default）+ `~/.hermes/profiles/<岗位>/state.db`（各岗位），列表只给「谁 / 什么时候 / 在做什么」三样；之后按消息 id 读增量。
+- 会话库只用 `sqlite3 -readonly` + `file:…?mode=ro` 打开；`assertSelect()` 只放行 SELECT（写语句当场拒）；不读 `.env`、不写任何文件。窗口「⚙ 内部实现」里的路径是读会话内容得来的，不是我们写的。
+- 上限：初次读最近 **200** 条，之后每次增量最多 200 条；一条正文最多读 600 字、工具参数最多 4000 字；卡片最多 **60** 张（到顶就把后续同类动作并进上一张动作卡，不让「回答」「要求」被撑大）。轮询 **800ms**（满足 ≤1 秒）。
+- 主窗口是唯一写者：独立窗口调 `link:write` / `link:drop` / `version:push` / `version:drop` / `flow:save` 会被主进程直接拒（`liveSender(e)`），理由是「实时画布是只读窗口」。
+
+### 动作 → 卡片（`actmap.js`，纯函数、不联网、不读库）
+
+**口径（用户 2026-11-07 定，优先于本卡方案）**：链路图判定以**用户的需求**为单位——图上只出现跟这次要的东西直接相关的**输入**和**输出**，中间过程不各占一张卡。
+
+| 对话里 | 画布里 |
+|---|---|
+| 用户发的一句话 | **输入卡**（正文 = 原话的人话那部分；命令 / 路径进 `impl`） |
+| 读 / 搜 / 跑 / 查这类中间动作 | **不上图**：并进这次要求的那张卡，正面一句人话（「读了 3 份资料 · 跑了 2 条命令」），每一条命令进 `impl`（超过 6 条显示「…共 N 次」） |
+| 跨岗位派活 / 子代理（`message_agent` / `delegate_task`） | **输出卡**（标题「派活给某人」——交出去的活就是结果） |
+| 写出的文件 / 最终回答 | **输出卡**（写文件 / 回答） |
+
+合并与更新规则（改这块先看这六条）：
+
+1. **一句要求一张进度卡**：这句要求下第一件中间动作出现时立一张「正在做」（`cat: doing`），之后所有中间动作都更在这张卡上（正文 = 人话计数，`impl` 记明细，`n` = 调用次数），换动作类也不新开。
+2. **回答到了就地变成「回答」**：同一张卡的 `cat` 从 `doing` 改成 `answer`、正文换成回答、模块从「进度」换成「结论」——id 不变，画布上不新建卡。
+3. **同一句要求重复发**（模型没被处理、人连着刷）→ 并回同一张输入卡；同一次要求下的回答并回同一张回答卡，不刷卡片。
+4. **中途插话不算结果**：上一张是本次要求的「回答」、而 90 秒内又冒出工具调用 → 把它就地退回「正在做」（不删卡、不换 id）；隔了很久的新动作不动。
+5. **外壳拆开 + 噪音丢掉**：`tool_call`（`calls` 数组）按里面真实的工具逐个记；`todo_list / todo_write` 不落卡；系统通知（后台进程退出 / 孤儿恢复 / 「INTERNAL NOTIFICATION」）不是人说的话，整条丢掉，不许冒输入卡。
+6. **正面只说人话**：`polish()` 去掉代码块 / 行内代码 / URL / 绝对路径 / 英文标识串 / 表格行；命令、参数、JSON 全在 `impl`。测试断言直接查「正面没有 `/路径/`、`{`、反引号、`--flag`、`x.json`」，以及「没有 `kind: proc` 的卡」。
+
+卡片 id 用单调计数（`c1, c2, …`），撤卡不会重号；撤卡时把前后两张接回去，保证还是一条链。
+
+### 窗口与状态
+
+- `main.js` 的 `openLiveWindow()`：`parent: 主窗口`（关主窗口它跟着关）、无侧栏/无按钮、只留「选对话 + 跟随开关 + 状态」；`live:open` 已开着就 `show()+focus()`。
+- 关独立窗口不影响主窗口：`closed` 里 `stopLiveTimer()`，选中的对话与开关状态留在 `<userData>/live.json`，重开窗口由 `live.js` 读 `liveState()` 自动接着跟。
+- 换对话：主进程重置 feed 重读，画布先清空再长新的（0 残留）；开关关着也会给一份快照（`live:snapshot`，不起定时器）。
+- 关开关：`liveFollow({on:false})` 立刻 `clearInterval`，画布留在原地、不清空、不重置。
+- 排布：一行 5 张、换行接着排；视野跟着最后一张卡走（`keepLastInView`），不折缩放。
+
+### 跑验收
+
+```bash
+export CDP_PORT=9333
+node skills/workflow-studio/scripts/cdp-livewin.js --setup     # 造样本会话库（示例内容），并清掉应用数据目录
+WF_LIVE_DIR="$TMPDIR/wf-live-fixture" ./node_modules/.bin/electron . --remote-debugging-port=9333 --user-data-dir="$TMPDIR/wf-9333" &
+node skills/workflow-studio/scripts/cdp-livewin.js             # 21 条 PASS、末行「全部通过」
+node skills/workflow-studio/scripts/cdp-livewin.js --shot docs/live.png   # 顺手刷新文档图（样本内容，中性）
+node tools/verify-actmap.js                                    # 离线映射：真实历史对话前 N 条 → 卡片，末行「全部通过」
+```
+
+改 `actmap.js` 的映射规则（哪些动作上图、卡片怎么并）时，`cdp-livewin.js` 与 `tools/verify-actmap.js` 的断言
+必须一起改：它们断言的是「几张卡、卡上写什么」，不改断言就只剩代码自嗨。两条都要重跑到「全部通过」。
+断言里别钉死具体计数（「读了 10 份资料」这类），一律钉**规则**（没有 `kind: proc` 的卡、正文里有人话计数、
+细节在 `impl` 里且带「共 N 次」）——样本库每跑一次都会长新消息，钉死数字的断言必然假失败。
+
+`--setup` 会连 `$TMPDIR/wf-9333` 一起清（状态要从「第一次打开」开始，第一条卡的计时才有意义）；实机验证去掉 `WF_LIVE_DIR` 就是真库。
+样本库里加新消息由脚本自己写（那是我们自己的临时库，应用那侧始终只读）。只读证据（可直接重跑）：
+
+```bash
+sqlite3 -readonly "file:$HOME/.hermes/state.db?mode=ro" "insert into sessions(id) values('probe')"
+# → Error: stepping, attempt to write a readonly database (8)
+```
+
+
+
 ## 版本与回滚（最近 20 版）
 
 用户口径：只留最近 **20** 版（不要全量历史）；连续打字 / 连着拖按一次算；拖动卡片位置**不算**内容改动。
@@ -657,6 +732,18 @@ node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加 previ
 
 ## 常见坑
 
+- **关实例别用会匹配到自己的 `pkill -f`**：模式串会命中正在执行这条命令的 shell 自己（工具把整条命令塞进
+  `bash -c` 的 cmdline），结果是这条命令被 SIGTERM 掉（退出码 -15）、实例却没关干净。改用
+  `lsof -nP -iTCP:9333 -sTCP:LISTEN -t | xargs kill`，或把模式写成 `[E]lectron .*9333` 这种方括号技巧。
+  不带端口的 `pkill` 会连用户在用的窗口一起关，任何时候都不要。
+- **上一会话留下的后台循环会抢你的实例**：`process_manage list` 只列当前会话的作业，别处（kanban worker 起的
+  `for i in 1 2; do pkill; 起实例; 跑脚本; done` 这类稳定性循环）可能还在跑——症状是实例自己重启、端口被占
+  （`bind() failed: Address already in use`）、“真库”实例里冒出样本数据。起实例前先
+  `ps -eo pid,ppid,etime,command | grep 9333` 看有没有同一个父进程下的兄弟进程，并翻 `/tmp/wf9333-*.log`、
+  `/tmp/*.out` 这些上一轮留下的输出——那些日志往往已经是现成的证据，不用重跑。
+- **环境变量跨调用留在 shell 里**：`export WF_LIVE_DIR=…` 之后每个 `terminal` 调用（包括 background 起的实例）
+  都继承它，于是“真库实例”其实在读样本库——对话列表里出现「示例岗位甲/示例商品」就是它。要真库就显式
+  `env -u WF_LIVE_DIR ./node_modules/.bin/electron …`，要样本库就显式带上（两边都写死，别靠继承）。
 - **卡片底部一行塞不下四个药丸**：`.ft` 是 `flex-wrap:wrap`，校验徽标（`.checks`）`flex:1 1 100%` 自己占一行、
   `⚙ / ? 问 / ✦ 下一步 / ↗ 连线` 另起一行。以前徽标和药丸挤在一行（`.checks{flex:1}` + min-width:auto），
   带去两个校验项的卡会把「↗ 连线」挤出卡片右边缘、被 `overflow:hidden` 裁掉。别再改回单行。
@@ -688,7 +775,7 @@ node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加 previ
 - **画板尺寸写在两处**：`CANVAS = {w:12000,h:8000}`（JS，拖动夹边界用）和 `#canvas{width/height}`（CSS，
   决定滚多远）必须同步改；只改一处会出现“能拖到的地方和能滚到的地方不一致”。同理 `ORIGIN` 必须
   是画板正中，否则某一侧能拖的距离会明显短。
-- **不重启等于没改**：主进程和 `renderer/*` 都不会热加载。改完先关掉自己端口的实例再起（`pkill -f "remote-debugging-port=$CDP_PORT"`），否则连到的是旧进程、截图和 DOM 断言都是上一版。
+- **不重启等于没改**：主进程和 `renderer/*` 都不会热加载。改完先把 9333 上的实例关掉再起（用 `lsof … -sTCP:LISTEN -t | xargs kill`，别用会命中自己的 `pkill -f`），否则连到的是旧进程、截图和 DOM 断言都是上一版。
 - 节点宽度变了要同步 `chainOrder` 之外的两处：连线的 `x1` 偏移、插入按钮定位。
 - 不要把 `localStorage` 里的旧 schema 直接读进新代码；升 key 版本（v4）。
 - 左栏宽度/收起状态一变，卡片屏幕坐标就变，必须重新 `drawEdges()`；面板状态统一走
@@ -697,7 +784,7 @@ node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加 previ
 
 ## 开源
 
-本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `cdp-dock.js` / `cdp-version.js` / `cdp-edit.js` / `cdp-copy.js` / `parse-agent-output.js`）就在仓库里：
+本手册和它的 `scripts/`（`cdp-await.js` / `cdp-click.js` / `cdp-canvas.js` / `cdp-dock.js` / `cdp-version.js` / `cdp-edit.js` / `cdp-copy.js` / `cdp-livewin.js` / `parse-agent-output.js`）就在仓库里：
 `skills/workflow-studio/`。新增验证脚本直接放这里（`scripts/` 是可直接重跑的采集/断言，不要写成一次性探针），
 并在 `git status` 里确认它们不是 `??` 漏提。
 

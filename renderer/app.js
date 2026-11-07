@@ -113,6 +113,7 @@ function bindUI() {
   document.querySelectorAll('#addMenu div').forEach(d => d.onclick = () => { addNode(d.dataset.kind); $('#addMenu').classList.remove('on'); });
   $('#btnSave').onclick = exportFlow;
   $('#btnOpen').onclick = importFlow;
+  $('#btnLive').onclick = () => { window.tcflow.openLive(); };
   $('#btnValidate').onclick = () => validateAll();
   $('#btnRun').onclick = openRunModal;
   $('#btnRead').onclick = openRead;

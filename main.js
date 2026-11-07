@@ -8,6 +8,8 @@ const PROFILES_DIR = path.join(os.homedir(), '.hermes', 'profiles');
 const { readChain } = require('./chain');
 const { createLinkStore } = require('./linkstore');
 const { createVersionStore } = require('./versions');
+const livefeed = require('./livefeed');
+const actmap = require('./actmap');
 const HERMES = path.join(os.homedir(), '.hermes', 'hermes-agent', '.hermes', 'bin', 'hermes');
 
 // 共享链路状态文件：人和 agent 共用一份底稿（画布写、agent 读；外面改了画布认领回来）
@@ -142,13 +144,112 @@ function createWindow() {
   });
   win.setBounds({ x: 20, y: 44, width: 1380, height: 880 });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
+  MAIN_WIN = win;
+  win.webContents.on('render-process-gone', (_e, d) => console.log('[窗口] 主窗口渲染进程退出：' + JSON.stringify(d || {})));
+  win.on('closed', () => { if (MAIN_WIN === win) MAIN_WIN = null; });
   return win;
+}
+
+// ---------- 独立实时画布：只读跟一条别人的对话 ----------
+// 主窗口是唯一的写者；这个窗口只显示主进程读出来的东西（不写会话库、不写链路状态）。
+let MAIN_WIN = null;
+const LIVE = { win: null, timer: 0, busy: false, feed: null, lastId: 0, lastError: '' };
+const LIVE_STATE = { profile: '', session: '', on: false };
+const LIVE_POLL_MS = 800;          // 每 ≤1 秒读一次增量
+
+function liveStateFile() { return path.join(app.getPath('userData'), 'live.json'); }
+function loadLiveState() {
+  try {
+    const s = JSON.parse(fs.readFileSync(liveStateFile(), 'utf8'));
+    if (s && typeof s === 'object') {
+      LIVE_STATE.profile = String(s.profile || '');
+      LIVE_STATE.session = String(s.session || '');
+      LIVE_STATE.on = !!s.on;
+    }
+  } catch (e) { }
+  return LIVE_STATE;
+}
+function saveLiveState() {
+  try { fs.writeFileSync(liveStateFile(), JSON.stringify(LIVE_STATE, null, 2) + '\n', 'utf8'); } catch (e) { }
+}
+function liveSender(e) {
+  return !!(LIVE.win && !LIVE.win.isDestroyed() && e && e.sender && e.sender.id === LIVE.win.webContents.id);
+}
+function sendLive(doc) {
+  if (!LIVE.win || LIVE.win.isDestroyed()) return;
+  try { LIVE.win.webContents.send('live:doc', doc); } catch (e) { }
+}
+function stopLiveTimer() { if (LIVE.timer) clearInterval(LIVE.timer); LIVE.timer = 0; }
+function startLiveTimer() { stopLiveTimer(); LIVE.timer = setInterval(liveTick, LIVE_POLL_MS); }
+
+// 只认列表里真的存在的那条对话：外部传来的岗位 / 会话标识先对一遍，不拿它拼路径
+async function findConv(profile, session) {
+  const all = await livefeed.listConversations();
+  return all.find(c => c.profile === profile && c.session === session) || null;
+}
+async function liveLoad(profile, session) {
+  const conv = await findConv(profile, session);
+  if (!conv) return { ok: false, error: '这条对话已经不在最近的活动里了' };
+  const same = LIVE.feed && LIVE.feed.conv && LIVE.feed.conv.key === conv.key;
+  if (!same) { LIVE.feed = actmap.createFeed({ profile, session, who: conv.who, key: conv.key, title: conv.doing }); LIVE.lastId = 0; }
+  const r = await livefeed.readMessages(profile, session, LIVE.lastId);
+  if (r.error) return { ok: false, error: r.error };
+  const msgs = r.msgs.slice();
+  // 窗口从中间截的：开头那句如果不可用（不是人的要求 / 是系统注入），往前找最近一句真的是人话的要求补进来
+  const usable = m => {
+    if (!m || m.role !== 'user') return false;
+    const c = actmap.cleanAsk(m.text);
+    return (c.images && c.images.length) || actmap.splitAsk(c.text).body.length >= 4;
+  };
+  if (!LIVE.lastId && msgs.length && !usable(msgs[0])) {
+    const asks = await livefeed.askCandidates(profile, session, msgs[0].id);
+    const ask = asks.find(m => { const c = actmap.cleanAsk(m.text); return c.text && c.text.length <= 600 && actmap.splitAsk(c.text).body.length >= 4; });
+    if (ask) msgs.unshift(ask);
+  }
+  actmap.applyMessages(LIVE.feed, msgs);
+  LIVE.lastId = LIVE.feed.lastId;
+  console.log(`[实时画布] 只读读取「${conv.who} · ${conv.doing}」：${r.msgs.length} 条（sqlite3 -readonly file:…?mode=ro）`);
+  return { ok: true, doc: actmap.feedDoc(LIVE.feed) };
+}
+async function liveTick() {
+  if (LIVE.busy || !LIVE_STATE.on || !LIVE_STATE.profile || !LIVE_STATE.session) return;
+  LIVE.busy = true;
+  try {
+    const r = await livefeed.readMessages(LIVE_STATE.profile, LIVE_STATE.session, LIVE.lastId);
+    if (r.error) { if (r.error !== LIVE.lastError) console.log('[实时画布] 读不了：' + r.error); LIVE.lastError = r.error; return; }
+    LIVE.lastError = '';
+    if (!r.msgs.length) return;                                   // 没新消息：不推、不重画
+    actmap.applyMessages(LIVE.feed, r.msgs);
+    LIVE.lastId = LIVE.feed.lastId;
+    console.log(`[实时画布] 增量 ${r.msgs.length} 条（只读）`);
+    sendLive(actmap.feedDoc(LIVE.feed));
+  } finally { LIVE.busy = false; }
+}
+function openLiveWindow() {
+  if (LIVE.win && !LIVE.win.isDestroyed()) { LIVE.win.show(); LIVE.win.focus(); return { ok: true, existing: true }; }
+  LIVE.win = new BrowserWindow({
+    width: 1080, height: 760, minWidth: 720, minHeight: 520,
+    title: '实时画布',
+    parent: MAIN_WIN || undefined,                 // 关主窗口时跟着关
+    titleBarStyle: 'hiddenInset',
+    backgroundColor: '#f5f3ef',
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+  });
+  LIVE.win.loadFile(path.join(__dirname, 'renderer', 'live.html'));
+  LIVE.win.webContents.on('render-process-gone', (_e, d) => console.log('[实时画布] 渲染进程退出：' + JSON.stringify(d || {})));
+  LIVE.win.on('closed', () => {
+    LIVE.win = null;
+    stopLiveTimer();                               // 窗口没了就不再读；开关状态留着，重开窗口会接着跟
+    console.log('[实时画布] 窗口关了：停止读取（选中的对话与开关状态已记住）');
+  });
+  return { ok: true };
 }
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { role: 'appMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
   ]));
+  loadLiveState();                                  // 上次选中的对话与开关状态（重开窗口接着用）
   createWindow();
   // 状态文件被外部改（人改、别的工具改）：推给画布；坏文件不推，画布继续用上一版
   links().startWatching(payload => {
@@ -159,30 +260,55 @@ app.whenReady().then(() => {
   app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('before-quit', () => { stopLiveTimer(); });
 
 ipcMain.handle('agents:list', () => listAgents());
 ipcMain.handle('agent:ask', (_e, payload) => askAgent(payload));
 // 共享链路状态文件：路径 / 写 / 读 / 删（临时画布关掉就删）
 ipcMain.handle('link:dir', () => links().dir);
 ipcMain.handle('link:path', (_e, id) => links().fileOf(id));
-ipcMain.handle('link:write', (_e, { id, doc }) => {
-  try { return links().write(id, doc); } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+ipcMain.handle('link:write', (e, { id, doc }) => {
+  if (liveSender(e)) return { ok: false, error: '实时画布是只读窗口：链路状态只由主窗口写' };
+  try { return links().write(id, doc); } catch (e2) { return { ok: false, error: String(e2 && e2.message || e2) }; }
 });
 ipcMain.handle('link:read', (_e, id) => links().read(id));
-ipcMain.handle('link:drop', (_e, id) => { links().drop(id); return true; });
+ipcMain.handle('link:drop', (e, id) => {
+  if (liveSender(e)) return { ok: false, error: '实时画布是只读窗口' };
+  links().drop(id); return true;
+});
 // 版本记录：列 / 推一条（主进程统一裁到最近 20 版）/ 删（链路删掉时一起清）
 ipcMain.handle('version:list', (_e, id) => versions().list(id));
-ipcMain.handle('version:push', (_e, { id, entry }) => {
+ipcMain.handle('version:push', (e, { id, entry }) => {
+  if (liveSender(e)) return { ok: false, error: '实时画布是只读窗口' };
   try {
     const r = versions().push(id, entry);
     if (entry && entry.rollback) console.log(`[版本] ${id}：记下新版本 v${entry.v}（回滚到 v${(entry.rollback && entry.rollback.to) || '?'}）`);
     return r;
-  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
+  } catch (e2) { return { ok: false, error: String(e2 && e2.message || e2) }; }
 });
-ipcMain.handle('version:drop', (_e, id) => versions().drop(id));
+ipcMain.handle('version:drop', (e, id) => { if (liveSender(e)) return { ok: false, error: '实时画布是只读窗口' }; return versions().drop(id); });
+// 独立实时画布：开窗 / 列最近有活动的对话 / 上次的选中与开关 / 跟随（只读） / 单次取一份
+ipcMain.handle('live:open', () => openLiveWindow());
+ipcMain.handle('live:list', () => livefeed.listConversations().catch(err => ({ error: String(err && err.message || err) })));
+ipcMain.handle('live:state', () => ({ profile: LIVE_STATE.profile, session: LIVE_STATE.session, on: LIVE_STATE.on, following: !!LIVE.timer, dir: livefeed.ROOT }));
+ipcMain.handle('live:snapshot', async (_e, { profile, session }) => liveLoad(profile, session));
+ipcMain.handle('live:follow', async (_e, { profile, session, on }) => {
+  if (!on) {
+    LIVE_STATE.on = false; saveLiveState(); stopLiveTimer();
+    console.log('[实时画布] 停止读取（画面留在原地）');
+    return { ok: true };
+  }
+  const r = await liveLoad(profile, session);
+  if (!r.ok) return r;
+  LIVE_STATE.profile = profile; LIVE_STATE.session = session; LIVE_STATE.on = true; saveLiveState();
+  startLiveTimer();
+  sendLive(r.doc);
+  return r;
+});
 // 只读：读一个 agent 的工作链路原料（身份 / 技能 / 最近干的活 / 上下游 / 读写的目录）
 ipcMain.handle('agent:chain', (_e, id) => readChain(id).catch(err => ({ ok: false, error: String(err && err.message || err) })));
-ipcMain.handle('flow:save', async (_e, flow) => {
+ipcMain.handle('flow:save', async (e, flow) => {
+  if (liveSender(e)) return { ok: false, error: '实时画布是只读窗口' };
   const r = await dialog.showSaveDialog({ title: '保存工作流', defaultPath: path.join(os.homedir(), '工作流-' + (flow.name || 'untitled') + '.json'), filters: [{ name: 'JSON', extensions: ['json'] }] });
   if (r.canceled || !r.filePath) return { ok: false };
   fs.writeFileSync(r.filePath, JSON.stringify(flow, null, 2), 'utf8');

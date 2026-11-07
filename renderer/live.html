@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'">
+<title>实时画布</title>
+<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="live.css">
+</head>
+<body class="live">
+  <!-- 只有三样：选对话、跟随开关、当前状态。这张窗口只读，不提供任何编辑入口 -->
+  <div class="lbar">
+    <div class="lbrand">实时画布</div>
+    <div class="lpick"><select id="lconv" title="最近有活动的对话（谁 · 什么时候 · 在做什么）"></select></div>
+    <label class="lswitch" title="开：每秒读一次增量，画布跟着长；关：立刻停下，画面留在原地">
+      <input type="checkbox" id="lfol"><span class="ltrack"></span><span class="lword">跟随</span>
+    </label>
+    <span class="sp"></span>
+    <span id="lstat" class="lstat"></span>
+  </div>
+  <div class="canvaswrap lwrap">
+    <div id="wrap"><div id="canvas"><svg id="edges"></svg></div></div>
+    <div class="lempty" id="lempty">选一条对话，再打开「跟随」</div>
+    <div class="zoombar">
+      <span id="zoomOut" title="缩小">−</span>
+      <span id="zoom">100%</span>
+      <span id="zoomIn" title="放大">+</span>
+      <span id="zoomReset" title="复位">⌂</span>
+    </div>
+  </div>
+<script src="live.js"></script>
+</body>
+</html>
