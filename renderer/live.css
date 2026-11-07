@@ -45,3 +45,11 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
   background:var(--card);border:1px solid var(--soft-line);border-radius:8px;
   font-family:var(--mono);font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
   color:var(--ink-2);user-select:text;cursor:text}
+
+/* 三栏实体条：素材 / 实现路径 / 结果（只在有内容时出现） */
+.lents{display:flex;flex-wrap:wrap;gap:18px;padding:6px 16px 8px;border-bottom:1px solid var(--border);font-size:12px;line-height:1.9}
+.lents.off{display:none}
+.lseg{display:flex;align-items:baseline;gap:6px;min-width:0}
+.lseg b{font-weight:600;color:var(--muted-foreground);white-space:nowrap}
+.lseg i{font-style:normal;background:color-mix(in srgb, var(--foreground) 7%, transparent);border-radius:6px;padding:1px 6px;white-space:nowrap}
+.lseg i em{font-style:normal;opacity:.55;margin-left:3px}

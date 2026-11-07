@@ -57,6 +57,52 @@ const TOOLS = {
 // 这些不算「做了什么」，不落卡（记账 / 计划，纯噪音）
 const SKIP = new Set(['todo_list', 'todo_read', 'todo_write', 'todo_update']);
 
+// 寒暄 / 应声 / 闲聊：跟链路无关，不上画布（「你好」不该长出一张输入卡）
+const CHATTER = /^(你好|您好|hi|hello|hey|在吗|在不在|谢谢|多谢|辛苦|好的|好|收到|ok|okay|嗯|嗯嗯|对|是的|算了|不用了|先这样|继续|哈哈|早|晚安)[\s！!。.，,～~…·]*$/i;
+function isChatter(text, pics) {
+  if (pics && pics.length) return false;
+  const t = oneLine(text);
+  if (!t) return true;
+  if (t.length <= 12 && CHATTER.test(t)) return true;
+  // 短到没有动词、没有名词的纯语气词
+  if (t.length <= 4 && !/[\u4e00-\u9fa5]{2}/.test(t.replace(CHATTER, ''))) return true;
+  return false;
+}
+
+// 三类实体：这条链路真正反复用到的东西。
+// 素材 = 图片 / 文件 / 货号 / 画板分镜；实现路径 = 技能 / 脚本 / 工具；结果 = 写出的文件 / 出片交付。
+const E_FILE = /(?<![\w.\/-])([\w\u4e00-\u9fa5-][\w\u4e00-\u9fa5.\-]*\.(?:png|jpe?g|webp|gif|mp4|mov|json|jsonl|js|mjs|sh|py|md|csv|xlsx|ya?ml|pdf))(?!\w)/gi;
+const E_OFFER = /(?<![\d.])(\d{11,20})(?!\d)/g;
+const E_MATWORD = /(素材|原图|白底图|主图|详情图|参考图|画板|分镜|货号|商品图)/g;
+const E_SCRIPT = /(?<![\w.\/-])([\w\-]+\.(?:js|mjs|sh|py))(?!\w)/gi;
+const E_OUTWORD = /(出片|生成|渲染|导出|交付|产出|打包|成片)/g;
+
+const bump = (m, name, at) => {
+  const k = String(name || '').trim();
+  if (!k || k.length > 60) return;
+  const e = m.get(k) || { name: k, n: 0, first: at, last: at };
+  e.n++; e.last = at;
+  m.set(k, e);
+};
+const topEnt = (m, n) => [...m.values()].sort((a, b) => b.n - a.n || a.name.localeCompare(b.name)).slice(0, n);
+
+// 扫一段文字/一次调用，把三类实体记进 feed.ent（同名只涨计数，画布上显示「×N」）
+// 分类规矩：图片/数据文档 → 素材；代码脚本 → 实现路径；写出的产物 → 结果
+const CODE_EXT = /\.(?:js|mjs|cjs|ts|sh|py|rb|go|java|css|html?)$/i;
+function scanEntities(feed, text, at) {
+  const t = String(text || '');
+  if (!t) return;
+  for (const m of t.matchAll(E_FILE)) {
+    const name = m[1];
+    if (CODE_EXT.test(name)) bump(feed.ent.path, name, at);   // 代码文件算「怎么做的」，不是素材
+    else bump(feed.ent.mat, name, at);
+  }
+  for (const m of t.matchAll(E_OFFER)) bump(feed.ent.mat, m[1], at);
+  for (const m of t.matchAll(E_MATWORD)) bump(feed.ent.mat, m[1], at);
+  for (const m of t.matchAll(E_SCRIPT)) bump(feed.ent.path, m[1], at);
+  for (const m of t.matchAll(E_OUTWORD)) bump(feed.ent.out, m[1], at);
+}
+
 const CAT = {
   doing:   { title: '正在做', unit: '步',     verb: '正在做' },
   read:    { title: '读资料', unit: '份资料', verb: '读了' },
@@ -184,6 +230,7 @@ function createFeed(conv) {
     lastId: 0,
     // 这句要求下的中间动作（读/搜/跑/查）：不上链路图，攒成一句人话 + 内部实现
     work: { turn: null, counts: {}, lines: [], calls: 0 },
+    ent: { mat: new Map(), path: new Map(), out: new Map() },   // 素材 / 实现路径 / 生成结果（同名涨计数）
     doing: null,          // 这句要求的「正在做」卡：回答到了就地变成「回答」卡
     stats: { messages: 0, tools: 0, merged: 0, skipped: 0 },
     at: 0,
@@ -328,6 +375,19 @@ function applyToolCall(feed, name, args, callId) {
   if (SKIP.has(name)) { feed.stats.skipped++; return; }
   const t = toolOf(name);
   const target = t.cat === 'handoff' ? handoffTarget(args) : '';
+  // 实体：技能名 → 实现路径；写出/改动的文件 → 结果；读的图片文件 → 素材
+  const a = args || {};
+  if (/^skill_/.test(name) && a.name) bump(feed.ent.path, a.name, feed.at);
+  if (/^(write_file|patch|edit_file|apply_patch)$/.test(name) && a.path) {
+    const base = String(a.path).split('/').pop();
+    if (base) bump(feed.ent.out, base, feed.at);
+  }
+  if (/^(read_file|vision_analyze)$/.test(name) && a.path) {
+    const base = String(a.path).split('/').pop();
+    // 读代码文件算「怎么做的」，读图片/数据才算素材
+    if (base) bump(CODE_EXT.test(base) ? feed.ent.path : feed.ent.mat, base, feed.at);
+  }
+  if (a.command) scanEntities(feed, a.command, feed.at);
   // 只有「交出去的东西」才算链路图上的输出（写好的文件 / 派出去的活）。
   // 读、搜、跑、查这类中间动作不上图：攒成一句人话（读了 N 份资料）+ 命令进「内部实现」。
   if (t.kind !== 'out') {
@@ -380,6 +440,7 @@ function applyMessage(feed, m) {
     const pics = ask0.images || [];
     if ((!cut.body || cut.body.length < 2) && !pics.length) { feed.stats.skipped++; return; }
     const body = cut.body && cut.body.length >= 2 ? cut.body : `发来 ${pics.length} 张图`;
+    if (isChatter(body, pics)) { feed.stats.chatter = (feed.stats.chatter || 0) + 1; return; }   // 寒暄/应声不上画布
     // 同一句话重复发（模型没被处理、人连着刷）：并回同一张输入卡，不刷卡片
     if (feed.lastInput && feed.lastInput.body === body) {
       feed.lastInput.n++; feed.lastInput.at = feed.at;
@@ -390,6 +451,7 @@ function applyMessage(feed, m) {
       feed.stats.merged++;
       return;
     }
+    scanEntities(feed, m.text, feed.at);
     const impl = [];
     if (cut.impl) impl.push(cut.impl);
     for (const p of pics.slice(0, 6)) impl.push('附件：' + p);
@@ -431,6 +493,7 @@ function applyMessage(feed, m) {
     // 纯文本回答：前奏 / 过度句不算「交出的结果」，否则一句「我先看看」也长一张卡
     const full = polish(m.text);
     if (full.length < 24) { feed.stats.skipped++; return; }
+    scanEntities(feed, m.text, feed.at);
     const text = answerBody(m.text);
     if (/^(我先|让我|好的|收到|稍等|正在|我这就|明白|没问题)/.test(text) && text.length < 90) { feed.stats.skipped++; return; }
     if (/^(Now I|Let me|I'll |I will |Okay|OK,|Sure|Got it|Looking at|First, )/i.test(text) && text.length < 160) { feed.stats.skipped++; return; }
@@ -498,6 +561,11 @@ function feedDoc(feed) {
     conv: feed.conv,
     at: feed.at,
     stats: feed.stats,
+    entities: {
+      materials: topEnt(feed.ent.mat, 8),
+      paths: topEnt(feed.ent.path, 8),
+      results: topEnt(feed.ent.out, 8),
+    },
     summary: {
       cards: feed.cards.length, edges: feed.edges.length, by_kind: byKind,
       messages: feed.stats.messages, tools: feed.stats.tools, merged: feed.stats.merged,
@@ -510,4 +578,4 @@ function feedDoc(feed) {
   };
 }
 
-module.exports = { createFeed, applyMessages, feedDoc, polish, cleanAsk, splitAsk, toolOf, implLine, TOOLS, SKIP, MAX_CARDS };
+module.exports = { createFeed, applyMessages, feedDoc, polish, cleanAsk, splitAsk, toolOf, implLine, isChatter, scanEntities, TOOLS, SKIP, MAX_CARDS };
