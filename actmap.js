@@ -164,7 +164,11 @@ function cleanAsk(text) {
     .replace(/^Gateway message origin[^\n]*\n?/im, ' ')            // 网关消息头（JSON，不是人话）
     .replace(/^\s*\[[A-Z][^\]]{0,140}\]\s*/g, ' ')                 // 一行一个方括号系统标记
     .replace(/^\s*\[(?:IMPORTANT|Cronjob|System)[\s\S]*?\]\s*/i, ' ')
-    .replace(/^\s*Message from [^:\n]{0,120}:\s*/i, '');           // 「Message from 某岗位 (@x): 正文」
+    .replace(/^\s*Message from [^:\n]{0,120}:\s*/i, '')             // 「Message from 某岗位 (@x): 正文」
+    .replace(/^#{0,6}\s*Kanban task\s+\w+:\s*/im, '')               // 看板卡标题行：留下任务标题
+    .replace(/^\s*(?:Assignee|Status|Workspace|Max runtime|Terminal timeout|Depends on|Priority|Created by|Reviewer)\s*:[^\n]*\n?/gim, '')
+    .replace(/^\s*New note on your kanban task[\s\S]*$/i, ' ')      // 看板备注通知：不是人说的话
+    .replace(/^\s*You've reached the (?:maximum|limit)[\s\S]*$/i, ' ');
   t = t.trim();
   // 还是系统壳（整段 JSON / 网关提示 / 预加载的技能正文）就别当成人说的话
   if (/^[[{]/.test(t) || /not instructions or authorization/i.test(t)) t = '';
@@ -260,8 +264,8 @@ function workText(feed) {
 function ensureDoing(feed) {
   if (feed.doing && feed.doing.turn === feed.turn && !feed.doing.done) return feed.doing;
   const card = pushCard(feed, {
-    kind: 'out', cat: 'doing', title: '正在做', turn: feed.turn, at: feed.at, text: '',
-    mods: [modOf('out', '进度')],
+    kind: 'proc', cat: 'doing', title: '正在做', turn: feed.turn, at: feed.at, text: '',
+    mods: [modOf('proc', '进度')],
   });
   if (card) feed.doing = card;
   return card;
@@ -327,6 +331,7 @@ function bodyOf(card) {
     return card.n > 1 ? `把 ${card.n} 件事交给了${to}，等它回话` : `把这件事交给了${to}，等它回话`;
   }
   if (card.cat === 'answer') return clip(polish(card.text || ''), BODY_CHARS);
+  if (card.cat === 'write') return card.n > 1 ? `写好了 ${card.n} 个文件` : '写好了 1 个文件';
   const n = card.n || 1;
   let s = `${cat.verb} ${n} ${cat.unit}`;
   if (card.err) s += `（其中 ${card.err} 次报错）`;
@@ -410,9 +415,17 @@ function applyToolCall(feed, name, args, callId) {
     return;
   }
   const kind = 'out';
-  // 连续同类合并：上一张卡就是同一类（同一句要求下、同一接收人）→ 就地更新
+  // 连续同类合并：同一次要求下、同一类、同一接收人的动作并成一张（计数往上走）。
+  // 中间夹着命令/读文件也不拆——「写了 9 个文件」比 9 张一样的卡有用。
   let card = feed.lastGroup;
-  if (card && card.cat === t.cat && card.target === target && card.turn === feed.turn) {
+  if (!(card && card.cat === t.cat && card.target === target && card.turn === feed.turn)) {
+    card = null;
+    for (let i = feed.cards.length - 1; i >= 0; i--) {
+      const x = feed.cards[i];
+      if (x.cat === t.cat && (x.target || '') === target && x.turn === feed.turn) { card = x; break; }
+    }
+  }
+  if (card) {
     card.n++;
     feed.stats.merged++;
   } else {

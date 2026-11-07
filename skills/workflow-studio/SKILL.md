@@ -496,6 +496,24 @@ node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加两次真实 
 
 卡片 id 用单调计数（`c1, c2, …`），撤卡不会重号；撤卡时把前后两张接回去，保证还是一条链。
 
+### 只把「跟这次要的东西有关」的进画布（相关性 + 三类实体）
+
+用户口径（2026-11）：链路判定以**这次要做的事**为单位。寒暄、应声、闲聊跟链路无关，不该在画布上占一张卡；
+真正**反复动用**的是三样东西——**素材 / 实现路径 / 生成结果**，它们要单独列出来并带次数（同名涨计数），
+因为「调整一条链路」实际上就是反复换这几样。
+
+- `isChatter(text, pics)`（`actmap.js`，导出，可单测）：短句 + 寒暄/应声白名单（你好 / 谢谢 / 好的 / 收到 / 算了 / 继续 …）
+  → **不落卡**，计入 `stats.chatter`；独立窗口状态栏写「· 忽略闲聊 N 条」，让人看见过滤真的生效。带图的永远算工作。
+- `scanEntities(feed, text, at)` 扫三处输入：用户原话、agent 回答正文、工具参数。分流规则写死——
+  **代码文件（js/mjs/ts/sh/py/css/html）→ 实现路径**（「怎么做的」，不是素材）；图片、数据文档、货号（11–20 位数字）、
+  画板/分镜/主图这类词 → **素材**；`write_file`/`patch` 的目标文件 → **结果**；`skill_view`/`skill_manage` 的 `name` → 实现路径。
+  同一份 `scanEntities` 也用于 `read_file` 的参数：读图片/数据算素材，读代码算路径。
+- 别把泛指词算成实体：只写「素材」两个字不算（否则列表第一名永远是「素材×N」）；`素材|原图|白底图|主图|…` 里不带这些泛指词。
+- 出口：`feedDoc()` 多一个 `entities: { materials, paths, results }`（各取前 8，每条 `{name, n}`）——
+  独立窗口顶部 `#lents` 三栏渲染，空栏不占高度、内容没变不重绘（`dataset.html` 比对）。
+- 验收：拿一条 500+ 条消息的真实对话跑，能直接看到「素材 preview.png×N / 路径 actmap.js×N / 结果 app.js×N」，
+  而一句「你好」不产生卡、只让状态栏 +1。`tools/verify-actmap.js` 里补 `chatter-skipped` 与 `entities` 两条断言。
+
 ### 窗口与状态
 
 - `main.js` 的 `openLiveWindow()`：`parent: 主窗口`（关主窗口它跟着关）、无侧栏/无按钮、只留「选对话 + 跟随开关 + 状态」；`live:open` 已开着就 `show()+focus()`。

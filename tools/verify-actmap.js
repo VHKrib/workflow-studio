@@ -70,9 +70,11 @@ function lineOf(m) {
   // 2) 卡片正面只有人话：没有命令 / 绝对路径 / JSON / 字段名
   const dirty = doc.cards.filter(c => TECH_FRONT.test(c.title || '') || TECH_FRONT.test(c.body || '')).map(c => c.title + '：' + c.body);
   ok('front-is-human', dirty.length === 0, dirty.slice(0, 3).join(' | ') || '0 处命中');
-  // 3) 链路图上只有「要什么」和「拿到什么」：没有加工卡（读/搜/跑/查都不上图）
-  const procCards = doc.cards.filter(c => c.kind === 'proc');
-  ok('only-in-and-out', procCards.length === 0, { kinds: doc.cards.map(c => c.kind).join(''), cards: doc.cards.length });
+  // 3) 链路只有 输入 / 加工 / 输出 三种卡：加工卡=「正在做」那一步，读/搜/跑/查都折进它的正文
+  const badKind = doc.cards.filter(c => !['in', 'proc', 'out'].includes(c.kind));
+  const kinds = doc.cards.map(c => c.kind);
+  ok('kinds-in-proc-out', badKind.length === 0 && kinds.includes('in') && kinds.includes('out'),
+    { kinds: kinds.join(''), cards: doc.cards.length });
   // 4) 中间动作没丢：折进这张卡的人话总结 + 内部实现
   const folded = doc.cards.filter(c => /读了|跑了|查了|翻了|看了|核了/.test(c.body || ''));
   ok('work-folded', doc.stats.tools === 0 || folded.length > 0, { folded: folded.length, tools: doc.stats.tools });
@@ -129,10 +131,13 @@ function lineOf(m) {
   const d5 = feedDoc(f5);
   ok('output-and-handoff', d5.cards[0].kind === 'out' && d5.cards[0].title === '写文件' && /示例岗位乙/.test(d5.cards[1].title), { cards: d5.cards.map(c => c.kind + '｜' + c.title) });
 
-  // 10) 重复同一句话不刷卡片
+  // 10) 寒暄不上画布；重复同一句真活只留一张卡
   const f6 = createFeed({});
   for (let i = 0; i < 6; i++) applyMessages(f6, [{ id: i + 1, role: 'user', at: Date.now(), text: '你好' }]);
-  ok('repeat-ask-one-card', f6.cards.length === 1, { cards: f6.cards.length });
+  ok('chatter-no-card', f6.cards.length === 0, { cards: f6.cards.length, chatter: f6.stats.chatter || 0 });
+  const f7 = createFeed({});
+  for (let i = 0; i < 6; i++) applyMessages(f7, [{ id: i + 1, role: 'user', at: Date.now(), text: '把这三个文件对一下口径' }]);
+  ok('repeat-ask-one-card', f7.cards.length === 1, { cards: f7.cards.length });
 
   console.log(fail ? `\n${fail} 条没过` : '\n全部通过');
   process.exit(fail ? 1 : 0);
