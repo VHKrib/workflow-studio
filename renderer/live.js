@@ -54,7 +54,26 @@ function paintEmpty() {
 function paintStat() {
   if (!doc || !doc.conv) { setStat(cur ? '等第一条消息…' : ''); return; }
   const n = (doc.cards || []).length;
-  setStat(`${n} 张卡 · ${following ? '跟到 ' + hhmmss(doc.at) : '已暂停'}`);
+  const skipped = (doc.stats && doc.stats.chatter) || 0;
+  const tail = skipped ? ` · 忽略闲聊 ${skipped} 条` : '';
+  setStat(`${n} 张卡 · ${following ? '跟到 ' + hhmmss(doc.at) : '已暂停'}${tail}`);
+}
+
+// 三栏实体：素材 / 实现路径 / 结果。同名只涨计数，不重复占位——这条链路里真正反复用的是这些。
+function paintEnts(d) {
+  const box = $('#lents');
+  if (!box) return;
+  const e = (d && d.entities) || {};
+  const seg = (label, arr) => {
+    if (!arr || !arr.length) return '';
+    const chips = arr.slice(0, 6).map(x => `<i title="${esc(x.name)}">${esc(x.name)}<em>×${x.n}</em></i>`).join('');
+    return `<span class="lseg"><b>${label}</b>${chips}</span>`;
+  };
+  const html = seg('素材', e.materials) + seg('实现路径', e.paths) + seg('结果', e.results);
+  if (box.dataset.html === html) return;
+  box.dataset.html = html;
+  box.innerHTML = html;
+  box.classList.toggle('off', !html);
 }
 
 async function pick(key) {
@@ -142,7 +161,7 @@ function renderDoc(d) {
   if (!fitted && d.cards.length) { fit(); fitted = true; }
   else if (d.cards.length > before) keepLastInView();
   drawEdges();
-  paintStat(); paintEmpty();
+  paintStat(); paintEmpty(); paintEnts(d);
 }
 
 // 排布：一条链按顺序从左往右排，一行放不下或来了新的要求就换行（换行后仍是从左往右）。
