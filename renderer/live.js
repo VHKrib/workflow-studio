@@ -461,6 +461,25 @@ function applyZoom() {
   const z = $('#zoom'); if (z) z.textContent = Math.round(zoom * 100) + '%';
 }
 
+// 存盘
+function persist() {
+  if (!doc) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { window.tcflow.liveDocSave(doc).catch(() => {}); }, 400);
+}
+
+function detailOf(c) { return implOf(c) || c.body || ''; }
+// 这颗药丸指向哪个文件（悬停预览用）；找不到就返回空，不显示预览
+function bestPath(c, name, used) {
+  const ms = modsOf(c);
+  const exact = ms.find(m => m.name === name && m.path && !used.has(m.path));
+  if (exact) return exact.path;
+  const any = ms.find(m => m.path && !used.has(m.path));
+  if (any) return any.path;
+  const imp = implOf(c);
+  return imp && imp.charAt(0) === '/' && !used.has(imp) ? imp : '';
+}
+
 // 重画节点：layoutChain（主画布那份排版）会调这个
 function render() {
   if (!doc) return;
