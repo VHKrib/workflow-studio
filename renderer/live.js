@@ -253,56 +253,85 @@ async function stopFollow() {
   window.addEventListener('scroll', hide, true);
 })();
 
-// 双击卡片编辑：改标题/正文/内部实现，以及每个药丸的名字和文件；保存回同一份解析结果
-let editingId = '';
-function editorEls() {
-  return {
-    box: document.getElementById('ledit'),
-    name: document.getElementById('ledName'),
-    body: document.getElementById('ledBody'),
-    impl: document.getElementById('ledImpl'),
-    mods: document.getElementById('ledMods'),
-    title: document.getElementById('ledTitle'),
-  };
-}
+// 双击卡片：右边滑出和主画布一样的卡片信息（名字 / 类型 / 内容 / 模块 / 内部实现）。
+// 改一个字就更新这份解析结果（400ms 后写盘），不用按保存。
+const KIND_OPTS = [['in', '输入'], ['proc', '加工'], ['out', '输出']];
+const KIND_MOD_LAB = { in: '素材', proc: '工具', out: '成果' };
+let editingId = '', saveTimer = 0;
+const $id = x => document.getElementById(x);
+
 function openEditor(id) {
   const card = (doc && doc.cards || []).find(c => c.id === id);
-  const e = editorEls();
-  if (!card || !e.box) return;
+  if (!card || !$id('ledit')) return;
   editingId = id;
-  e.title.textContent = '编辑卡片 · ' + (KIND_LABEL[card.kind] || '加工');
-  e.name.value = card.title || '';
-  e.body.value = card.body || '';
-  e.impl.value = card.impl || '';
-  e.mods.innerHTML = (card.mods || []).map((m, i) =>
-    `<div class="lrow"><input data-mi="${i}" data-k="name" value="${esc(m.name || '')}" placeholder="名字">` +
-    `<input data-mi="${i}" data-k="path" value="${esc(m.path || '')}" placeholder="文件路径（可留空）"></div>`).join('')
+  $id('ledTitle').textContent = (KIND_LABEL[card.kind] || '加工') + '卡 · ' + card.title;
+  $id('ledName').value = card.title || '';
+  $id('ledKind').innerHTML = KIND_OPTS.map(([v, l]) => `<option value="${v}"${v === card.kind ? ' selected' : ''}>${l}</option>`).join('');
+  $id('ledGroup').className = 'pgroup ' + card.kind;
+  $id('ledLab').textContent = (KIND_LABEL[card.kind] || '加工') + '内容';
+  $id('ledBody').value = card.body || '';
+  $id('ledModLab').textContent = KIND_MOD_LAB[card.kind] || '模块';
+  $id('ledMods').innerHTML = (card.mods || []).map((m, i) =>
+    `<span class="mod t-${m.type} ed"><span class="mn" contenteditable="plaintext-only" spellcheck="false" data-i="${i}">${esc(m.name)}</span>` +
+    `<b class="mx" data-x="${i}" title="删掉这块">✕</b></span>`).join('') +
+    `<input id="ledModAdd" class="pm-add" placeholder="+ ${KIND_MOD_LAB[card.kind] || '模块'}（回车添加）">`;
+  $id('ledPaths').innerHTML = (card.mods || []).map((m, i) =>
+    `<div class="prow"><input class="pn" data-pi="${i}" data-k="name" value="${esc(m.name || '')}">` +
+    `<input class="pp" data-pi="${i}" data-k="path" value="${esc(m.path || '')}" placeholder="文件路径（可留空）"></div>`).join('')
     || '<div class="lmlab">这张卡没有模块</div>';
-  e.box.classList.add('on');
-  e.name.focus();
+  $id('ledImpl').value = card.impl || '';
+  $id('ledit').classList.add('on');
+  $id('ledName').focus();
+  wireEditor(card);
+}
+
+// 改完 400ms 落盘；画布跟着立刻变
+function touch(card, rerender) {
+  if (rerender) renderDoc(doc, { analyzed: true });
+  setStat(`已保存：${(doc.cards || []).length} 张卡（改过）`);
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => { window.tcflow.liveDocSave(doc).catch(() => {}); }, 400);
+}
+function wireEditor(card) {
+  $id('ledName').oninput = e => { card.title = e.target.value.slice(0, 24); touch(card, true); $id('ledTitle').textContent = (KIND_LABEL[card.kind] || '加工') + '卡 · ' + card.title; };
+  $id('ledKind').onchange = e => {
+    card.kind = e.target.value;
+    card.mods = (card.mods || []).map(m => ({ ...m, type: { in: 'mat', proc: 'tool', out: 'res' }[card.kind] }));
+    openEditor(card.id); touch(card, true);
+  };
+  $id('ledBody').oninput = e => { card.body = e.target.value.slice(0, 260); touch(card, false); };
+  $id('ledImpl').oninput = e => { card.impl = e.target.value.slice(0, 600); touch(card, false); };
+  $id('ledMods').querySelectorAll('.mn').forEach(sp => {
+    sp.oninput = () => { const m = card.mods[Number(sp.dataset.i)]; if (m) { m.name = sp.textContent.trim().slice(0, 16); touch(card, true); } };
+  });
+  $id('ledMods').querySelectorAll('.mx').forEach(x => x.onclick = () => {
+    card.mods.splice(Number(x.dataset.x), 1); openEditor(card.id); touch(card, true);
+  });
+  const add = $id('ledModAdd');
+  if (add) add.onkeydown = e => {
+    if (e.key !== 'Enter') return;
+    const name = add.value.trim().slice(0, 16);
+    if (!name) return;
+    card.mods = card.mods || [];
+    card.mods.push({ type: { in: 'mat', proc: 'tool', out: 'res' }[card.kind], name });
+    openEditor(card.id); touch(card, true);
+  };
+  $id('ledPaths').querySelectorAll('input').forEach(inp => {
+    inp.oninput = () => {
+      const m = card.mods[Number(inp.dataset.pi)];
+      if (!m) return;
+      if (inp.dataset.k === 'name') m.name = inp.value.slice(0, 16);
+      if (inp.dataset.k === 'path') m.path = inp.value.trim();
+      touch(card, true);
+    };
+  });
 }
 function closeEditor() {
-  const e = editorEls();
   editingId = '';
-  if (e.box) e.box.classList.remove('on');
-}
-async function saveEditor() {
-  const card = (doc && doc.cards || []).find(c => c.id === editingId);
-  const e = editorEls();
-  if (!card || !e.box) return;
-  card.title = String(e.name.value || '').trim().slice(0, 24) || card.title;
-  card.body = String(e.body.value || '').trim().slice(0, 260);
-  card.impl = String(e.impl.value || '').trim().slice(0, 600);
-  e.mods.querySelectorAll('input').forEach(inp => {
-    const m = (card.mods || [])[Number(inp.dataset.mi)];
-    if (!m) return;
-    if (inp.dataset.k === 'name') m.name = String(inp.value || '').trim().slice(0, 16);
-    if (inp.dataset.k === 'path') m.path = String(inp.value || '').trim();
-  });
-  closeEditor();
-  renderDoc(doc, { analyzed: true });
-  setStat(`已保存：${doc.cards.length} 张卡（改过）`);
-  try { await window.tcflow.liveDocSave(doc); } catch (err) { setStat('保存失败：' + (err && err.message || err)); }
+  clearTimeout(saveTimer);
+  window.tcflow.liveDocSave(doc).catch(() => {});
+  const box = $id('ledit');
+  if (box) box.classList.remove('on');
 }
 
 // ---------- 画布 ----------
@@ -644,14 +673,18 @@ function bindCanvas() {
     const p0 = pos.get(id);
     if (!p0) return;
     const wr = wrap.getBoundingClientRect();
-    drag = { el, id,
+    drag = { el, id, moved: false, sx: ev.clientX, sy: ev.clientY,
       dx: (ev.clientX - wr.left + wrap.scrollLeft) / zoom - p0.x,
       dy: (ev.clientY - wr.top + wrap.scrollTop) / zoom - p0.y };
-    el.classList.add('dragging');
-    ev.preventDefault();
+    // 不要在 pointerdown 上 preventDefault：那会把随后的 click/dblclick 一起吃掉（双击就打不开了）
   });
   canvas.addEventListener('pointermove', ev => {
     if (!drag) return;
+    if (!drag.moved) {                       // 动过 3px 才算拖，否则让双击照常发生
+      if (Math.abs(ev.clientX - drag.sx) < 3 && Math.abs(ev.clientY - drag.sy) < 3) return;
+      drag.moved = true;
+      drag.el.classList.add('dragging');
+    }
     const wr = wrap.getBoundingClientRect();
     const x = (ev.clientX - wr.left + wrap.scrollLeft) / zoom - drag.dx;
     const y = (ev.clientY - wr.top + wrap.scrollTop) / zoom - drag.dy;
@@ -663,8 +696,10 @@ function bindCanvas() {
   });
   const drop = async () => {
     if (!drag) return;
+    const wasMoved = drag.moved;
     const { el, id } = drag;
     el.classList.remove('dragging');
+    if (!wasMoved) { drag = null; return; }        // 只是点了一下：不存位置
     const p1 = pos.get(id);
     const card = (doc && doc.cards || []).find(c => c.id === id);
     if (card && p1) { card.x = Math.round(p1.x - OX); card.y = Math.round(p1.y - OY); }
@@ -674,12 +709,10 @@ function bindCanvas() {
   };
   canvas.addEventListener('pointerup', drop);
   canvas.addEventListener('pointercancel', drop);
-  const e = editorEls();
-  if (e.box) {
+  const box = document.getElementById('ledit');
+  if (box) {
     document.getElementById('ledClose').onclick = closeEditor;
-    document.getElementById('ledCancel').onclick = closeEditor;
-    document.getElementById('ledSave').onclick = saveEditor;
-    e.box.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeEditor(); });
+    box.addEventListener('keydown', ev => { if (ev.key === 'Escape') closeEditor(); });
     canvas.addEventListener('dblclick', ev => {
       const n = ev.target.closest && ev.target.closest('.node');
       if (n && n.dataset.id) { ev.preventDefault(); openEditor(n.dataset.id); }
