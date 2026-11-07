@@ -65,7 +65,12 @@ function paintEmpty() {
     : '选一条对话';
 }
 function paintStat() {
-  if (!doc || !doc.conv) { setStat(cur ? '等第一条消息…' : ''); return; }
+  if (!doc) { setStat(cur ? '等第一条消息…' : ''); return; }
+  if (!doc.conv) {                       // 老存档里没有 conv：照样按卡数报，别显示成「等第一条消息」
+    const n0 = (doc.cards || []).length;
+    setStat(n0 ? `已解析：${n0} 张卡${doc.name ? ' · ' + doc.name : ''}` : (cur ? '等第一条消息…' : ''));
+    return;
+  }
   const n = (doc.cards || []).length;
   if (!n) { setStat(following ? '跟随中 · 还没解析' : '已暂停 · 还没解析'); return; }
   setStat(`已解析：${n} 张卡${doc.name ? ' · ' + doc.name : ''}`);
@@ -427,7 +432,7 @@ const CANVAS = { w: 12000, h: 8000 };
 let selId = null;
 
 const find = id => ((doc && doc.cards) || []).find(c => c.id === id) || null;
-const flow = () => (doc ? { id: doc.conv.key, nodes: doc.cards, edges: (doc.edges || []).map(e => [e[0], e[1]]) } : null);
+const flow = () => (doc ? { id: (doc.conv && doc.conv.key) || doc.name || 'live', nodes: doc.cards, edges: (doc.edges || []).map(e => [e[0], e[1]]) } : null);
 const modsOf = n => (n && Array.isArray(n.mods) ? n.mods : []);
 const implOf = n => String((n && n.impl) || '').trim();
 const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y]);
@@ -515,7 +520,17 @@ function renderDoc(d, opts) {
   for (const c of manual) { const el = canvas.querySelector(`.node[data-id="${CSS.escape(c.id)}"]`); if (el) { el.style.left = (c.x + OX) + 'px'; el.style.top = (c.y + OY) + 'px'; } }
   drawEdges();
   annotateChips();
-  if (!fitted && doc.cards.length) { fit(); fitted = true; }
+  // 卡摆好之后一定要把视野对准它们：不然后打开的窗口停在空地上（卡在 ORIGIN 偏移那边，看起来就是空白）
+  if (doc.cards.length) {
+    const inside = (() => {
+      const r = canvas.querySelector('.node') && canvas.querySelector('.node').getBoundingClientRect();
+      return !!r && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
+    })();
+    if (!fitted || !inside) {
+      fitted = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => { try { fit(); } catch (e) {} }));
+    }
+  }
   paintStat(); paintEmpty();
 }
 
