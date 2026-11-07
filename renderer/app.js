@@ -114,6 +114,8 @@ function bindUI() {
   $('#btnSave').onclick = exportFlow;
   $('#btnOpen').onclick = importFlow;
   $('#btnLive').onclick = () => { window.tcflow.openLive(); };
+  const lc = $('#liveCard');
+  if (lc) lc.onclick = () => { window.tcflow.openLive(); };
   $('#btnValidate').onclick = () => validateAll();
   $('#btnRun').onclick = openRunModal;
   $('#btnRead').onclick = openRead;
