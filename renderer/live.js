@@ -515,6 +515,14 @@ function layout() {
       if (!el) continue;
       const d = depth.get(id) || 0;
       const h = el.offsetHeight || 150;
+      // 人拖过就按人摆的位置，不再参与自动成列
+      const card = byId.get(id);
+      if (card && Number.isFinite(card.x) && Number.isFinite(card.y)) {
+        el.style.left = (card.x + OX) + 'px';
+        el.style.top = (card.y + OY) + 'px';
+        pos.set(id, { x: card.x + OX, y: card.y + OY, w: el.offsetWidth || 244, h });
+        continue;
+      }
       let key = band + ':' + d;
       let y = colY.get(key) || 0;
       if (y + h > MAXBAND) { band++; key = band + ':' + d; y = 0; }   // 一列太高：本段里另起一条带
@@ -625,6 +633,47 @@ function bindCanvas() {
   }, { passive: false });
   $('#zoomIn').onclick = () => { zoom = Math.min(1.8, zoom + 0.1); applyZoom(); drawEdges(); };
   $('#lana').onclick = () => analyzeNow(true);
+  // 按住卡片拖动：位置写进这份解析结果；空白处拖动仍然是平移画板
+  let drag = null;
+  canvas.addEventListener('pointerdown', ev => {
+    if (ev.button !== 0) return;
+    if (ev.target.closest('details') || ev.target.closest('.mod')) return;
+    const el = ev.target.closest('.node');
+    if (!el) return;
+    const id = el.dataset.id;
+    const p0 = pos.get(id);
+    if (!p0) return;
+    const wr = wrap.getBoundingClientRect();
+    drag = { el, id,
+      dx: (ev.clientX - wr.left + wrap.scrollLeft) / zoom - p0.x,
+      dy: (ev.clientY - wr.top + wrap.scrollTop) / zoom - p0.y };
+    el.classList.add('dragging');
+    ev.preventDefault();
+  });
+  canvas.addEventListener('pointermove', ev => {
+    if (!drag) return;
+    const wr = wrap.getBoundingClientRect();
+    const x = (ev.clientX - wr.left + wrap.scrollLeft) / zoom - drag.dx;
+    const y = (ev.clientY - wr.top + wrap.scrollTop) / zoom - drag.dy;
+    drag.el.style.left = (x + OX) + 'px';
+    drag.el.style.top = (y + OY) + 'px';
+    const p1 = pos.get(drag.id);
+    if (p1) { p1.x = x + OX; p1.y = y + OY; }
+    drawEdges();
+  });
+  const drop = async () => {
+    if (!drag) return;
+    const { el, id } = drag;
+    el.classList.remove('dragging');
+    const p1 = pos.get(id);
+    const card = (doc && doc.cards || []).find(c => c.id === id);
+    if (card && p1) { card.x = Math.round(p1.x - OX); card.y = Math.round(p1.y - OY); }
+    drag = null;
+    layout(); drawEdges();
+    if (card) { try { await window.tcflow.liveDocSave(doc); } catch (e) { } }
+  };
+  canvas.addEventListener('pointerup', drop);
+  canvas.addEventListener('pointercancel', drop);
   const e = editorEls();
   if (e.box) {
     document.getElementById('ledClose').onclick = closeEditor;

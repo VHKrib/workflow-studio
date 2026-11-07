@@ -130,3 +130,7 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
 .ledit .lft button{font:inherit;font-size:12.5px;padding:5px 12px;border-radius:8px;border:1px solid var(--line-strong);background:var(--card);cursor:pointer}
 .ledit .lft button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
 .node.editable{cursor:pointer}
+
+/* 卡片可以拖：按住就抓手，拖起来抬一点、影子重一点 */
+body.live .node{cursor:grab}
+body.live .node.dragging{cursor:grabbing;z-index:20;box-shadow:0 10px 26px rgba(17,17,17,.18)}
