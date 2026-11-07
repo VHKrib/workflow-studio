@@ -456,65 +456,18 @@ function applyZoom() {
   const z = $('#zoom'); if (z) z.textContent = Math.round(zoom * 100) + '%';
 }
 
-// 排版：从入口走几步分列；人拖过的卡按它自己的坐标，不参与自动成列
-function layout() {
-  const COLW = 340, ROWGAP = 26, MAXBAND = 1500, GAPY = 160;
-  const cards = (doc && doc.cards) || [];
-  if (!cards.length) return;
-  const ids = cards.map(c => c.id);
-  const out = new Map(ids.map(i => [i, []]));
-  const indeg = new Map(ids.map(i => [i, 0]));
-  for (const e of (doc.edges || [])) {
-    const [x, y] = e;
-    if (!out.has(x) || !out.has(y) || x === y) continue;
-    out.get(x).push(y); indeg.set(y, (indeg.get(y) || 0) + 1);
-  }
-  const depth = new Map();
-  const queue = ids.filter(i => (indeg.get(i) || 0) === 0);
-  if (!queue.length) queue.push(ids[0]);
-  for (const i of queue) depth.set(i, 0);
-  let guard = 0;
-  while (queue.length && guard++ < ids.length * 8 + 2000) {
-    const i = queue.shift();
-    for (const j of out.get(i) || []) if (!depth.has(j)) { depth.set(j, (depth.get(i) || 0) + 1); queue.push(j); }
-  }
-  for (const i of ids) if (!depth.has(i)) depth.set(i, 0);
-  const byDepth = new Map();
-  for (const c of cards) {
-    const d = depth.get(c.id) || 0;
-    if (!byDepth.has(d)) byDepth.set(d, []);
-    byDepth.get(d).push(c);
-  }
-  for (const [d, list] of [...byDepth.entries()].sort((x, y) => x[0] - y[0])) {
-    let y = 0;
-    for (const c of list) {
-      if (c.manual && Number.isFinite(c.x) && Number.isFinite(c.y)) continue;   // 人拖过：保持原位
-      c.x = d * COLW; c.y = y;
-      y += (c.h || 150) + ROWGAP;
-    }
-  }
-}
-
-// 存盘（拖动、改内容都走这里）
-function persist() {
+// 重画节点：layoutChain（主画布那份排版）会调这个
+function render() {
   if (!doc) return;
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => { window.tcflow.liveDocSave(doc).catch(() => {}); }, 400);
-}
-
-function detailOf(c) {
-  const imp = implOf(c);
-  return imp || c.body || '';
-}
-// 这颗药丸指向的文件：模块上带 path 就用它；没有就从标题/名字里找（找不到返回 '' 就不显示预览）
-function bestPath(c, name, used) {
-  const ms = modsOf(c);
-  const hit = ms.find(m => m.name === name && m.path && !used.has(m.path));
-  if (hit) return hit.path;
-  const any = ms.find(m => m.path && !used.has(m.path));
-  if (any) return any.path;
-  const imp = implOf(c);
-  return imp && /^\//.test(imp) && !used.has(imp) ? imp : '';
+  const keep = new Set();
+  for (const c of doc.cards) {
+    keep.add(c.id);
+    const old = canvas.querySelector(`.node[data-id="${CSS.escape(c.id)}"]`);
+    if (!old) { canvas.appendChild(nodeEl(c)); continue; }
+    if (old.dataset.sig !== nodeSig(c)) old.replaceWith(nodeEl(c));
+    else { old.style.left = (c.x + OX) + 'px'; old.style.top = (c.y + OY) + 'px'; }
+  }
+  for (const el of [...canvas.querySelectorAll('.node')]) if (!keep.has(el.dataset.id)) el.remove();
 }
 
 // 卡片上每个药丸对应哪份文件（悬停预览要用）
@@ -551,18 +504,15 @@ function renderDoc(d, opts) {
   if (!d || !Array.isArray(d.cards)) return;
   const switched = doc && doc.conv && d.conv && doc.conv.key !== d.conv.key;
   doc = d;
-  for (const c of doc.cards) { if (!Number.isFinite(c.x)) c.x = 0; if (!Number.isFinite(c.y)) c.y = 0; c.checks = c.checks || []; }
+  for (const c of doc.cards) { if (!Number.isFinite(c.x)) c.x = 0; if (!Number.isFinite(c.y)) c.y = 0; c.checks = c.checks || []; if (!c.status) c.status = 'idle'; }
   if (switched) { fitted = false; canvas.querySelectorAll('.node').forEach(el => el.remove()); edgesSvg.innerHTML = ''; }
-  layout();
-  const keep = new Set();
-  for (const c of doc.cards) {
-    keep.add(c.id);
-    const old = canvas.querySelector(`.node[data-id="${CSS.escape(c.id)}"]`);
-    if (!old) { canvas.appendChild(nodeEl(c)); continue; }
-    if (old.dataset.sig !== nodeSig(c)) { const el = nodeEl(c); old.replaceWith(el); }
-    else { old.style.left = (c.x + OX) + 'px'; old.style.top = (c.y + OY) + 'px'; }
-  }
-  for (const el of [...canvas.querySelectorAll('.node')]) if (!keep.has(el.dataset.id)) el.remove();
+  // 人拖过的卡保持原位；其余的照主画布那样自动成列
+  const manual = doc.cards.filter(c => c.manual);
+  for (const c of manual) { c._mx = c.x; c._my = c.y; }   // 先记下人手摆的位置，排完再放回去
+  layoutChain(flow());
+  for (const c of manual) { c.x = c._mx; c.y = c._my; delete c._mx; delete c._my; }
+  render();
+  for (const c of manual) { const el = canvas.querySelector(`.node[data-id="${CSS.escape(c.id)}"]`); if (el) { el.style.left = (c.x + OX) + 'px'; el.style.top = (c.y + OY) + 'px'; } }
   drawEdges();
   annotateChips();
   if (!fitted && doc.cards.length) { fit(); fitted = true; }
@@ -610,7 +560,7 @@ function bindCanvas() {
   }, { passive: false });
   $('#zoomIn').onclick = () => { zoom = Math.min(1.8, zoom + 0.1); applyZoom(); drawEdges(); };
   $('#zoomOut').onclick = () => { zoom = Math.max(0.3, zoom - 0.1); applyZoom(); drawEdges(); };
-  $('#zoomReset').onclick = () => { zoom = 1; applyZoom(); layout(); fit(); drawEdges(); };
+  $('#zoomReset').onclick = () => { zoom = 1; applyZoom(); if (doc) layoutChain(flow()); fit(); drawEdges(); };
   const lana = $('#lana'); lana.onclick = () => analyzeNow(true);
   const closeBtn = document.getElementById('ledClose');
   if (closeBtn) closeBtn.onclick = closeEditor;
