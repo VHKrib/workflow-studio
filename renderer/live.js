@@ -49,6 +49,11 @@ function setStat(text) { $('#lstat').textContent = text; }
 const statusWord = s => ({
   done: '', failed: '失败', doing: '正在做', unfinished: '没找到产出', proposed: '未执行', pending: '待确认',
 }[s] || '');
+// 原因标签上不露证据号（「你说 7425「…」」→「你说「…」」），证据本来就在内部实现里
+const humanNote = s => String(s || '')
+  .replace(/(你说|人说|消息|人在)\s*\d{3,}\s*[「:：，,]?\s*/g, '$1')
+  .replace(/^[，,：:\s]+|[，,：:\s]+$/g, '')
+  .trim();
 function paintEmpty() {
   const empty = !doc || !doc.cards || !doc.cards.length;
   $('#lempty').classList.toggle('off', !empty);
@@ -184,23 +189,17 @@ function cardEl(c) {
     + (c.status ? ' st-' + c.status : '');
   el.dataset.id = c.id;
   const type = MOD_TYPE[c.kind] || 'tool';
-  const mods = (c.mods && c.mods.length)
-    ? c.mods
-    : String(c.body || '').split('·').map(x => x.trim()).filter(Boolean).slice(0, 4).map(name => ({ type, name }));
-  const modsHTML = mods.length
-    ? `<div class="mods"><div class="mline"><span class="mlab">${MOD_LAB[c.kind] || '模块'}</span>` +
-      `<span class="mchips">${mods.map(m => `<span class="mod t-${m.type || type}">${esc(m.name)}</span>`).join('')}</span></div></div>`
-    : '';
+  // 正面不放工具名/模块名（那是内部实现，也和正文重复）；体量靠正文 + 标签说清
   const st = c.status ? statusWord(c.status) : '';
+  const note = humanNote(c.note);
   const chips = (st ? `<span class="chip st-${esc(c.status)}">${esc(st)}</span>` : '') +
     (c.versions > 1 ? `<span class="chip ver" title="同一个文件的第几版">v${c.ver}</span>` : '') +
     (c.uses > 1 ? `<span class="chip use" title="被几次加工用到（只算真实调用）">被用 ${c.uses} 次</span>` : '') +
-    (c.note ? `<span class="chip note" title="为什么做 / 为什么改">改 · ${esc(c.note)}</span>` : '') +
+    (note ? `<span class="chip note" title="为什么做 / 为什么改">改 · ${esc(note)}</span>` : '') +
     (c.branch && c.branch !== 'main' ? `<span class="chip br">${esc(c.branch)}</span>` : '');
   el.innerHTML = `
     <div class="hd"><span class="kind">${KIND_LABEL[c.kind] || '加工'}</span><div class="t">${esc(c.title)}</div><div class="st"></div></div>
     <div class="body" data-ph="${KIND_PH[c.kind] || ''}">${esc(c.body)}</div>
-    ${modsHTML}
     <div class="ft"><div class="checks">${chips}</div>${c.impl ? '<span class="gar" title="内部实现与证据：卡片上不显示，点开看">⚙</span>' : ''}</div>
     ${c.impl ? `<details class="limpl"><summary>⚙ 内部实现 / 证据</summary><pre>${esc(c.impl)}</pre></details>` : ''}`;
   const d = el.querySelector('details.limpl');
@@ -345,7 +344,7 @@ function fit() {
   const b = bbox(); if (!b) return;
   const pad = 60, W = wrap.clientWidth, H = wrap.clientHeight;
   const need = Math.min(W / (b.x1 - b.x0 + 2 * pad), H / (b.y1 - b.y0 + 2 * pad));
-  zoom = Math.max(0.3, Math.min(1, Math.floor(need * 20) / 20));
+  zoom = Math.max(0.42, Math.min(1, Math.floor(need * 20) / 20));    // 太小的缩放字看不清：宁可超出视口让人平移
   applyZoom();
   const wide = (b.x1 - b.x0 + 2 * pad) * zoom > W, tall = (b.y1 - b.y0 + 2 * pad) * zoom > H;
   // pos 里的坐标已经含 ORIGIN 了，这里不要再加一次（加了会整体滚出 6000*zoom，画面一片空）

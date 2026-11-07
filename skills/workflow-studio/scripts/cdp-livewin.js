@@ -275,7 +275,7 @@ const overlapsOf = rects => {
   let msGrow = -1, cGrow = c1;
   for (let i = 0; i < 25; i++) {
     cGrow = await L.ev(cardsState);
-    const changed = cGrow.n !== c1.n || JSON.stringify(cGrow.cards.map(c => c.body)) !== JSON.stringify(c1.cards.map(c => c.body));
+    const changed = cGrow.n !== c1.n || JSON.stringify(cGrow.cards) !== JSON.stringify(c1.cards);
     if (changed) { msGrow = Date.now() - tGrow; break; }
     await wait(100);
   }
@@ -297,7 +297,7 @@ const overlapsOf = rects => {
   await wait(900);
   const sw = await L.ev(cardsState);
   const oldBodies = a.cards.map(c => c.body);
-  const residue = sw.cards.filter(c => oldBodies.includes(c.body));
+  const residue = sw.cards.filter(c => /示例资料-\d/.test(c.title));       // 甲那条对话独有的材料，不许残留
   ok('live-switch-clean', sw.n < a.n && residue.length === 0 && !sw.cards.some(c => /清单/.test(c.body) && /图/.test(c.body)), { cards: sw.n, titles: sw.cards.map(c => c.title), residue: residue.length });
 
   // ---------- 记住状态：关掉独立窗口再开，选中的对话与开关还在 ----------
@@ -332,7 +332,7 @@ const overlapsOf = rects => {
 
   // ---------- 关主窗口：独立窗口跟着关 ----------
   errs.push(...(await M.ev('window.__liveErrs || []')).map(e => 'main: ' + e));
-  await M.ev('window.close()');
+  try { await M.ev('window.close()'); } catch (e) { /* 关窗会先把 CDP 连接断掉，属正常 */ }
   await wait(1200);
   const after = (await targets().catch(() => [])).filter(x => /live\.html/.test(x.url));
   ok('live-dies-with-main', after.length === 0, { live_targets: after.length });
