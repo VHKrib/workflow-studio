@@ -340,7 +340,8 @@ const livePrompt = ({ who, topic, ask, steps, reads, writes, said }) => [
   '',
   '请这样画（和「读取 agent 链路」同一套规矩）：',
   '1. 只画这条对话里反复在做的主线，4–9 张卡；寒暄、测试、系统通知不画。',
-  '2. 输入卡：它真正调用的文件/素材；加工卡：它具体怎么干；输出卡：它交出了什么。',
+  '2. 输入卡写清它真正调用的文件/素材；**加工卡正文必须写清「用哪份素材 → 怎么做 → 交出什么」**（三样都要有，别只写做了什么）；输出卡写清交出的文件。',
+  '   mods 也照着分：加工卡的 mods 只写「怎么做」的工具（技能名/画法/脚本），素材和成果不要重复塞进 mods——它们由连线带上来。',
   '3. 连线只按这条路走：输入 → 加工 → 输出（输出也可以再喂给下一张加工）。输入卡只往外连，什么都不连进输入卡；',
   '   每张加工卡至少有一个来源（输入卡或上一张加工/输出），至少交出一张输出卡；整条连成一片，不能断成几截。',
   LIVE_PLAIN,
@@ -349,6 +350,27 @@ const livePrompt = ({ who, topic, ask, steps, reads, writes, said }) => [
   '5. 只输出一个 JSON 对象，不要解释，不要代码块标记。格式：',
   '{"name":"工作流名（12 字内）","summary":"一句话说清这条链路","cards":[{"key":"c1","kind":"in","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"技能/目录/工具/字段","mods":["模块短词"]}],"edges":[["c1","c2"]]}',
 ].join('\n');
+
+// 正文里夹着的路径 / 文件名 / 命令句搬进内部实现（和主画布的 splitTech 同一口径：句级、保守，
+// 拆不干净就原样留着，绝不硬改写中文）
+const TECH_IN_BODY = /[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+|\/[A-Za-z0-9_.-]{2,}|`[^`]*`|(?:^|\s)--[a-z][\w-]*|\b[\w-]+\.(png|jpe?g|json|jsonl|js|mjs|py|sh|md|csv|ya?ml|webp|gif|mp4|mov)\b/;
+// 截断也要截在句号上：卡片正文被硬切一半（「…原样保留在」）比短一点更难看
+function clipSentence(text, max) {
+  const t = String(text || '').trim();
+  if (t.length <= max) return t;
+  const head = t.slice(0, max);
+  const i = Math.max(head.lastIndexOf('。'), head.lastIndexOf('；'), head.lastIndexOf('！'), head.lastIndexOf('？'), head.lastIndexOf('，'));
+  return (i >= max * 0.6 ? head.slice(0, i + 1) : head.slice(0, max - 1) + '…');
+}
+function splitTechBody(body, impl) {
+  const raw = String(body || '');
+  const parts = raw.split(/(?<=[。；;！!？?])/).map(x => x.trim()).filter(Boolean);
+  const human = [], tech = [];
+  for (const p of parts) (TECH_IN_BODY.test(p) ? tech : human).push(p);
+  const kept = human.join('');
+  if (kept.length >= 12) return { body: clipSentence(kept, 220), impl: [String(impl || '').trim(), tech.join('')].filter(Boolean).join('\n').slice(0, 400) };
+  return { body: clipSentence(raw, 220), impl: String(impl || '').slice(0, 400) };
+}
 
 // 解析：只认「cards 是非空数组」的那个候选（提示词里的示例也长得合法，取最后一个真答案）
 function extractCards(text) {
@@ -375,7 +397,8 @@ function extractCards(text) {
       .map(x => x.replace(/\s+/g, ' ').trim()).filter(x => x && !/^(模块短词|短词)$/.test(x))
       .slice(0, 6).map(name => ({ type: KIND_MOD[kind], name: name.slice(0, 16) }));
     const key = String(c.key || 'c' + (i + 1));
-    cards.push({ id: key, kind, title, body, impl: String(c.impl || '').slice(0, 400), mods });
+    const clean = splitTechBody(body, c.impl);
+    cards.push({ id: key, kind, title, body: clean.body, impl: clean.impl, mods });
   });
   if (!cards.length) return null;
   const byKey = new Map(cards.map(c => [c.id, c]));
