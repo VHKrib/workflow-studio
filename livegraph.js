@@ -178,6 +178,7 @@ function filesInCommand(cmd) {
   for (const m of s.matchAll(/(?:^|[\s"'=(])(\/[^\s"'()<>;,|]+)/g)) {
     const p = normPath(m[1]);
     if (!p) continue;
+    if (/[*?]/.test(p)) continue;                                        // 通配符不是文件身份（线渲染-*.png 这类）
     if (!/\.[A-Za-z0-9]{1,6}$/.test(p)) continue;                        // 目录不算材料
     if (isCodeFile(p)) continue;                                          // 脚本 / 代码是「怎么做的」
     const before = s.slice(Math.max(0, m.index - 40), m.index);
@@ -187,6 +188,61 @@ function filesInCommand(cmd) {
   // ffmpeg 的最后一个路径参数是输出，不算素材
   if (isFfmpeg && found.length > 1) found.pop();
   return [...new Set(found)];
+}
+
+// 工具结果里能证明「真产出」的行：路径 + 字节数 + 短 hash（脚本跑完会打印 "-> /path 2423715 15a17c8b"）。
+// 只认带字节数和 hash 的行——ls 那种纯文件名列表不算（否则列出目录就会被当成产出）。
+function outputsInResult(text) {
+  const t = String(text || '');
+  if (!t) return [];
+  let cwd = '';
+  const m = t.match(/"cwd"\s*:\s*"([^"]+)"/);
+  if (m) cwd = m[1];
+  const out = [];
+  const re = /([^\s"'<>]+?\.(?:png|jpe?g|webp|gif|bmp|tiff?|svg|mp4|mov|avi|mkv|webm|json|md|csv|xlsx?|ya?ml|zip|pdf|txt|psd|blend))\s+(\d{2,})\s+([0-9a-f]{8,})/gi;
+  for (const x of t.matchAll(re)) {
+    let p = x[1];
+    if (!/^(\/|[A-Za-z]:[\\/])/.test(p)) {
+      if (!cwd) continue;                       // 相对名字没有可靠身份，除非这条结果自带 cwd
+      p = String(cwd).replace(/\/+$/, '') + '/' + p;
+    }
+    p = normPath(p);
+    if (!p || /[*?]/.test(p) || isCodeFile(p)) continue;
+    out.push({ path: p, size: Number(x[2]) || null, sha: x[3] });
+  }
+  const seen = new Map();
+  for (const o of out) seen.set(pathKey(o.path), o);   // 同一条结果里同路径只留最后一次
+  return [...seen.values()];
+}
+
+// 一段脚本 / 命令里点名了哪些**已知实体**（按文件名，唯一才算）：旧结果被再加工的直接证据。
+// 同名不同来源（同名多份）认不出是谁，不猜。
+function knownMentions(ev, text, selfPath) {
+  const t = String(text || '');
+  if (!t) return [];
+  const idx = new Map();
+  const add = e => {
+    const b = baseName(e.path).toLowerCase();
+    if (!b) return;
+    if (!idx.has(b)) idx.set(b, []);
+    idx.get(b).push({ key: e.key, path: e.path });
+  };
+  for (const a of ev.arts.values()) add(a);
+  for (const m of ev.mats.values()) add(m);
+  const self = selfPath ? pathKey(selfPath) : '';
+  const hits = [];
+  for (const list of idx.values()) {
+    if (list.length !== 1) continue;
+    const hit = list[0];
+    if (self && pathKey(hit.path) === self) continue;
+    const b = baseName(hit.path);
+    if (!t.includes(b)) continue;
+    const line = t.split('\n').find(l => l.includes(b)) || '';
+    // 只认「读它」的写法：打开 / 复制 / 当参考 / 变量指向它；只是被列出（ls）不算
+    if (!/(open\(|read|copy2?\(|join\(|load\(|reference|ref-|STYLE|INPUT|SRC|读|参考)/i.test(line)) continue;
+    hits.push(hit);
+  }
+  return hits;
 }
 
 // 回答里显式交付的文件：MEDIA:/path（Hermes 的交付写法）
@@ -223,8 +279,9 @@ function createEvidence(conv) {
     ask: [],                // 人的要求 / 反馈（同一个数组，按时间）
     units: [],              // 加工单元（一次要求下，做到产出为一段）
     byCall: new Map(),      // callId → {unit, ok}
+    callUnit: new Map(),    // callId → 加工单元（工具结果回来时归到发起调用那一步）
     truncated: false,
-    stats: { messages: 0, tools: 0, chatter: 0, skipped: 0, failed: 0, media: 0 },
+    stats: { messages: 0, tools: 0, chatter: 0, skipped: 0, failed: 0, media: 0, cut: 0, broken: 0 },
     lastId: 0,
   };
 }
@@ -248,16 +305,18 @@ function ensureArt(ev, path, at, msgId, how) {
   }
   return a;
 }
-function artVersion(ev, path, { at, msg, how, ok = true, unit = null } = {}) {
+function artVersion(ev, path, { at, msg, how, ok = true, unit = null, size = null, sha = '' } = {}) {
   const a = ensureArt(ev, path, at, msg, how);
   const last = a.versions[a.versions.length - 1];
   // 同一次加工里同一个文件被写了两次（脚本 + 补丁）算同一版；不同加工才算新版本
   if (last && unit && last.unit === unit.id) {
     if (!ok) last.ok = false;
     if (!last.evidence.includes(msg)) last.evidence.push(msg);
+    if (size) last.size = size;
+    if (sha) last.sha = sha;
     return { art: a, ver: last };
   }
-  const v = { v: (last ? last.v : 0) + 1, at, msg, how, ok, unit: unit ? unit.id : '', evidence: [msg] };
+  const v = { v: (last ? last.v : 0) + 1, at, msg, how, ok, unit: unit ? unit.id : '', evidence: [msg], size: size || null, sha: sha || '' };
   a.versions.push(v);
   return { art: a, ver: v };
 }
@@ -335,13 +394,18 @@ function applyCall(ev, unit, call, msg) {
     const w = cmdWord(a.command);
     if (w && !unit.methods.some(m => m.w === w)) unit.methods.push({ w });
     for (const p of filesInCommand(a.command)) use(p);
-    // 命令里显式写出的文件（ffmpeg -y out.png / > out.json）也算产出线索，但只在没写文件工具时用
+    // 内联脚本里点名了已有素材（旧结果被再加工）：同名唯一才算，认不出就不猜
+    for (const hit of knownMentions(ev, a.command, '')) use(hit.path);
   }
   if (/^(write_file|patch|edit_file|apply_patch)$/.test(name)) {
     const p = normPath(a.path || a.file_path);
     if (p) {
       if (isCodeFile(p)) {
         if (!unit.methods.some(m => m.w === '改代码')) unit.methods.push({ w: '改代码' });
+        // 写的脚本里点名了已有素材（比如「画风照这张素描」）：这是真实复用，算一次使用
+        if (typeof a.content === 'string' && a.content) {
+          for (const hit of knownMentions(ev, a.content, p)) use(hit.path);
+        }
       } else {
         unit.writeTries++;
         // 这个文件以前是「读进来的参考」→ 材料改写：涨材料版本，不另造产物
@@ -405,6 +469,8 @@ function buildEvidence(msgs, conv) {
     if (mid0 && seen.has(mid0)) continue;            // 同一批消息重复喂（轮询 / 重解析）：不重复计数
     if (mid0) seen.add(mid0);
     ev.stats.messages++;
+    if (m.cut) ev.stats.cut++;
+    if (m.broken) ev.stats.broken++;
     if (mid0 > ev.lastId) ev.lastId = mid0;
     if (m.role === 'user') {
       const c = cleanAsk(m.text);
@@ -448,6 +514,7 @@ function buildEvidence(msgs, conv) {
             applyCall(ev, unit, { name: x.name, args: x.args, ok }, m);
             if (unit) { unit.at = m.at || unit.at; }
             if (cid) ev.byCall.set(String(cid), { unit: unit ? unit.id : '', ok });
+            if (cid && unit) ev.callUnit.set(String(cid), unit);
           }
         }
         continue;
@@ -459,7 +526,23 @@ function buildEvidence(msgs, conv) {
       if (!unit.outs.length && /(建议|可以改用|可以考虑|改用|换成|换用|不妨)/.test(String(m.text || ''))) unit.proposed = true;
       continue;
     }
-    // tool 结果行：ok 已经收进 okOf，这里不建任何东西
+    // tool 结果行：ok 已经收进 okOf；结果里的「路径 + 字节数 + hash」能证明真产出（脚本跑完打的就是这行）。
+    // 归到**发起这次调用**的那一步，不按当前时间归（后台进程可能晚一轮才回结果）。
+    if (m.role === 'tool') {
+      const cid = m.toolCallId ? String(m.toolCallId) : '';
+      const u = cid ? ev.callUnit.get(cid) : null;
+      if (u && m.ok !== false && m.result) {
+        for (const o of outputsInResult(m.result)) {
+          if (ev.mats.has(pathKey(o.path)) && !ev.arts.has(pathKey(o.path))) {
+            const { mat, ver } = bumpMatVersion(ev, o.path, { at: m.at, msg: mid0, how: '脚本产出', unit: u.id });
+            if (!u.outs.some(x => x.path === mat.path && x.v === ver.v)) u.outs.push({ kind: 'mat', key: mat.key, v: ver.v, path: mat.path, name: mat.name, ok: true });
+          } else {
+            const { art, ver } = artVersion(ev, o.path, { at: m.at, msg: mid0, how: '脚本产出', ok: true, unit: u, size: o.size, sha: o.sha });
+            if (!u.outs.some(x => x.path === art.path && x.v === ver.v)) u.outs.push({ kind: 'art', key: art.key, v: ver.v, path: art.path, name: art.name, ok: true });
+          }
+        }
+      }
+    }
   }
   // 收尾：状态
   const lastMsg = sorted[sorted.length - 1];
@@ -507,6 +590,8 @@ function procCard(u, extra) {
 }
 function stepTitle(u) {
   if (u.status === 'proposed') return '提议的做法';
+  // 没有模型分段时也别用「跑命令 + 跑脚本」这种工具日志当标题：用人当时说的那句要求
+  if (u.ask) { const b = splitAsk(u.ask).body; if (b && b.length >= 4) return clip(b, 16); }
   const w = (u.methods || []).map(m => m.w).filter(Boolean);
   if (u.outs.length) return clip(w.length ? '做：' + w.slice(0, 2).join(' + ') : '做了一批', 16);
   if (u.status === 'failed') return '试过但没成';
@@ -515,11 +600,13 @@ function stepTitle(u) {
 }
 function stepBody(u) {
   if (u.status === 'proposed') return clip('只提了做法，还没动手：' + polish(u.answer || u.ask || ''), BODY_CHARS);
+  const uniq = arr => [...new Set(arr.filter(Boolean))];
   const bits = [];
-  if (u.matUses.length) bits.push(`用了 ${u.matUses.length} 份参考`);
-  if (u.artUses.length) bits.push(`接着改 ${u.artUses.length} 版产物`);
-  if (u.methods.length) bits.push(`做法：${u.methods.slice(0, 3).map(m => m.w).join('、')}`);
-  if (u.outs.length) bits.push(`交出 ${u.outs.length} 个产物`);
+  // 说清「用了哪几份、交回哪几个」——写名字，不写成「3 份 / 4 个」的计数
+  const matNames = uniq(u.matUses.map(x => x.name).concat(u.artUses.map(x => x.name)));
+  if (matNames.length) bits.push(`用 ${matNames.slice(0, 3).join('、')}${matNames.length > 3 ? ' 等' : ''}`);
+  const outNames = uniq(u.outs.map(o => o.name));
+  if (outNames.length) bits.push(`交出 ${outNames.slice(0, 3).join('、')}${outNames.length > 3 ? ' 等' : ''}`);
   if (u.status === 'failed') bits.push('这次没成');
   if (u.status === 'doing') bits.push('还在做');
   if (!bits.length) bits.push(clip(polish(u.answer || ''), 60) || '查了一下');
@@ -773,6 +860,30 @@ function buildGraph(ev, plan) {
       return Object.assign({}, c, { uses: n, body });
     });
   }
+  // 卡面三块（和主画布同一套含义）：输入卡=素材、加工卡=来源素材 + 自己的工具 + 下游成果、输出卡=成果。
+  // 都由**真实边**反推，不另存一份（两份数据迟早对不上）。
+  {
+    const byId = new Map(list.map(c => [c.id, c]));
+    const short = id => { const c = byId.get(id); return c ? clip(String(c.title).split(' · ')[0], 10) : ''; };
+    const ups = new Map(), downs = new Map();
+    for (const [a, b, k] of cleanEdges) {
+      if (k === 'use') { if (!ups.has(b)) ups.set(b, []); ups.get(b).push(a); }
+      else if (k === 'make') { if (!downs.has(a)) downs.set(a, []); downs.get(a).push(b); }
+    }
+    const unitOf = new Map(ev.units.map(u => [u.id, u]));
+    list = list.map(c => {
+      if (c.kind === 'in') return Object.assign({}, c, { mods: [{ type: 'mat', name: clip(String(c.title).split(' · ')[0], 10) }] });
+      if (c.kind === 'out') return Object.assign({}, c, { mods: [{ type: 'res', name: clip(String(c.title).split(' · ')[0], 10) }] });
+      if (c.kind !== 'proc') return c;
+      const u = unitOf.get(c.unit);
+      const mods = [], seen = new Set();
+      const add = (type, name) => { const k = type + ':' + name; if (!name || seen.has(k)) return; seen.add(k); mods.push({ type, name: clip(name, 10) }); };
+      for (const id of (ups.get(c.id) || []).slice(0, 3)) add('mat', short(id));       // 来源素材（真被这次加工用到）
+      for (const m of (u ? u.methods : []).slice(0, 3)) add('tool', m.w);              // 这套做法自己用的工具
+      for (const id of (downs.get(c.id) || []).slice(0, 3)) add('res', short(id));      // 这次交出的成果
+      return Object.assign({}, c, { mods });
+    });
+  }
   // 9) 实体统计（只按真实调用；文字提及不算）
   const entities = {
     materials: [...ev.mats.values()].filter(m => m.uses.length).sort((a, b) => b.uses.length - a.uses.length).slice(0, 8)
@@ -783,6 +894,10 @@ function buildGraph(ev, plan) {
   };
   const byKind = { in: 0, proc: 0, out: 0 };
   for (const c of list) byKind[c.kind] = (byKind[c.kind] || 0) + 1;
+  // 证据不足要说出来（不能当「没有产出」）：超上限 / 读不出来的记录单独提示
+  if ((ev.stats.cut || 0) + (ev.stats.broken || 0) > 0) {
+    problems.push(`有 ${(ev.stats.cut || 0) + (ev.stats.broken || 0)} 条记录超出读取上限或读不出来，这部分产出可能没算到`);
+  }
   return {
     schema: 'workflow-studio/live@2',
     conv: ev.conv,
@@ -794,6 +909,7 @@ function buildGraph(ev, plan) {
       failed: ev.stats.failed, media: ev.stats.media,
       materials: ev.mats.size, artifacts: ev.arts.size, cards: list.length,
       segments: segments.length, truncated: ev.truncated,
+      cut: ev.stats.cut || 0, broken: ev.stats.broken || 0,
     },
     entities,
     cards: list.map(c => ({
@@ -822,11 +938,15 @@ function versionBodyArt(a, v) {
   if (v.ok === false) bits.push('这次没成功');
   else if (v.ok === null) bits.push('还在写，没回结果');
   else bits.push('已完成');
+  // 同路径重写时，字节数 / 指纹是「哪一版是哪一版」的事实依据（旧版不会被新版盖掉）
+  if (v.size) bits.push(v.size >= 1048576 ? (v.size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(v.size / 1024)) + ' KB');
   if (v.unit) bits.push('由这一步产出');
   return bits.join(' · ');
 }
 function evidenceImpl(path, v, info) {
   const lines = [`证据：消息 ${(info.msg || '')}${v.v ? ' · 第 ' + v.v + ' 版' : ''}${info.how ? ' · ' + info.how : ''}`, `文件：${path}`];
+  if (v.size) lines.push(`大小：${v.size} B`);
+  if (v.sha) lines.push(`指纹：${v.sha}`);
   for (const e of (info.eids || [])) if (e && e !== info.msg) lines.push('相关消息：' + e);
   return lines.join('\n');
 }
@@ -893,7 +1013,7 @@ function unitForRange(ev, from, to) {
 function brief(ev, opts) {
   const maxCalls = (opts && opts.calls) || 130;
   const lines = [];
-  lines.push(`【这条对话】${ev.stats.messages} 条消息 · 真实工具调用 ${ev.stats.tools} 次 · 失败 ${ev.stats.failed} 次${ev.truncated ? ' · 只看了最近一段，更早的没看到' : ''}`);
+  lines.push(`【这条对话】${ev.stats.messages} 条消息 · 真实工具调用 ${ev.stats.tools} 次 · 失败 ${ev.stats.failed} 次${ev.truncated ? ' · 只看了最近一段，更早的没看到' : ''}${(ev.stats.cut || ev.stats.broken) ? ` · 有 ${(ev.stats.cut || 0) + (ev.stats.broken || 0)} 条记录超出读取上限/读不出来，这部分产出可能没算到` : ''}`);
   lines.push('');
   lines.push('人说的话（消息号 · 原话节选）：');
   for (const q of ev.ask.slice(-30)) lines.push(` ${q.msg}｜${clip(q.body || q.text, 100)}`);
