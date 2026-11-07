@@ -86,7 +86,7 @@ function askAgent({ profile, prompt, timeoutMs = 120000, toolsets }) {
 function askAgentClean({ profile, prompt, toolsets, timeoutMs = 240000 }) {
   return new Promise((resolve) => {
     if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在' });
-    const args = ['-p', profile, 'chat', '--format', 'stream-json'];
+    const args = ['-p', profile, 'chat', '--format', 'stream-json'];   // 不加 --source：网关只认固定几种，写了会直接失败
     if (toolsets) args.push('-t', String(toolsets));
     args.push('-q', prompt);
     execFile(HERMES, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, env: { ...process.env } }, (err, stdout) => {

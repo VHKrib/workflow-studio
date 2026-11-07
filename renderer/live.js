@@ -119,6 +119,23 @@ async function analyzeNow(manual) {
   }
 }
 
+// 打开窗口/切对话：先把上次保存的解析结果摆上来（不用重新跑模型）；没有就等解析
+async function hydrate(key) {
+  const found = list.find(c => c.key === key);
+  if (!found) return false;
+  const r = await window.tcflow.liveSnapshot({ profile: found.profile, session: found.session });
+  if (r && r.doc && r.doc.cards && r.doc.cards.length) {
+    renderDoc(r.doc, { analyzed: true });
+    analyzedKey = cur;
+    const btn = document.querySelector('#lana');
+    if (btn) btn.textContent = '重新生成';
+    setStat(`已保存：${r.doc.cards.length} 张卡${r.doc.name ? ' · ' + r.doc.name : ''}`);
+    return true;
+  }
+  if (r && r.error) setStat(r.error);
+  return false;
+}
+
 async function pick(key) {
   if (!key || key === cur) return;
   const found = list.find(c => c.key === key);
@@ -130,15 +147,11 @@ async function pick(key) {
   paintEmpty(); paintStat();
   if (following) { await follow(true); return; }
   await stopFollow();
-  const r = await window.tcflow.liveSnapshot({ profile: found.profile, session: found.session });
-  if (r && r.doc && r.doc.cards && r.doc.cards.length) {
-    renderDoc(r.doc, { analyzed: true });            // 上次保存的那份：打开就能看，不用重新跑
-    analyzedKey = cur;
-    const btn = document.querySelector('#lana');
-    if (btn) btn.textContent = '重新生成';
-    setStat(`已保存：${r.doc.cards.length} 张卡${r.doc.name ? ' · ' + r.doc.name : ''}`);
-  } else if (r && r.doc) renderDoc(r.doc);
-  else if (r && r.error) setStat(r.error);
+  const got = await hydrate(cur);
+  if (!got) {
+    const r = await window.tcflow.liveSnapshot({ profile: found.profile, session: found.session });
+    if (r && r.doc) renderDoc(r.doc);
+  }
   paintEmpty();
 }
 
@@ -291,7 +304,7 @@ function bestPath(card, name) {
     const dir = ps[0].replace(/\/[^/]*$/, '');
     return dir + '/' + key;
   }
-  return ps.length === 1 ? ps[0] : '';
+  return ps[0];          // 名字对不上也给一个：宁可预览第一份，也不要什么都不显示
 }
 
 function socketRows(c, d) {
@@ -542,6 +555,9 @@ async function init() {
   }
   paintEmpty(); paintStat();
   if (st.on && cur) { await follow(true); }           // 重开窗口：选中的对话和开关都还在
-  else if (st.on) { $('#lfol').checked = true; }
+  else {
+    if (st.on) $('#lfol').checked = true;
+    if (cur) await hydrate(cur);                      // 跟随关着也把上次保存的解析结果摆上来
+  }
 }
 init();
