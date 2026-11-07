@@ -291,7 +291,10 @@ function loadLiveDoc(profile, session) {
   try {
     const f = liveDocFile(profile, session);
     const d = JSON.parse(fs.readFileSync(f, 'utf8'));
-    if (d && Array.isArray(d.cards) && d.cards.length && d.conv) return d;
+    if (d && Array.isArray(d.cards) && d.cards.length && d.conv) {
+      for (const c of d.cards) { try { normMods(c, c.kind); } catch (e) { } }   // 老存档也按新口径归位
+      return d;
+    }
   } catch (e) { }
   return null;
 }
@@ -388,7 +391,12 @@ const LIVE_PLAIN = [
   '③ 交出什么——什么文件/清单，里面每条写什么。',
   '不要写「处理数据」「整理一下」这种空话。命令、脚本、文件路径、字段名一律只放「内部实现」，不进卡片正文。',
 ].join('');
-const LIVE_MODS = 'mods 把这张卡用到的东西拆成短词模块（每块 8 个字以内，说人话）：输入卡写素材（哪几张图、哪些数据），加工卡写工具（怎么挑、怎么比、怎么查），输出卡写成果（交出的文件里有哪几样）。';
+const LIVE_MODS = [
+  'mods 的写法（按用户 2026-11-07 的口径）：',
+  '· 输入卡：只写真正被读进来的素材（哪几张图、哪份清单、哪个视频）。「抽帧」「重出」「改尺寸」这类动作不算素材，别写进输入卡。',
+  '· 加工卡：只写「用什么加工」——模型/接口优先（例如 生图模型、视频模型、文本模型），不要写「怎么挑、怎么比、怎么查」这类做法（做法写进正文）。',
+  '· 输出卡：只写真正交出来的文件（图片 / 视频 / 文档）。「带签名与标注」「字节哈希」「清单条目」这类是加工时做的事，不算成果，别写进输出卡。',
+].join('');
 
 const livePrompt = ({ who, topic, ask, steps, reads, writes, said, paths }) => [
   '【实时画布】你是平台主管，在把一条真实工作对话，画成工作流开发平台里的卡片。',
@@ -569,6 +577,59 @@ function liveMaterial(msgs) {
     paths: [...paths].slice(0, 60) };
 }
 
+// 卡面归属（用户 2026-11-07 定）：素材/工具/成果各归各位。
+// 输入卡只留真被读进来的素材；加工卡把「模型/接口」标成工具（带能力说明），做法另记；输出卡只留真文件。
+const MF_EXT = /\.(png|jpe?g|webp|gif|bmp|tiff?|svg|mp4|mov|webm|mkv|mp3|wav|pdf|md|txt|json|csv|xlsx|docx|pptx|zip)$/i;
+const MF_ACTION = /(抽帧|抽两?帧|截图|重出|重画|生成|合成|拼接|压缩|转码|导出|裁剪|改尺寸|加签名|签名|标注|水印|哈希|核对|清单条目|尺寸|数量)/;
+const MF_MODELS = [
+  { re: /(seedance|doubao[-_ ]?seedance|即梦|jimeng|视频模型|生成视频|video_gen|跑视频)/i, name: '视频模型', caps: '图/文 → 视频 · 单次文本 ≤7000 字（其余按接口）' },
+  { re: /(gpt-?image|dall-?e|nano-?banana|imagen|flux|midjourney|sdxl|qwen-?image|wanx|seedream|生图|出图|画图|生成图|image_gen)/i, name: '生图模型', caps: '图/文 → 图 · 单次 1 张（参考图/文本上限按接口）' },
+  { re: /(sora|veo|kling|hailuo|runway|pika)/i, name: '视频模型', caps: '图/文 → 视频（按接口）' },
+];
+function normMods(card, kind) {
+  const raw = Array.isArray(card.mods) ? card.mods : [];
+  const list = raw.map(m => (typeof m === 'string' ? { type: kind === 'proc' ? 'how' : (kind === 'in' ? 'mat' : 'res'), name: String(m) } : { ...m }));
+  const implTxt = String(card.impl || '') + ' ' + String(card.body || '') + ' ' + list.map(m => m.name).join(' ');
+  const out = [];
+  const seen = new Set();
+  const add = m => { const k = m.type + ':' + m.name; if (!m.name || seen.has(k)) return; seen.add(k); out.push(m); };
+  if (kind === 'proc') {
+    for (const mo of MF_MODELS) if (mo.re.test(implTxt) && !out.some(x => x.name === mo.name)) add({ type: 'tool', name: mo.name, caps: mo.caps });
+  }
+  for (const m of list) {
+    const nm = String(m.name || '').trim();
+    if (!nm) continue;
+    const fileish = MF_EXT.test(nm) || /(图|视频|文档|清单|表|报告|录屏)/.test(nm) || /\b(PNG|JPG|JPEG|WEBP|MP4|MOV|PDF|MD|JSON|CSV|SVG)\b/i.test(nm);
+    if (kind === 'in') { if (!MF_ACTION.test(nm) && fileish) add({ type: 'mat', name: nm }); continue; }
+    if (kind === 'out') { if (fileish && !MF_ACTION.test(nm)) add({ type: 'res', name: nm }); continue; }
+    // 加工卡：模型/软件算工具（带能力说明），其余算做法
+    const TOOL_LEX = /(ffmpeg|blender|freestyle|python|node|comfy|photoshop|shasum|exiftool|image|vision|seedance|ark|视频模型|生图模型|文本模型|脚本)/i;
+    const hitModel = MF_MODELS.find(mo => mo.re.test(nm));
+    if (hitModel) { add({ type: 'tool', name: hitModel.name, caps: hitModel.caps }); continue; }
+    if (TOOL_LEX.test(nm)) { add({ type: 'tool', name: nm }); continue; }
+    if (m.type === 'tool' && out.some(x => x.name === nm)) continue;
+    add({ type: 'how', name: nm });
+  }
+  // 兜底：素材卡/成果卡滤空了，就用卡名当那一样（总比空着强）
+  if ((kind === 'in' || kind === 'out') && !out.length) {
+    const ownName = String(card.title || '').split(' · ')[0].trim();
+    if (ownName) add({ type: kind === 'in' ? 'mat' : 'res', name: ownName });
+  }
+  // 路径：卡里能抄到绝对路径的，挂到第一个成果/素材上做预览
+  const p = (String(card.impl || '').match(/\/[^\s;；,，]+\.(?:png|jpe?g|webp|gif|mp4|mov|webm|pdf|md|txt|json|csv|svg)/i) || [])[0];
+  if (p) {
+    const first = out.find(x => x.type === (kind === 'in' ? 'mat' : 'res'));
+    if (first) first.path = p;
+  }
+  card.mods = out;
+}
+function normalizePlan(plan) {
+  for (const c of plan.cards || []) {
+    try { normMods(c, c.kind); } catch (e) { }
+  }
+  return plan;
+}
+
 ipcMain.handle('live:analyze', async (_e, { profile, session, topic }) => {
   const t0 = Date.now();
   try {
@@ -606,6 +667,7 @@ ipcMain.handle('live:analyze', async (_e, { profile, session, topic }) => {
       });
       if (hit) c.impl = [String(c.impl || '').trim(), hit].filter(Boolean).join('\n').slice(0, 400);
     }
+    normalizePlan(plan);                             // 素材 / 模型（带能力）/ 成果各归各位，见 normMods
     LIVE.plan = plan;
     LIVE.doc = {
       conv: LIVE.conv, at: Math.round(Date.now() / 1000),

@@ -861,7 +861,12 @@ function buildGraph(ev, plan) {
     });
   }
   // 卡面三块（和主画布同一套含义）：输入卡=素材、加工卡=来源素材 + 自己的工具 + 下游成果、输出卡=成果。
-  // 都由**真实边**反推，不另存一份（两份数据迟早对不上）。
+  // 由真实边反推，不另存一份（两份数据迟早对不上）。
+  //
+  // 三条口径（用户 2026-11-07 定）：
+  // 1) 加工卡的「工具」要写**模型/接口**（image 生图、视频模型），做法（排版、重画、核对）只是做法，不当工具；
+  // 2) 输出卡上只放**真交出来的文件**（图片/视频/文档）；「带签名与标注」这类是加工动作，不是成果；
+  // 3) 素材和成果**全部列出来**，不截前三个。
   {
     const byId = new Map(list.map(c => [c.id, c]));
     const short = id => { const c = byId.get(id); return c ? clip(String(c.title).split(' · ')[0], 10) : ''; };
@@ -871,16 +876,69 @@ function buildGraph(ev, plan) {
       else if (k === 'make') { if (!downs.has(a)) downs.set(a, []); downs.get(a).push(b); }
     }
     const unitOf = new Map(ev.units.map(u => [u.id, u]));
+
+    // 是不是「真文件」：有扩展名才算交出来的东西
+    const FILE_EXT = /\.(png|jpe?g|webp|gif|bmp|tiff?|mp4|mov|webm|mkv|mp3|wav|pdf|md|txt|json|csv|xlsx|docx|pptx|svg|html|zip)$/i;
+    const isFile = n => FILE_EXT.test(String(n || '').trim());
+    // 这些词是加工时做的事，不是成果（签名/标注/水印/抽帧/压缩…）
+    const NOT_RESULT = /(签名|标注|水印|注释|抽帧|抽两?帧|截图|裁剪|压缩|合成|拼接|转码|导出)/;
+
+    // 模型/接口：从这次加工的「内部实现」里认（命令、脚本参数里常带模型名）
+    const MODELS = [
+      { re: /(seedance|doubao[-_ ]?seedance|ark|即梦|jimeng|视频模型|生成视频|video_gen)/i, name: '视频模型', io: '图/文 → 视频' },
+      { re: /(gpt-?image|dall-?e|nano-?banana|imagen|flux|midjourney|stable-?diffusion|sdxl|qwen-?image|wanx|doubao[-_ ]?image|seedream|生图|出图|画图|生成图|image_gen|\bimage\b)/i, name: '生图模型', io: '图/文 → 图 · 单次 1 张（参考图/文本上限按接口）' },
+      { re: /(sora|veo|kling|hailuo|runway|pika|minimax[-_ ]?video)/i, name: '视频模型', io: '图/文 → 视频' },
+      { re: /(gpt-?4o?|claude|deepseek|qwen(?!-?image)|gemini(?!-?image)|glm|文本模型)/i, name: '文本模型', io: '文本 → 文本' },
+    ];
+    const LIMIT = /(\d+\s*张(?:图|图片|参考图)|最多\s*\d+\s*张|(?:文本|文字|提示词)\s*(?:≤|不超过|最多)\s*\d+|\d+\s*字)/g;
+    function modelsIn(text) {
+      const t = String(text || '');
+      const found = [];
+      for (const m of MODELS) if (m.re.test(t) && !found.some(x => x.name === m.name)) {
+        const limits = [...new Set((t.match(LIMIT) || []).map(s => s.replace(/\s+/g, '')))].slice(0, 2);
+        found.push({ name: m.name, io: m.io, caps: limits.length ? limits.join(' · ') : '' });
+      }
+      return found;
+    }
+    // 卡片自己带的文件路径（预览用）
+    const pathOf = c => {
+      const raw = String((c && c.impl) || '');
+      const m = raw.match(/\/[^\s;；,，]+\.(?:png|jpe?g|webp|gif|mp4|mov|webm|pdf|md|txt|json|csv|svg|html|zip)/i);
+      return m ? m[0] : '';
+    };
+
     list = list.map(c => {
-      if (c.kind === 'in') return Object.assign({}, c, { mods: [{ type: 'mat', name: clip(String(c.title).split(' · ')[0], 10) }] });
-      if (c.kind === 'out') return Object.assign({}, c, { mods: [{ type: 'res', name: clip(String(c.title).split(' · ')[0], 10) }] });
+      if (c.kind === 'in' || c.kind === 'out') {
+        const isIn = c.kind === 'in';
+        const own = clip(String(c.title).split(' · ')[0], 12);
+        const out = [];
+        // 卡本身那一项：素材卡放素材、输出卡只放真文件
+        const ownPath = pathOf(c);
+        if (isIn || isFile(own) || ownPath) out.push({ type: isIn ? 'mat' : 'res', name: own, path: ownPath });
+        return Object.assign({}, c, { mods: out });
+      }
       if (c.kind !== 'proc') return c;
       const u = unitOf.get(c.unit);
       const mods = [], seen = new Set();
-      const add = (type, name) => { const k = type + ':' + name; if (!name || seen.has(k)) return; seen.add(k); mods.push({ type, name: clip(name, 10) }); };
-      for (const id of (ups.get(c.id) || []).slice(0, 3)) add('mat', short(id));       // 来源素材（真被这次加工用到）
-      for (const m of (u ? u.methods : []).slice(0, 3)) add('tool', m.w);              // 这套做法自己用的工具
-      for (const id of (downs.get(c.id) || []).slice(0, 3)) add('res', short(id));      // 这次交出的成果
+      const add = (type, name, extra) => {
+        if (!name) return;
+        const k = type + ':' + name;
+        if (seen.has(k)) return;
+        seen.add(k);
+        mods.push(Object.assign({ type, name: clip(name, 12) }, extra || {}));
+      };
+      // 模型排第一：这是「用什么加工的」
+      for (const mo of modelsIn((c.impl || '') + ' ' + (c.body || ''))) add('tool', mo.name, { caps: [mo.io, mo.caps].filter(Boolean).join(' · ') });
+      // 来源素材：全部列出（带路径，能悬停预览）
+      for (const id of (ups.get(c.id) || [])) { const s = byId.get(id); add('mat', short(id), { path: pathOf(s) }); }
+      // 做法（不当工具，单独一种标签放最后）
+      for (const m of (u ? u.methods : [])) add('how', m.w);
+      // 这次交出的成果：只放真文件
+      for (const id of (downs.get(c.id) || [])) {
+        const d = byId.get(id), nm = short(id);
+        if (NOT_RESULT.test(nm) || (!isFile(nm) && !pathOf(d))) continue;
+        add('res', nm, { path: pathOf(d) });
+      }
       return Object.assign({}, c, { mods });
     });
   }
