@@ -46,6 +46,9 @@ async function loadList() {
   return list;
 }
 function setStat(text) { $('#lstat').textContent = text; }
+const statusWord = s => ({
+  done: '', failed: '失败', doing: '正在做', unfinished: '没找到产出', proposed: '未执行', pending: '待确认',
+}[s] || '');
 function paintEmpty() {
   const empty = !doc || !doc.cards || !doc.cards.length;
   $('#lempty').classList.toggle('off', !empty);
@@ -56,7 +59,11 @@ function paintStat() {
   const n = (doc.cards || []).length;
   const skipped = (doc.stats && doc.stats.chatter) || 0;
   const tail = skipped ? ` · 忽略闲聊 ${skipped} 条` : '';
-  setStat(`${n} 张卡 · ${following ? '跟到 ' + hhmmss(doc.at) : '已暂停'}${tail}`);
+  const tr = doc.truncated || (doc.stats && doc.stats.truncated) ? ' · 只看了最近一段' : '';
+  const seg = (doc.segments || []).filter(s => s.length > 1).length;
+  const multi = seg > 1 ? ` · ${seg} 段` : '';
+  const p = (doc.problems || []).length ? ` · ${doc.problems[0]}` : '';
+  setStat(`${n} 张卡 · ${following ? '跟到 ' + hhmmss(doc.at) : '已暂停'}${tail}${tr}${multi}${p}`);
 }
 
 // 三栏实体：素材 / 实现路径 / 结果。同名只涨计数，不重复占位——这条链路里真正反复用的是这些。
@@ -91,22 +98,15 @@ async function analyzeNow(manual) {
   if (btn) { btn.disabled = true; btn.textContent = '解析中…'; }
   try {
     const r = await window.tcflow.liveAnalyze({ profile: found.profile, session: found.session, topic: found.doing });
-    if (r && r.ok && r.plan && r.plan.cards.length) {
-      const d = {
-        conv: { key: cur, who: found.who, doing: found.doing },
-        at: doc ? doc.at : Math.floor(Date.now() / 1000),
-        cards: r.plan.cards.map(c => ({ id: c.id, kind: c.kind, title: c.title, body: c.body, note: c.note || '', branch: c.branch || 'main', mods: c.mods || [], impl: c.impl || '', n: 1 })),
-        edges: r.plan.edges || [],
-        name: r.plan.name || '',
-        entities: doc && doc.entities,
-        stats: doc && doc.stats,
-      };
+    if (r && r.ok && r.doc && r.doc.cards.length) {
       fitted = false;
-      renderDoc(d, { analyzed: true });
+      renderDoc(r.doc, { analyzed: true });
       analyzedKey = cur;
-      setStat(`已解析：${d.cards.length} 张卡${d.name ? ' · ' + d.name : ''}`);
+      window.__liveMapping = r.mapping || null;              // 只读调试口：对照证据（验收用，界面不显示）
+      if (r.mapping && r.mapping.rows) console.log('[实时画布] 对照证据 ' + r.mapping.rows.length + ' 步')
+      setStat(`已解析：${r.doc.cards.length} 张卡 · ${r.doc.edges.length} 条关系${r.name ? ' · ' + r.name : ''}${r.problems && r.problems.length ? ' · ' + r.problems[0] : ''}`);
     } else {
-      setStat('解析没成：' + ((r && r.error) || '未知原因') + '（先看粗略版）');
+      setStat('解析没成：' + ((r && r.error) || '未知原因') + '（先看底账那版）');
     }
   } catch (e) {
     setStat('解析失败：' + (e && e.message || e));
@@ -180,7 +180,8 @@ const MOD_TYPE = { in: 'mat', proc: 'tool', out: 'res' };
 
 function cardEl(c) {
   const el = document.createElement('div');
-  el.className = 'node k-' + c.kind + (c.branch && c.branch !== 'main' ? ' branch' : '') + (/^点评/.test(c.title || '') ? ' review' : '');
+  el.className = 'node k-' + c.kind + (c.branch && c.branch !== 'main' ? ' branch' : '')
+    + (c.status ? ' st-' + c.status : '');
   el.dataset.id = c.id;
   const type = MOD_TYPE[c.kind] || 'tool';
   const mods = (c.mods && c.mods.length)
@@ -190,22 +191,26 @@ function cardEl(c) {
     ? `<div class="mods"><div class="mline"><span class="mlab">${MOD_LAB[c.kind] || '模块'}</span>` +
       `<span class="mchips">${mods.map(m => `<span class="mod t-${m.type || type}">${esc(m.name)}</span>`).join('')}</span></div></div>`
     : '';
-  const isReview = /^点评/.test(c.title || '');
-  const chips = (isReview ? '<span class="chip rev">点评</span>' : '') +
-    (c.note ? `<span class="chip" title="为什么改 / 和上一版差在哪">改 · ${esc(c.note)}</span>` : '');
+  const st = c.status ? statusWord(c.status) : '';
+  const chips = (st ? `<span class="chip st-${esc(c.status)}">${esc(st)}</span>` : '') +
+    (c.versions > 1 ? `<span class="chip ver" title="同一个文件的第几版">v${c.ver}</span>` : '') +
+    (c.uses > 1 ? `<span class="chip use" title="被几次加工用到（只算真实调用）">被用 ${c.uses} 次</span>` : '') +
+    (c.note ? `<span class="chip note" title="为什么做 / 为什么改">改 · ${esc(c.note)}</span>` : '') +
+    (c.branch && c.branch !== 'main' ? `<span class="chip br">${esc(c.branch)}</span>` : '');
   el.innerHTML = `
     <div class="hd"><span class="kind">${KIND_LABEL[c.kind] || '加工'}</span><div class="t">${esc(c.title)}</div><div class="st"></div></div>
     <div class="body" data-ph="${KIND_PH[c.kind] || ''}">${esc(c.body)}</div>
     ${modsHTML}
-    <div class="ft"><div class="checks">${chips}</div>${c.impl ? '<span class="gar" title="内部实现已封装：卡片上不显示，点开看">⚙</span>' : ''}</div>
-    ${c.impl ? `<details class="limpl"><summary>⚙ 内部实现</summary><pre>${esc(c.impl)}</pre></details>` : ''}`;
+    <div class="ft"><div class="checks">${chips}</div>${c.impl ? '<span class="gar" title="内部实现与证据：卡片上不显示，点开看">⚙</span>' : ''}</div>
+    ${c.impl ? `<details class="limpl"><summary>⚙ 内部实现 / 证据</summary><pre>${esc(c.impl)}</pre></details>` : ''}`;
   const d = el.querySelector('details.limpl');
   if (d) d.addEventListener('toggle', () => { layout(); drawEdges(); });
   return el;
 }
 
 
-const sigOf = c => JSON.stringify([c.kind, c.title, c.body, c.impl, (c.mods || []).map(m => m.type + ':' + m.name), c.n]);
+const sigOf = c => JSON.stringify([c.kind, c.title, c.body, c.impl, (c.mods || []).map(m => m.type + ':' + m.name), c.n,
+  c.note || '', c.branch || '', c.status || '', c.ver || 0, c.versions || 0, c.uses || 0]);
 
 function renderDoc(d, opts) {
   if (!d || !Array.isArray(d.cards)) return;
@@ -234,11 +239,9 @@ function renderDoc(d, opts) {
   paintStat(); paintEmpty(); paintEnts(d);
 }
 
-// 排布：一条链按顺序从左往右排，一行放不下或来了新的要求就换行（换行后仍是从左往右）。
-// 这样「正在长的那张卡」永远在右下角，视野跟着它走时还能看见前几步；整条链也不会拉成一根细高的柱子。
+// 排布：按「从入口走了几步」分列，同一列上下堆。分叉自然在同一列错开，读成树枝。
+// 「改」和「新版」是回指/版本链，不推后一列（否则同一文件的新版本会被推到很远的右边）。
 function layout() {
-  // 树形排布：按「从入口走了几步」分列，同一列里上下堆；分叉自然就在同一列上下错开。
-  // 这样「同一素材换不同做法」会读成树枝，而不是被拍平成一条流水账。
   const COLW = 340, ROWGAP = 26;
   pos.clear();
   const cards = doc ? doc.cards : [];
@@ -246,24 +249,26 @@ function layout() {
   const ids = cards.map(c => c.id);
   const out = new Map(ids.map(i => [i, []]));
   const indeg = new Map(ids.map(i => [i, 0]));
-  for (const [a, b] of (doc.edges || [])) {
-    if (!out.has(a) || !out.has(b)) continue;
+  for (const e of (doc.edges || [])) {
+    const [a, b, k] = e;
+    if (!out.has(a) || !out.has(b) || a === b) continue;
+    if (k === 'revise' || k === 'evolve') continue;
     out.get(a).push(b);
     indeg.set(b, (indeg.get(b) || 0) + 1);
   }
-  // 深度：从没有入边的节点开始 BFS；环/孤岛兜底按顺序补
   const depth = new Map();
   const queue = ids.filter(i => (indeg.get(i) || 0) === 0);
   if (!queue.length) queue.push(ids[0]);
   for (const i of queue) depth.set(i, 0);
-  while (queue.length) {
+  let guard = 0;
+  while (queue.length && guard++ < ids.length * 8 + 2000) {
     const i = queue.shift();
     for (const j of out.get(i) || []) {
       const d = (depth.get(i) || 0) + 1;
       if (!depth.has(j) || depth.get(j) < d) { depth.set(j, d); queue.push(j); }
     }
   }
-  ids.forEach((i, k) => { if (!depth.has(i)) depth.set(i, 0); });
+  ids.forEach(i => { if (!depth.has(i)) depth.set(i, 0); });
 
   const byDepth = new Map();
   for (const c of cards) {
@@ -274,7 +279,7 @@ function layout() {
   for (const [d, list] of [...byDepth.entries()].sort((a, b) => a[0] - b[0])) {
     let y = 0;
     for (const c of list) {
-      const el = canvas.querySelector(`.node[data-id="${c.id}"]`);
+      const el = canvas.querySelector(`.node[data-id="${CSS.escape(c.id)}"]`);
       if (!el) continue;
       const x = d * COLW;
       el.style.left = (x + OX) + 'px';
@@ -287,11 +292,23 @@ function layout() {
 }
 
 
+// 四种关系都画成真线（不是写在文字里）：
+// use 用的材料/旧产物 → 加工（实线）；make 加工 → 产物（实线）；revise 看了哪一版才改（橘色虚线 + 「改」）；
+// evolve 同一个文件的新版本（紫色细线 + 「vN」）。
+const EDGE_STYLE = {
+  use: { stroke: 'rgba(17,17,17,.30)', width: 1.6, dash: '', label: '' },
+  make: { stroke: 'rgba(17,17,17,.34)', width: 1.8, dash: '', label: '' },
+  revise: { stroke: 'rgba(255,90,31,.62)', width: 1.6, dash: '5 4', label: '改' },
+  evolve: { stroke: 'rgba(122,86,168,.5)', width: 1.4, dash: '2 3', label: '新版' },
+};
 function drawEdges() {
   if (!doc) return;
   const end = id => pos.get(id);
-  let h = `<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="rgba(17,17,17,.42)"/></marker></defs>`;
-  for (const [a, b] of doc.edges || []) {
+  let h = `<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="rgba(17,17,17,.42)"/></marker>` +
+    `<marker id="ar-or" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="rgba(255,90,31,.75)"/></marker></defs>`;
+  for (const e of (doc.edges || [])) {
+    const [a, b, k] = e;
+    const st = EDGE_STYLE[k] || EDGE_STYLE.use;
     const pa = end(a), pb = end(b);
     if (!pa || !pb) continue;
     const forward = pb.x > pa.x + pa.w - 20;
@@ -300,9 +317,18 @@ function drawEdges() {
     const x2 = forward ? pb.x : pb.x + pb.w / 2;
     const y2 = forward ? pb.y + pb.h / 2 : pb.y;
     const dx = Math.max(50, Math.abs(x2 - x1) / 2);
-    h += forward
-      ? `<path class="edge" d="M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}" fill="none" stroke="rgba(17,17,17,.30)" stroke-width="1.6" marker-end="url(#ar)"/>`
-      : `<path class="edge" d="M${x1},${y1} C${x1},${y1 + 70} ${x2},${y2 - 70} ${x2},${y2}" fill="none" stroke="rgba(17,17,17,.30)" stroke-width="1.6" marker-end="url(#ar)"/>`;
+    const d = forward
+      ? `M${x1},${y1} C${x1 + dx},${y1} ${x2 - dx},${y2} ${x2},${y2}`
+      : (k === 'revise' || k === 'evolve')
+        // 「改」「新版」是往回指的：从上一版的底部绕到加工卡/新版卡的上方，别和材料流混在一起
+        ? `M${pa.x + pa.w / 2},${pa.y} C${pa.x + pa.w / 2 - 90},${pa.y - 60} ${pb.x + pb.w / 2 + 90},${pb.y + pb.h + 60} ${pb.x + pb.w / 2},${pb.y + pb.h}`
+        : `M${x1},${y1} C${x1},${y1 + 70} ${x2},${y2 - 70} ${x2},${y2}`;
+    h += `<path class="edge e-${k || 'use'}" d="${d}" fill="none" stroke="${st.stroke}" stroke-width="${st.width}"${st.dash ? ` stroke-dasharray="${st.dash}"` : ''} marker-end="url(#${k === 'revise' ? 'ar-or' : 'ar'})"/>`;
+    if (st.label) {
+      const lx = forward ? (x1 + x2) / 2 : pa.x + pa.w / 2 - 18;
+      const ly = forward ? (y1 + y2) / 2 - 6 : pa.y - 10;
+      h += `<text class="elab ${k}" x="${lx}" y="${ly}" font-size="10" fill="${st.stroke}">${st.label}</text>`;
+    }
   }
   edgesSvg.innerHTML = h;
 }

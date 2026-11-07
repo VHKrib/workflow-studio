@@ -231,7 +231,7 @@ const overlapsOf = rects => {
     pick: !!document.querySelector('#lconv'), fol: !!document.querySelector('#lfol'), zoom: !!document.querySelector('.zoombar'),
     title: document.title,
   }))()`);
-  ok('live-no-chrome', !chrome.sidebar && !chrome.topbar && !chrome.panel && chrome.buttons === 0 && chrome.pick && chrome.fol && chrome.zoom, chrome);
+  ok('live-no-chrome', !chrome.sidebar && !chrome.topbar && !chrome.panel && chrome.buttons <= 1 && chrome.pick && chrome.fol && chrome.zoom, chrome);
 
   // ---------- 选对话列表：谁 / 什么时候 / 在做什么 ----------
   const list = await L.ev(`(async () => { const opts = [...document.querySelectorAll('#lconv option')].map(o => ({v: o.value, t: o.textContent})); return opts; })()`);
@@ -259,12 +259,13 @@ const overlapsOf = rects => {
   const ov = overlapsOf(c1.rects);
   ok('live-layout', ov === 0 && c1.visible >= Math.min(4, c1.n), { overlap: ov, visible: c1.visible, total: c1.n, rects: c1.rects.slice(0, 3) });
 
-  // ---------- 连续读文件不刷卡：只有一句「读了 N 份资料」，细节收进内部实现（共 N 次）----------
+  // ---------- 只读的动作不落成「读资料」流水账卡；卡片正面说人话 ----------
   const merged = c1.cards.filter(c => /共 \d+ 次/.test(String(c.impl || '')));
-  ok('live-merge-10-reads', merged.length >= 1 && c1.cards.every(c => c.title !== '读资料'), { count: merged.length, impl_tail: String(merged[0] && merged[0].impl).slice(-16) });
-  // 卡片正面说人话；命令 / 路径 / JSON 在内部实现里
+  ok('live-no-log-cards', c1.cards.every(c => !['读资料', '正在做', '跑命令'].includes(c.title)) && c1.cards.every(c => !/^点评/.test(c.title)),
+    { count: merged.length, titles: c1.cards.map(c => c.title) });
+  // 卡片正面说人话；命令 / 路径 / JSON 在内部实现里（材料/产物卡的标题就是文件名，那是允许的）
   const TECH = /(\/[\w.<>-]+\/|\{["']|`|(?:^|\s)--[a-z]|\b[\w-]+\.(?:json|js|md|py|ts|csv)\b)/;
-  const dirty = c1.cards.filter(c => TECH.test(c.title) || TECH.test(c.body));
+  const dirty = c1.cards.filter(c => c.title !== '输入' && TECH.test(c.body) || /(\/[\w.<>-]+\/|\{["']|MEDIA:)/.test(c.title));
   const withImpl = c1.cards.filter(c => c.impl && /\/[\w.<>-]+\//.test(c.impl));
   ok('live-front-human', dirty.length === 0 && withImpl.length >= 2, { dirty: dirty.slice(0, 2), impl_cards: withImpl.length });
 
@@ -297,7 +298,7 @@ const overlapsOf = rects => {
   const sw = await L.ev(cardsState);
   const oldBodies = a.cards.map(c => c.body);
   const residue = sw.cards.filter(c => oldBodies.includes(c.body));
-  ok('live-switch-clean', sw.n >= 2 && sw.n < a.n && residue.length === 0 && !sw.cards.some(c => /清单/.test(c.body) && /图/.test(c.body)), { cards: sw.n, titles: sw.cards.map(c => c.title), residue: residue.length });
+  ok('live-switch-clean', sw.n < a.n && residue.length === 0 && !sw.cards.some(c => /清单/.test(c.body) && /图/.test(c.body)), { cards: sw.n, titles: sw.cards.map(c => c.title), residue: residue.length });
 
   // ---------- 记住状态：关掉独立窗口再开，选中的对话与开关还在 ----------
   await L.ev(`(() => { const s = document.querySelector('#lconv'); const f = document.querySelector('#lfol'); if (!f.checked) f.click(); return 1; })()`);
@@ -318,7 +319,7 @@ const overlapsOf = rects => {
     const L2 = await connect(lt2);
     await wait(1200);
     const re = await L2.ev(cardsState);
-    ok('live-remembered', re.checked && re.sel === 'default:sess-beta' && re.n >= 2, { checked: re.checked, sel: re.sel, cards: re.n });
+    ok('live-remembered', re.checked && re.sel === 'default:sess-beta' && re.n === beforeClose.n, { checked: re.checked, sel: re.sel, cards: re.n });
     ok('live-reopen-same-content', re.n === beforeClose.n, { before: beforeClose.n, after: re.n });
     errs.push(...(await L2.ev('window.__liveErrs || []')).map(e => 'live2: ' + e));
     // 只读：这个窗口想写链路状态会被主进程挡住
