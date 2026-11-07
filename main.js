@@ -268,7 +268,47 @@ function openLiveWindow() {
   return { ok: true };
 }
 
+// ---------- 从外面唤起：Hermes desktop 里点 workflow-studio://open 就能打开/前置这个窗口 ----------
+// 只允许一个实例：第二次唤起是「前置已有窗口」，不会再开一个进程（否则调试端口和数据目录会撞）。
+const PROTO = 'workflow-studio';
+function focusMain() {
+  if (!MAIN_WIN || MAIN_WIN.isDestroyed()) { createWindow(); return; }
+  if (MAIN_WIN.isMinimized()) MAIN_WIN.restore();
+  MAIN_WIN.show(); MAIN_WIN.focus();
+}
+function handleOpenUrl(url) {
+  const s = String(url || '');
+  if (!s.startsWith(PROTO + '://')) return;
+  console.log('[唤起] ' + s);
+  focusMain();
+  if (/^workflow-studio:\/\/(live|实时)/i.test(s)) openLiveWindow();
+}
+function registerProtocol() {
+  try {
+    // 开发态（electron .）要把脚本路径一起登记，打包后直接登记即可
+    if (process.defaultApp && process.argv.length >= 2) app.setAsDefaultProtocolClient(PROTO, process.execPath, [path.resolve(process.argv[1])]);
+    else app.setAsDefaultProtocolClient(PROTO);
+    const ok = app.isDefaultProtocolClient(PROTO, process.execPath, process.defaultApp ? [path.resolve(process.argv[1])] : []);
+    console.log('[唤起] 协议 ' + PROTO + ':// ' + (ok ? '已登记' : '登记未生效') + '（卸载：加 --unregister-protocol 启动一次）');
+  } catch (e) { console.log('[唤起] 登记失败：' + (e && e.message || e)); }
+}
+if (!app.requestSingleInstanceLock()) {
+  app.quit();                                      // 已经有实例在跑：交给它前置
+} else {
+  app.on('second-instance', (_e, argv) => {
+    const u = (argv || []).find(a => String(a).startsWith(PROTO + '://'));
+    focusMain();
+    if (u) handleOpenUrl(u);
+  });
+  app.on('open-url', (e, url) => { e.preventDefault(); handleOpenUrl(url); });   // macOS 点链接走这里
+}
+
 app.whenReady().then(() => {
+  if (process.argv.includes('--unregister-protocol')) {
+    try { app.removeAsDefaultProtocolClient(PROTO); console.log('[唤起] 已解除 ' + PROTO + ':// 登记'); } catch (e) {}
+    app.quit(); return;
+  }
+  registerProtocol();
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { role: 'appMenu' }, { role: 'editMenu' }, { role: 'viewMenu' }, { role: 'windowMenu' },
   ]));
