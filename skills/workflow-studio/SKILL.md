@@ -10,6 +10,11 @@ description: Use when changing the Workflow Studio (工作流开发平台) Elect
 改这个仓库的任何东西：界面、卡片模型、agent 调用、读取链路、导入导出、开源文件。
 代码在仓库根目录（`renderer/` 是界面与全部状态，`main.js` 是主进程，`preload.js` 是桥）。
 
+**先确定你在哪一份里改。** 默认在 dev 工作副本里改、验收通过再并进用户在用的那份；但用户说「以后你直接动手」以后，
+**用户在用的那份就是你的工作副本**：改完就地 `git add -A && git commit`（别把改动留在工作区），然后重启窗口自测。
+两条路径不能混：走派卡时不许碰 live；直接动手时每改一版就提交，否则下一个会话看见一屁殏未提交改动，
+分不清是谁的。
+
 ## 启动与验证（每次改完都要做）
 
 ```bash
@@ -476,23 +481,25 @@ node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加两次真实 
 | 对话里 | 画布里 |
 |---|---|
 | 用户发的一句话 | **输入卡**（正文 = 原话的人话那部分；命令 / 路径进 `impl`） |
-| 读 / 搜 / 跑 / 查这类中间动作 | **不上图**：并进这次要求的那张卡，正面一句人话（「读了 3 份资料 · 跑了 2 条命令」），每一条命令进 `impl`（超过 6 条显示「…共 N 次」） |
+| 读 / 搜 / 跑 / 查这类中间动作 | **不各占一张卡**：并进这次要求的那张**加工卡**（`kind: proc`），正面一句人话（「读了 3 份资料 · 跑了 2 条命令」），每一条命令进 `impl`（超过 6 条显示「…共 N 次」） |
 | 跨岗位派活 / 子代理（`message_agent` / `delegate_task`） | **输出卡**（标题「派活给某人」——交出去的活就是结果） |
 | 写出的文件 / 最终回答 | **输出卡**（写文件 / 回答） |
 
 合并与更新规则（改这块先看这六条）：
 
-1. **一句要求一张进度卡**：这句要求下第一件中间动作出现时立一张「正在做」（`cat: doing`），之后所有中间动作都更在这张卡上（正文 = 人话计数，`impl` 记明细，`n` = 调用次数），换动作类也不新开。
+1. **一句要求一张加工卡**：这句要求下第一件中间动作出现时立一张「正在做」（`cat: doing`、**`kind: proc`——它就是链路上的「加工」格**，画布上要看得见 输入→加工→输出，不是只有两头），之后所有中间动作都更在这张卡上（正文 = 人话计数，`impl` 记明细，`n` = 调用次数），换动作类也不新开。
 2. **回答到了就地变成「回答」**：同一张卡的 `cat` 从 `doing` 改成 `answer`、正文换成回答、模块从「进度」换成「结论」——id 不变，画布上不新建卡。
 3. **同一句要求重复发**（模型没被处理、人连着刷）→ 并回同一张输入卡；同一次要求下的回答并回同一张回答卡，不刷卡片。
 4. **中途插话不算结果**：上一张是本次要求的「回答」、而 90 秒内又冒出工具调用 → 把它就地退回「正在做」（不删卡、不换 id）；隔了很久的新动作不动。
-5. **外壳拆开 + 噪音丢掉**：`tool_call`（`calls` 数组）按里面真实的工具逐个记；`todo_list / todo_write` 不落卡；系统通知（后台进程退出 / 孤儿恢复 / 「INTERNAL NOTIFICATION」）不是人说的话，整条丢掉，不许冒输入卡。
+5. **外壳拆开 + 噪音丢掉**：`tool_call`（`calls` 数组）按里面真实的工具逐个记；`todo_list / todo_write` 不落卡；系统通知（后台进程退出 / 孤儿恢复 / 「INTERNAL NOTIFICATION」）不是人说的话，整条丢掉，不许冒输入卡。**派活型会话的外壳也要剥**：开头的 `# Kanban task t_xxx: <标题>` 只留标题，紧跟着的 `Assignee / Status / Workspace / Max runtime / Terminal timeout` 元信息行整行删；`New note on your kanban task…`、`You've reached the maximum …` 这类通知整条丢。不剥的话输入卡标题就是 `Kanban task t_c95bdcfd:`，链路第一格就是垃圾（实测）。
 6. **正面只说人话**：`polish()` 去掉代码块 / 行内代码 / URL / 绝对路径 / **相对路径与目录串** / 光秃秃的文件名 / 英文标识串 / 表格行；命令、参数、JSON 全在 `impl`。
    - 只剥「含 ASCII 的」路径段：`读/写`、`输入/输出` 这类中文夹斜杠的短语必须留着（整段剥掉会把话改歪）。
    - **多后缀文件名最容易漏**：`\b[\w-]+\.(png|json…)\b` 只吃得掉最后一段（`input/images/(sku)/main-01.` 残留在大面上），要连目录一起匹配。
    - 整句都是技术、拆不出人话时：正面给剥干净的那句，**原话整段进 `impl`**——不能为了正面干净把用户的要求丢掉。
    - **系统/管道报错不是结果**：`Operation interrupted` / `Error:` / `Traceback` / `Request timed out` 这类开头的文本，不许落成「回答」卡。
-   测试断言直接查「正面没有 `/路径/`、`{`、反引号、`--flag`、`x.json`」，以及「没有 `kind: proc` 的卡」。
+   测试断言直接查「正面没有 `/路径/`、`{`、反引号、`--flag`、`x.json`」，以及「`kind` 只在 in/proc/out 里、且至少各有一张」（`verify-actmap.js` 的 `kinds-in-proc-out`——**别再写成「没有 proc 卡」**，加工卡现在是正常的一格）。
+
+7. **同类输出卡跨着中间动作也合并**：同一次要求下写文件 / 派活这类输出卡，按「同类 + 同接收人」找回这张卡往上加计数，**中间夹着命令、读文件也并**——连写 11 个文件对用户来说是「写好了 11 个文件」一张卡，不是十一张一样的卡。找法是从后往前扫 `feed.cards` 找 `cat` 与 `target` 都相同的最后一张，别只看 `feed.lastGroup`（它常被中间的「正在做」占着）。
 
 卡片 id 用单调计数（`c1, c2, …`），撤卡不会重号；撤卡时把前后两张接回去，保证还是一条链。
 
@@ -512,7 +519,7 @@ node skills/workflow-studio/scripts/cdp-live.js --chat     # 再加两次真实 
 - 出口：`feedDoc()` 多一个 `entities: { materials, paths, results }`（各取前 8，每条 `{name, n}`）——
   独立窗口顶部 `#lents` 三栏渲染，空栏不占高度、内容没变不重绘（`dataset.html` 比对）。
 - 验收：拿一条 500+ 条消息的真实对话跑，能直接看到「素材 preview.png×N / 路径 actmap.js×N / 结果 app.js×N」，
-  而一句「你好」不产生卡、只让状态栏 +1。`tools/verify-actmap.js` 里补 `chatter-skipped` 与 `entities` 两条断言。
+  而一句「你好」不产生卡、只让状态栏 +1。`tools/verify-actmap.js` 里补 `chatter-no-card`（「你好」×6 → 0 张卡）与 `kinds-in-proc-out` 两条断言；`entities` 那组按三栏名与计数断。
 
 ### 窗口与状态
 
@@ -546,6 +553,8 @@ node tools/verify-actmap.js                                    # 离线映射：
 | 满上限不串味 | 35 轮对话（每轮 要求→动作→回答）顶满 60 张，再喂 `write_file` 和一段回答 | 写文件独立成卡 `n=1`；回答仍落在最后；不同类不被并 |
 | 待办不落卡 | 连续 4 次 `todo_write / todo_list` | 卡片与正文里都不出现「用工具」「todo」 |
 | 系统报错不亮成回答 | 一条 `Operation interrupted: …` | 不生成「回答」卡 |
+| 闲聊不占卡 | 连发 6 次「你好」 | 0 张卡，`stats.chatter` 记 6 |
+| 链路三格齐全 | 一句要求 + 若干工具调用 + 一段回答 | `kind` 只在 in/proc/out，且至少各有 1 张 |
 
 `--setup` 会连 `$TMPDIR/wf-9333` 一起清（状态要从「第一次打开」开始，第一条卡的计时才有意义）；实机验证去掉 `WF_LIVE_DIR` 就是真库。
 样本库里加新消息由脚本自己写（那是我们自己的临时库，应用那侧始终只读）。只读证据（可直接重跑）：
@@ -799,6 +808,13 @@ node skills/workflow-studio/scripts/cdp-copy.js --preview         # 再加 previ
   按「启动与验证」里的隔离实例复测再下结论。
 - **探针在 `render()` 之后要重新取元素**：`render()` 会换掉所有 `.node`，之前拿到的引用量出来全是 0（曾因此把
   插槽坐标量成 (0,0)，误以为「拖进插槽没反应」）。
+- **开第二个窗口别在 `Runtime.evaluate` 里等返回值**：调 `window.tcflow.openLive()` 这类会新开窗口的 IPC，
+  `awaitPromise:true` 的 evaluate 会一直不返回、把这条 CDP 连接挂死（表现为整条命令超时）。做法是 fire-and-forget
+  （表达式写 `window.tcflow.openLive(); 1`，拿到回执就关 ws），由**另一个进程** `curl -s http://127.0.0.1:$PORT/json`
+  数页面来确认窗口开没开。实时画布窗口的卡片类名是 **`k-in / k-proc / k-out`**（不是 `kind-*`），按类名统计别数错。
+- **实时画布的下拉只列「最近有活动」的对话**：派活型会话（看板卡跑完就沉底）常常不在下拉里，只能看到那个岗位的
+  `Bot Chat`。要解析那几条具体的任务会话，别在界面上找——直接 `sqlite3 -readonly "file:<profile>/state.db?mode=ro"`
+  取消息喂 `actmap.js`（离线解析脚本就是这个形状），先把链路看对再谈界面。
 - **缩放后先把目标卡滚进视口再点**：缩放锚在视口中心，1.5 倍时靠左的卡会滑到视口外，`getBoundingClientRect`
   给出负坐标，点下去是空气（`cdp-canvas.js` 的 drag 曾因此误报）。
 - **刚 render 完不要立刻量 layout**：列宽折叠、缩放、字体都会晚一帧生效，量到的 `getBoundingClientRect`
@@ -833,7 +849,7 @@ node tools/scan-public.js          # 部门名 / 岗位名 / 本机路径 / 旧�
 
 不要提交 `node_modules/`、`preview.png`、任何 `.env` 或含密钥的文件。
 
-### 发布到 GitHub（已发布：`github.com/VHKrib/workflow-studio`，private）
+### 发布到 GitHub（已发布：`github.com/VHKrib/workflow-studio`，**public**）
 
 `tools/publish-github.sh` 把「建库 + 推送」合成一条命令：
 

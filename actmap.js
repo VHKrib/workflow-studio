@@ -235,6 +235,7 @@ function createFeed(conv) {
     // 这句要求下的中间动作（读/搜/跑/查）：不上链路图，攒成一句人话 + 内部实现
     work: { turn: null, counts: {}, lines: [], calls: 0 },
     ent: { mat: new Map(), path: new Map(), out: new Map() },   // 素材 / 实现路径 / 生成结果（同名涨计数）
+    turnBuf: null,        // 当前这轮：用的文件 / 加工方式 / 交回的文件
     doing: null,          // 这句要求的「正在做」卡：回答到了就地变成「回答」卡
     stats: { messages: 0, tools: 0, merged: 0, skipped: 0 },
     at: 0,
@@ -444,116 +445,133 @@ function applyToolCall(feed, name, args, callId) {
   syncCard(card);
 }
 
+// 一次要求 = 一条链路：**用了哪些文件 → 用什么加工 → 交回哪些文件**。
+// 用户的每句话只当「这轮活儿的分界」，本身不单独上图（用户明确不要「对话卡片」）。
+const TOOL_WORD = {
+  cd: '换目录干活', ls: '看目录', cat: '看文件内容', grep: '找内容', sed: '改文本', awk: '处理文本',
+  find: '找文件', node: '跑脚本', python: '跑脚本', python3: '跑脚本', npm: '装/跑依赖',
+  git: '版本操作', curl: '抓网页', ffmpeg: '处理视频', sqlite3: '查记录', ps: '看进程', pkill: '停进程',
+};
+const isImageName = n => /\.(png|jpe?g|webp|gif|mp4|mov|avi)$/i.test(String(n || ''));
+const baseName = p => String(p || '').replace(/\/+$/, '').split('/').pop();
+
+function newTurn(feed, ask) {
+  return { ask: ask || '', at: feed.at || 0, files: new Map(), methods: new Map(), outs: new Map(), impl: [], tools: 0, answer: '' };
+}
+const bumpIn = (m, name) => {
+  const k = String(name || '').trim();
+  if (!k || k.length > 48) return;
+  m.set(k, (m.get(k) || 0) + 1);
+};
+const topNames = (m, n) => [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, n);
+
+// 一次工具调用归到哪一类：读到的文件 → 用的文件；技能/脚本/命令 → 加工方式；写出的文件 → 交回的文件
+function fileOf(args) {
+  const a = args || {};
+  if (a.path) return baseName(a.path);
+  if (a.file_path) return baseName(a.file_path);
+  if (a.target) return baseName(a.target);
+  return '';
+}
+
+function applyToolCall(feed, name, args, callId) {
+  feed.stats.tools++;
+  const b = feed.turnBuf;
+  if (!b) return;
+  const a = args || {};
+  if (SKIP.has(name)) { feed.stats.skipped++; return; }
+  b.tools++;
+  if (b.impl.length < MAX_IMPL_LINES) b.impl.push(implLine(name, args));
+
+  // 1) 用到的文件：读文件 / 看图 / 命令行里出现的数据文件
+  if (/^(read_file|vision_analyze|file_read)$/.test(name)) {
+    const f = fileOf(a);
+    if (f) { bumpIn(b.files, f); bump(feed.ent.mat, f, feed.at); }
+  }
+  // 2) 加工方式：技能名、脚本、命令
+  if (/^skill_/.test(name) && a.name) { bumpIn(b.methods, a.name); bump(feed.ent.path, a.name, feed.at); }
+  if (name === 'terminal' && a.command) {
+    const scripts = [...String(a.command).matchAll(E_SCRIPT)].map(x => x[1]);
+    for (const sc of scripts) { bumpIn(b.methods, sc); bump(feed.ent.path, sc, feed.at); }
+    if (!scripts.length) {
+      const raw = String(a.command).trim();
+      const word = (/^(cd|ls|cat|grep|sed|awk|find|node|python3?|npm|git|curl|ffmpeg|sqlite3|pkill|ps)\b/.exec(raw) || [])[1];
+      if (word && word !== 'cd') bumpIn(b.methods, TOOL_WORD[word] || ('跑 ' + word));   // cd 不算加工方式
+    }
+    for (const m of String(a.command).matchAll(E_FILE)) {
+      const f = m[1];
+      if (!CODE_EXT.test(f)) { bumpIn(b.files, f); bump(feed.ent.mat, f, feed.at); }
+    }
+  }
+  // 其它工具也算一种加工方式；但「写/改文件」是产出，不是加工方式，「cd」这类不算
+  if (!/^(terminal|read_file|vision_analyze|file_read|write_file|patch|edit_file|apply_patch)$/.test(name) && !/^skill_/.test(name)) {
+    bumpIn(b.methods, TOOLS[name] ? TOOLS[name].word : clip(name, 10));
+  }
+  // 3) 交回的文件：写文件 / 改文件 / 生成的媒体
+  if (/^(write_file|patch|edit_file|apply_patch)$/.test(name)) {
+    const f = fileOf(a);
+    if (f) { bumpIn(b.outs, f); bump(feed.ent.out, f, feed.at); }
+  }
+  if (b.impl.length <= MAX_IMPL_LINES && callId) feed.byCall.set(callId, null);
+}
+
+// 这一轮收尾：把「文件 → 加工 → 文件」摆成 输入 / 加工 / 输出 三张卡，没有的那类不摆
+function flushTurn(feed) {
+  const b = feed.turnBuf;
+  feed.turnBuf = null;
+  if (!b) return;
+  const files = topNames(b.files, 8), methods = topNames(b.methods, 8), outs = topNames(b.outs, 8);
+  if (!files.length && !methods.length && !outs.length) return;
+  const chips = arr => arr.map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(' · ');
+  let prev = null;
+  const push = (kind, title, body, mods) => {
+    const c = pushCard(feed, {
+      kind, cat: kind === 'in' ? 'ask' : (kind === 'out' ? 'write' : 'doing'),
+      title, body: clip(body, BODY_CHARS), text: '', turn: feed.turn, at: b.at,
+      impl: kind === 'proc' ? b.impl.slice(0, MAX_IMPL_LINES) : [], mods,
+    });
+    // 只补「内部实现」文本，不调 syncCard：正文是这里拼的文件清单，不能被 bodyOf 覆盖掉
+    if (c) { c.implText = (c.impl || []).slice(0, IMPL_SHOW).join('\n') + ((c.impl || []).length > IMPL_SHOW ? `\n…共 ${c.n || 1} 次` : ''); prev = c; }
+  };
+  if (files.length) push('in', `用的文件 ${files.length}` , chips(files), files.slice(0, 4).map(([n]) => modOf('in', clip(n, 10))));
+  if (methods.length) push('proc', `加工 ${methods.length} 种` , chips(methods), methods.slice(0, 4).map(([n]) => modOf('proc', clip(n, 10))));
+  if (outs.length) push('out', `交回 ${outs.length} 个文件`, chips(outs), outs.slice(0, 4).map(([n]) => modOf('out', clip(n, 10))));
+}
+
 function applyMessage(feed, m) {
   feed.stats.messages++;
   if (m.at) feed.at = Math.max(feed.at, Number(m.at) || 0);
   if (m.role === 'user') {
     const ask0 = cleanAsk(m.text);
-    const cut = splitAsk(ask0.text);
-    const pics = ask0.images || [];
-    if ((!cut.body || cut.body.length < 2) && !pics.length) { feed.stats.skipped++; return; }
-    const body = cut.body && cut.body.length >= 2 ? cut.body : `发来 ${pics.length} 张图`;
-    if (isChatter(body, pics)) { feed.stats.chatter = (feed.stats.chatter || 0) + 1; return; }   // 寒暄/应声不上画布
-    // 同一句话重复发（模型没被处理、人连着刷）：并回同一张输入卡，不刷卡片
-    if (feed.lastInput && feed.lastInput.body === body) {
-      feed.lastInput.n++; feed.lastInput.at = feed.at;
-      if (cut.impl && feed.lastInput.impl.length < MAX_IMPL_LINES) feed.lastInput.impl.push(cut.impl);
-      feed.turn = feed.lastInput.id;
-      feed.lastGroup = feed.lastInput;
-      syncCard(feed.lastInput);
-      feed.stats.merged++;
-      return;
-    }
-    scanEntities(feed, m.text, feed.at);
-    const impl = [];
-    if (cut.impl) impl.push(cut.impl);
-    for (const p of pics.slice(0, 6)) impl.push('附件：' + p);
-    if (pics.length > 6) impl.push(`…还有 ${pics.length - 6} 张`);
-    const card = pushCard(feed, {
-      kind: 'in', cat: 'ask', title: pics.length && !cut.body ? '发来图' : shortTitle(body), body,
-      impl, turn: null, at: feed.at, text: body,
-      mods: [modOf('in', pics.length ? '图片' : '原话')],
-    });
-    if (!card) return;
-    card.turn = card.id;
-    feed.turn = card.id;
-    feed.lastInput = card;
-    feed.lastAnswer = null;
-    feed.lastGroup = card;
-    // 新的一句要求：中间动作重新攒，上一句的「正在做」留在原地不动
-    feed.work = { turn: null, counts: {}, lines: [], calls: 0, err: 0 };
-    feed.doing = null;
-    syncCard(card);
+    if (!ask0.text && !(ask0.images || []).length) { return; }
+    if (isChatter(ask0.text, ask0.images)) { feed.stats.chatter = (feed.stats.chatter || 0) + 1; return; }
+    flushTurn(feed);                                  // 上一轮先收尾
+    feed.turn = (feed.turn || 0) + 1;
+    feed.turnBuf = newTurn(feed, ask0.text);
+    for (const p of ask0.images || []) bumpIn(feed.turnBuf.files, baseName(p));   // 人发的图也是「用的文件」
     return;
   }
   if (m.role === 'assistant') {
     const tools = Array.isArray(m.tools) ? m.tools : [];
     if (tools.length) {
-      // 上一张是这次要求下的「回答」、而且紧接着（90 秒内）又冒出工具调用：那说明它是中途插话，不是最终回答，撤掉它。
-      // 隔了很久才来的新动作（人又让它干活）则不撤——那是上一步的结果，留着。
-      const last = feed.cards[feed.cards.length - 1];
-      if (last && last.cat === 'answer' && last.turn === feed.turn && feed.at - (last.at || 0) <= 90000) {
-        // 就地退回「正在做」：这条要求还在干，别把半截回答当成交出的结果
-        last.cat = 'doing'; last.done = false; last.text = ''; last.title = '正在做';
-        last.wtext = workText(feed);
-        feed.doing = last;
-        feed.lastAnswer = null;
-        syncCard(last);
-      }
       for (const t of tools) for (const x of expandCalls(t.name, t.args, t.callId)) applyToolCall(feed, x.name, x.args, x.callId);
       return;
     }
-    // 纯文本回答：前奏 / 过度句不算「交出的结果」，否则一句「我先看看」也长一张卡
-    const full = polish(m.text);
-    if (full.length < 24) { feed.stats.skipped++; return; }
+    // 回答里出现文件名也算「交回的文件」；同时扫一遍实体
     scanEntities(feed, m.text, feed.at);
-    const text = answerBody(m.text);
-    if (/^(我先|让我|好的|收到|稍等|正在|我这就|明白|没问题)/.test(text) && text.length < 90) { feed.stats.skipped++; return; }
-    if (/^(Now I|Let me|I'll |I will |Okay|OK,|Sure|Got it|Looking at|First, )/i.test(text) && text.length < 160) { feed.stats.skipped++; return; }
-    if (/[：:]$/.test(text)) { feed.stats.skipped++; return; }
-    if (/^(Your request was not processed|I can't|I cannot|Gateway shutting down)/i.test(text)) { feed.stats.skipped++; return; }
-    // 系统/管道报错不是「交出的结果」（模型被打断、网关断了、超时），别在链路上冒充回答
-    if (/^(Operation interrupted|waiting for model response|Error[:：]|Traceback|API error|Request timed out|\[.*\]\s*$)/i.test(text)) { feed.stats.skipped++; return; }
-    // 这句要求「正在做」的那张卡就地变成「回答」——同一张卡随动作推进，不新建
-    const doing = feed.doing;
-    if (doing && doing.turn === feed.turn && !doing.done) {
-      doing.done = true; doing.cat = 'answer'; doing.title = '回答'; doing.text = text; doing.at = feed.at;
-      doing.mods = [modOf('out', '结论')].concat(doing.mods.filter(m => m.name !== '进度'));
-      feed.lastAnswer = doing;
-      feed.lastGroup = doing;
-      syncCard(doing);
-      return;
-    }
-    // 同一次要求下的回答合并成一张，正文跟着最新一段走
-    if (feed.lastAnswer && feed.lastAnswer.turn === feed.turn) {
-      feed.lastAnswer.text = text; feed.lastAnswer.n++; feed.lastAnswer.at = feed.at;
-      syncCard(feed.lastAnswer);
-      feed.lastGroup = feed.lastAnswer;
-      feed.stats.merged++;
-      return;
-    }
-    const card = pushCard(feed, {
-      kind: 'out', cat: 'answer', title: '回答', body: clip(text, BODY_CHARS), text,
-      turn: feed.turn, at: feed.at, impl: [], mods: [modOf('out', '结论')],
-    });
-    if (!card) return;
-    feed.lastAnswer = card;
-    feed.lastGroup = card;
-    syncCard(card);
-    return;
-  }
-  if (m.role === 'tool') {
-    const card = feed.byCall.get(m.toolCallId);
-    if (card && m.ok === false) {
-      card.err++;
-      if (card.cat === 'doing' && feed.work) { feed.work.err = (feed.work.err || 0) + 1; card.wtext = workText(feed); }
-      syncCard(card);
+    if (feed.turnBuf) {
+      for (const mm of String(m.text || '').matchAll(E_FILE)) {
+        const f = mm[1];
+        if (!CODE_EXT.test(f)) bumpIn(feed.turnBuf.outs, f);
+      }
+      const t = answerBody(m.text);
+      if (t && t.length >= 24) feed.turnBuf.answer = t;
     }
   }
 }
 
 // 喂一批消息（按 id 升序）。返回这次有没有改动。
-function applyMessages(feed, msgs) {
+function applyMessages(feed, msgs, opts) {
   let changed = false;
   for (const m of msgs || []) {
     const id = Number(m.id) || 0;
@@ -562,6 +580,7 @@ function applyMessages(feed, msgs) {
     if (id && id > feed.lastId) feed.lastId = id;
     changed = true;
   }
+  if (!opts || opts.flush !== false) flushTurn(feed);   // 最后半轮也摆出来
   return changed;
 }
 
@@ -591,4 +610,4 @@ function feedDoc(feed) {
   };
 }
 
-module.exports = { createFeed, applyMessages, feedDoc, polish, cleanAsk, splitAsk, toolOf, implLine, isChatter, scanEntities, TOOLS, SKIP, MAX_CARDS };
+module.exports = { createFeed, applyMessages, feedDoc, polish, cleanAsk, splitAsk, toolOf, implLine, isChatter, scanEntities, flushTurn, TOOLS, SKIP, MAX_CARDS };
