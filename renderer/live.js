@@ -76,12 +76,52 @@ function paintEnts(d) {
   box.classList.toggle('off', !html);
 }
 
+// 解析链路的状态：让平台主管把这条对话解析成「用到的文件 → 加工方式 → 产出的文件」。
+// 解析结果取代「按消息机械归并」的粗版；解析失败就继续显示粗版，不空白。
+let analyzing = false, lastAnalyzed = 0, analyzedKey = '';
+const ANALYZE_EVERY = 25000;          // 跟随中最多每 25 秒重新解析一次
+const ANALYZE_MIN_MSGS = 4;           // 少于这个数不值得调模型
+
+async function analyzeNow(manual) {
+  if (analyzing || !cur) return;
+  const found = list.find(c => c.key === cur);
+  if (!found || !window.tcflow.liveAnalyze) return;
+  analyzing = true;
+  const btn = document.querySelector('#lana');
+  if (btn) { btn.disabled = true; btn.textContent = '解析中…'; }
+  try {
+    const r = await window.tcflow.liveAnalyze({ profile: found.profile, session: found.session });
+    if (r && r.ok && r.plan && r.plan.cards.length) {
+      const d = {
+        conv: { key: cur, who: found.who, doing: found.doing },
+        at: doc ? doc.at : Math.floor(Date.now() / 1000),
+        cards: r.plan.cards.map(c => ({ id: c.id, kind: c.kind, title: c.title, body: c.body, mods: c.mods || [], impl: c.impl || '', n: 1 })),
+        edges: r.plan.edges || [],
+        name: r.plan.name || '',
+        entities: doc && doc.entities,
+        stats: doc && doc.stats,
+      };
+      fitted = false;
+      renderDoc(d, { analyzed: true });
+      analyzedKey = cur;
+      setStat(`已解析：${d.cards.length} 张卡${d.name ? ' · ' + d.name : ''}`);
+    } else {
+      setStat('解析没成：' + ((r && r.error) || '未知原因') + '（先看粗略版）');
+    }
+  } catch (e) {
+    setStat('解析失败：' + (e && e.message || e));
+  } finally {
+    analyzing = false; lastAnalyzed = Date.now();
+    if (btn) { btn.disabled = false; btn.textContent = '解析链路'; }
+  }
+}
+
 async function pick(key) {
   if (!key || key === cur) return;
   const found = list.find(c => c.key === key);
   if (!found) return;
   cur = key;
-  doc = null; fitted = false; pos.clear();
+  doc = null; fitted = false; pos.clear(); analyzedKey = ''; lastAnalyzed = 0;
   canvas.querySelectorAll('.node').forEach(el => el.remove());   // 换对话：旧内容一点不留
   edgesSvg.innerHTML = '';
   paintEmpty(); paintStat();
@@ -95,13 +135,22 @@ async function pick(key) {
 
 async function follow(on) {
   following = !!on;
-  $('#lfol').checked = following;
+$('#lfol').checked = following;
   const found = list.find(c => c.key === cur);
   if (!cur || !found) { paintStat(); return; }
   const r = await window.tcflow.liveFollow({ profile: found.profile, session: found.session, on: following });
-  if (r && r.doc) renderDoc(r.doc);
+  if (r && r.doc) renderDoc(r.doc, { fromTick: true });
   paintStat(); paintEmpty();
+  maybeAnalyze();
 }
+function maybeAnalyze() {
+  if (analyzing || !following || !cur) return;
+  const n = doc && doc.stats ? (doc.stats.messages || 0) : 0;
+  if (n < ANALYZE_MIN_MSGS) return;
+  if (analyzedKey === cur && Date.now() - lastAnalyzed < ANALYZE_EVERY) return;
+  setTimeout(() => analyzeNow(false), 500);
+}
+
 async function stopFollow() {
   const found = list.find(c => c.key === cur);
   following = false;
@@ -130,6 +179,7 @@ function cardEl(c) {
   el.innerHTML = `
     <div class="hd"><span class="kind">${KIND[c.kind] || '加工'}</span><div class="t">${esc(c.title)}</div></div>
     <div class="body">${esc(c.body)}</div>
+    ${c.note ? `<div class="note">↳ ${esc(c.note)}</div>` : ''}
     ${mods ? `<div class="mods"><div class="mline"><span class="mlab">${c.kind === 'in' ? '素材' : c.kind === 'out' ? '成果' : '工具'}</span><span class="mchips">${mods}</span></div></div>` : ''}
     ${c.impl ? `<details class="limpl"><summary>⚙ 内部实现</summary><pre>${esc(c.impl)}</pre></details>` : ''}`;
   const d = el.querySelector('details.limpl');
@@ -139,8 +189,10 @@ function cardEl(c) {
 
 const sigOf = c => JSON.stringify([c.kind, c.title, c.body, c.impl, (c.mods || []).map(m => m.type + ':' + m.name), c.n]);
 
-function renderDoc(d) {
+function renderDoc(d, opts) {
   if (!d || !Array.isArray(d.cards)) return;
+  // 已经解析出正式链路，就别让「按消息粗归并」的版本把它盖掉（解析结果自己带 opts.analyzed）
+  if (analyzedKey && analyzedKey === cur && !(opts && opts.analyzed)) return;
   const switched = doc && doc.conv && d.conv && doc.conv.key !== d.conv.key;
   const before = (doc && doc.cards || []).length;
   doc = d;
@@ -167,22 +219,55 @@ function renderDoc(d) {
 // 排布：一条链按顺序从左往右排，一行放不下或来了新的要求就换行（换行后仍是从左往右）。
 // 这样「正在长的那张卡」永远在右下角，视野跟着它走时还能看见前几步；整条链也不会拉成一根细高的柱子。
 function layout() {
-  const PER_ROW = 5, COLW = 330;
-  let rowY = 0, rowH = 0, col = 0;
+  // 树形排布：按「从入口走了几步」分列，同一列里上下堆；分叉自然就在同一列上下错开。
+  // 这样「同一素材换不同做法」会读成树枝，而不是被拍平成一条流水账。
+  const COLW = 340, ROWGAP = 26;
   pos.clear();
-  for (const c of doc ? doc.cards : []) {
-    const el = canvas.querySelector(`.node[data-id="${c.id}"]`);
-    if (!el) continue;
-    if (col > 0 && (c.kind === 'in' || col >= PER_ROW)) { rowY += rowH + GAP; rowH = 0; col = 0; }
-    const x = col * COLW, y = rowY;
-    el.style.left = (x + OX) + 'px';
-    el.style.top = (y + OY) + 'px';
-    const h = el.offsetHeight || 150;
-    pos.set(c.id, { x: x + OX, y: y + OY, w: el.offsetWidth || 244, h });
-    rowH = Math.max(rowH, h);
-    col++;
+  const cards = doc ? doc.cards : [];
+  if (!cards.length) return;
+  const ids = cards.map(c => c.id);
+  const out = new Map(ids.map(i => [i, []]));
+  const indeg = new Map(ids.map(i => [i, 0]));
+  for (const [a, b] of (doc.edges || [])) {
+    if (!out.has(a) || !out.has(b)) continue;
+    out.get(a).push(b);
+    indeg.set(b, (indeg.get(b) || 0) + 1);
+  }
+  // 深度：从没有入边的节点开始 BFS；环/孤岛兜底按顺序补
+  const depth = new Map();
+  const queue = ids.filter(i => (indeg.get(i) || 0) === 0);
+  if (!queue.length) queue.push(ids[0]);
+  for (const i of queue) depth.set(i, 0);
+  while (queue.length) {
+    const i = queue.shift();
+    for (const j of out.get(i) || []) {
+      const d = (depth.get(i) || 0) + 1;
+      if (!depth.has(j) || depth.get(j) < d) { depth.set(j, d); queue.push(j); }
+    }
+  }
+  ids.forEach((i, k) => { if (!depth.has(i)) depth.set(i, 0); });
+
+  const byDepth = new Map();
+  for (const c of cards) {
+    const d = depth.get(c.id) || 0;
+    if (!byDepth.has(d)) byDepth.set(d, []);
+    byDepth.get(d).push(c);
+  }
+  for (const [d, list] of [...byDepth.entries()].sort((a, b) => a[0] - b[0])) {
+    let y = 0;
+    for (const c of list) {
+      const el = canvas.querySelector(`.node[data-id="${c.id}"]`);
+      if (!el) continue;
+      const x = d * COLW;
+      el.style.left = (x + OX) + 'px';
+      el.style.top = (y + OY) + 'px';
+      const h = el.offsetHeight || 150;
+      pos.set(c.id, { x: x + OX, y: y + OY, w: el.offsetWidth || 244, h });
+      y += h + ROWGAP;
+    }
   }
 }
+
 
 function drawEdges() {
   if (!doc) return;
@@ -257,6 +342,7 @@ function bindCanvas() {
     applyZoom(); drawEdges();
   }, { passive: false });
   $('#zoomIn').onclick = () => { zoom = Math.min(1.8, zoom + 0.1); applyZoom(); drawEdges(); };
+  $('#lana').onclick = () => analyzeNow(true);   // 常驻在这里，别塞进 follow()（不然不拨开关就点不动）
   $('#zoomOut').onclick = () => { zoom = Math.max(0.3, zoom - 0.1); applyZoom(); drawEdges(); };
   $('#zoomReset').onclick = () => { zoom = 1; applyZoom(); fit(); drawEdges(); };
   addEventListener('resize', () => { drawEdges(); });

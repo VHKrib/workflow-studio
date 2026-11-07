@@ -53,3 +53,12 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
 .lseg b{font-weight:600;color:var(--muted-foreground);white-space:nowrap}
 .lseg i{font-style:normal;background:color-mix(in srgb, var(--foreground) 7%, transparent);border-radius:6px;padding:1px 6px;white-space:nowrap}
 .lseg i em{font-style:normal;opacity:.55;margin-left:3px}
+
+/* 解析链路按钮（会调一次平台主管，结果取代粗版） */
+.lana{margin-left:10px;padding:3px 10px;border:1px solid var(--soft-line);border-radius:7px;background:var(--card);
+  font-size:12px;cursor:pointer;color:var(--ink)}
+.lana:hover{background:color-mix(in srgb, var(--foreground) 6%, transparent)}
+.lana:disabled{opacity:.55;cursor:default}
+
+/* 精修理由（为什么改 / 和上一版差在哪） */
+.node .note{margin-top:6px;font-size:11.5px;line-height:1.5;color:var(--ink-2);opacity:.85;border-left:2px solid var(--soft-line);padding-left:6px}
