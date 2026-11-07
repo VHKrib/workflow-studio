@@ -90,3 +90,10 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
 .node.st-failed{border-color:color-mix(in srgb,#c0392b 34%,var(--line))}
 /* 连线上的「改」「新版」小字 */
 #edges .elab{font-family:var(--sans,inherit);opacity:.9;user-select:none;pointer-events:none}
+
+/* 悬停素材/成果 chip：说清它具体是什么（名字 / 来自哪张卡 / 明细），比系统原生 title 快、也不被截断 */
+.ltip{position:fixed;z-index:60;display:none;max-width:330px;padding:8px 10px;border-radius:10px;
+  background:var(--card,#fffefa);border:1px solid var(--line-strong,#d9d3c7);box-shadow:0 8px 24px rgba(17,17,17,.12);
+  font-size:11.5px;line-height:1.65;color:var(--ink-2);white-space:pre-wrap;word-break:break-word;pointer-events:none}
+.ltip.on{display:block}
+.ltip b{display:block;font-size:12px;color:var(--ink);margin-bottom:2px}
