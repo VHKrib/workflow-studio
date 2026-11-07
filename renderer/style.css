@@ -84,6 +84,13 @@ button.ghost{background:transparent}
 .wf .x{position:absolute;right:7px;top:7px;font-size:11px;color:#c0b8ad;opacity:0}
 .wf:hover .x{opacity:1}
 .wf .x:hover{color:var(--danger)}
+/* 实时工作流：右栏列表下面那张卡，点开只读直播窗口（不是一条已存链路，所以用虚线边） */
+.livecard{margin-top:10px;padding:9px 10px;border:1px dashed var(--line-strong);border-radius:var(--radius-sm);
+  cursor:pointer;background:var(--card);transition:border-color .15s,background .15s}
+.livecard:hover{border-color:var(--accent-line);background:var(--accent-soft)}
+.livecard .wn{font-size:12.8px;font-weight:600;color:var(--ink)}
+.livecard .ws{font-size:11px;color:var(--ink-3);margin-top:2px}
+
 
 /* 画布 */
 /* 外层只做定位（浮层不跟着滚），#wrap 才是滚动/平移层 */
