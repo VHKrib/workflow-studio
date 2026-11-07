@@ -101,7 +101,8 @@ async function listConversations() {
         'msgs', message_count, 'tools', tool_call_count))
       FROM (SELECT * FROM sessions
             WHERE coalesce(last_activity_at, ended_at, started_at) > ${Math.floor(cutoff)}
-              AND coalesce(message_count, 0) > 0
+              AND coalesce(message_count, 0) >= 3          -- 一问一答的临时会话（多半是我们自己分析时开的）不列出来
+              AND coalesce(source, '') <> 'workflow-studio'
             ORDER BY coalesce(last_activity_at, ended_at, started_at) DESC LIMIT ${LIST_PER_DB})`;
     const r = await query(db.file, sql);
     if (r.error || !Array.isArray(r.rows)) return;
