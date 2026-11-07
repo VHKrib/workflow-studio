@@ -109,20 +109,9 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
   background:var(--surface,#f7f5f1);border:1px solid var(--soft-line,#e7e1d6);font-family:var(--mono,ui-monospace,Menlo,monospace);
   font-size:11px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--ink-2)}
 
-/* 编辑面板：双击卡片从右边滑出来；里面就是主画布那张卡片信息（复用 .panel 的样式） */
-.ledit{position:absolute;top:0;right:0;bottom:0;width:360px;display:none;z-index:40;
-  background:var(--surface);border-left:1px solid var(--line-strong);box-shadow:-10px 0 28px rgba(17,17,17,.08)}
-.ledit.on{display:block}
-.ledit .lpanel{height:100%;border:0;background:transparent}
-.ledit .ph{display:flex;align-items:center;gap:8px}
-.ledit .ph b{flex:1}
-.ledit .ph span{cursor:pointer;color:var(--ink-3);font-size:12px}
-.ledit .ph span:hover{color:var(--ink)}
-.ledit .pb{padding-bottom:24px}
-.ledit .pm-list{display:flex;flex-wrap:wrap;gap:6px}
-.ledit .pm-list .mod.ed{cursor:default}
-.ledit .prow{display:flex;gap:6px;align-items:center;margin:4px 0}
-.ledit .prow input{font-size:11.5px}
-.ledit .prow .pn{flex:0 0 92px}
-.ledit .prow .pp{flex:1}
-.node.dragging{cursor:grabbing}
+/* 卡片面板：在左边，位置和宽度跟主画布一样；收起时压成 0 宽（不 display:none，画布不重排） */
+.lmain{flex:1 1 auto;display:flex;min-height:0}
+.ledit{width:0;overflow:hidden;visibility:hidden;flex:none;border-right:1px solid var(--line);
+  transition:width .16s ease,visibility .16s}
+.ledit.on{width:364px;visibility:visible}
+.lwrap{flex:1 1 auto;min-width:0}
