@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, webContents } = require('electron');
 const { execFile, spawn } = require('child_process');
 const fs = require('fs');
 const os = require('os');
@@ -162,7 +162,7 @@ function createWindow() {
     title: '工作流开发平台',
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#f5f3ef',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false, webviewTag: true },
   });
   win.setBounds({ x: 20, y: 44, width: 1380, height: 880 });
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -175,7 +175,7 @@ function createWindow() {
 // ---------- 独立实时画布：只读跟一条别人的对话 ----------
 // 主窗口是唯一的写者；这个窗口只显示主进程读出来的东西（不写会话库、不写链路状态）。
 let MAIN_WIN = null;
-const LIVE = { win: null, timer: 0, busy: false, feed: null, conv: null, msgs: [], plan: null, doc: null, lastId: 0, lastError: '' };
+const LIVE = { wc: null, timer: 0, busy: false, feed: null, conv: null, msgs: [], plan: null, doc: null, lastId: 0, lastError: '' };
 const LIVE_STATE = { profile: '', session: '', on: false };
 const LIVE_POLL_MS = 800;          // 每 ≤1 秒读一次增量
 
@@ -195,11 +195,24 @@ function saveLiveState() {
   try { fs.writeFileSync(liveStateFile(), JSON.stringify(LIVE_STATE, null, 2) + '\n', 'utf8'); } catch (e) { }
 }
 function liveSender(e) {
-  return !!(LIVE.win && !LIVE.win.isDestroyed() && e && e.sender && e.sender.id === LIVE.win.webContents.id);
+  return !!(LIVE.wc && !LIVE.wc.isDestroyed() && e && e.sender && e.sender.id === LIVE.wc.id);
 }
 function sendLive(doc) {
-  if (!LIVE.win || LIVE.win.isDestroyed()) return;
-  try { LIVE.win.webContents.send('live:doc', doc); } catch (e) { }
+  if (!LIVE.wc || LIVE.wc.isDestroyed()) return;
+  try { LIVE.wc.send('live:doc', doc); } catch (e) { }
+}
+// 实时画布现在嵌在主窗口里（<webview>）：主进程认它的 webContents，读写都往那儿发
+function attachLiveView(id) {
+  try {
+    const wc = webContents.fromId(Number(id));
+    if (!wc || wc.isDestroyed()) return { ok: false, error: '视图已经不在了' };
+    if (LIVE.wc && LIVE.wc !== wc && !LIVE.wc.isDestroyed()) { try { LIVE.wc.removeAllListeners('destroyed'); } catch (e) { } }
+    LIVE.wc = wc;
+    wc.on('destroyed', () => { if (LIVE.wc === wc) { LIVE.wc = null; stopLiveTimer(); } });
+    if (LIVE_STATE.on && LIVE_STATE.profile && LIVE_STATE.session) startLiveTimer();
+    console.log('[实时画布] 内嵌视图已接上（webContents ' + wc.id + '）');
+    return { ok: true };
+  } catch (e) { return { ok: false, error: String(e && e.message || e) }; }
 }
 function stopLiveTimer() { if (LIVE.timer) clearInterval(LIVE.timer); LIVE.timer = 0; }
 function startLiveTimer() { stopLiveTimer(); LIVE.timer = setInterval(liveTick, LIVE_POLL_MS); }
@@ -251,25 +264,10 @@ async function liveTick() {
   } finally { LIVE.busy = false; }
 }
 function openLiveWindow() {
-  if (LIVE.win && !LIVE.win.isDestroyed()) { LIVE.win.show(); LIVE.win.focus(); return { ok: true, existing: true }; }
-  LIVE.win = new BrowserWindow({
-    width: 1080, height: 760, minWidth: 720, minHeight: 520,
-    title: '实时画布',
-    parent: MAIN_WIN || undefined,                 // 关主窗口时跟着关
-    titleBarStyle: 'hiddenInset',
-    backgroundColor: '#f5f3ef',
-    webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, nodeIntegration: false },
-  });
-  LIVE.win.loadFile(path.join(__dirname, 'renderer', 'live.html'));
-  LIVE.win.webContents.on('render-process-gone', (_e, d) => console.log('[实时画布] 渲染进程退出：' + JSON.stringify(d || {})));
-  LIVE.win.on('closed', () => {
-    LIVE.win = null;
-    stopLiveTimer();                               // 窗口没了就不再读；开关状态留着，重开窗口会接着跟
-    console.log('[实时画布] 窗口关了：停止读取（选中的对话与开关状态已记住）');
-  });
+  focusMain();
+  if (MAIN_WIN && !MAIN_WIN.isDestroyed()) MAIN_WIN.webContents.send('live:show');
   return { ok: true };
 }
-
 // 解析结果落盘：跑完一次就存下来，重开窗口/切回来直接显示；不满意再点「重新生成」，
 // 新的没拆成功之前，旧的那份一直留着（不拿半份覆盖好的）。
 const LIVE_DOC_DIR = () => path.join(app.getPath('userData'), 'live');
@@ -658,6 +656,8 @@ ipcMain.handle('live:doc:save', (_e, doc) => {
 });
 
 ipcMain.handle('live:open', () => openLiveWindow());
+ipcMain.handle('live:attach', (_e, id) => attachLiveView(id));
+ipcMain.handle('app:dir', () => __dirname);
 ipcMain.handle('live:list', () => livefeed.listConversations().catch(err => ({ error: String(err && err.message || err) })));
 ipcMain.handle('live:state', () => ({ profile: LIVE_STATE.profile, session: LIVE_STATE.session, on: LIVE_STATE.on, following: !!LIVE.timer, dir: livefeed.ROOT }));
 ipcMain.handle('live:snapshot', async (_e, { profile, session }) => {
