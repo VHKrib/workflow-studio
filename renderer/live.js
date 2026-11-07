@@ -193,18 +193,40 @@ function modsRow(c) {
   return lines ? `<div class="mods">${lines}</div>` : '';
 }
 
-function cardEl(c) {
+// 加工卡和主画布一样是「三段」：素材（哪张上游卡喂进来的）/ 工具（自己怎么做）/ 成果（交出去的是什么）。
+// 只读窗口不能拖插槽，但「用什么 → 出来什么」必须看得见。
+function socketRows(c, d) {
+  const cards = (d && d.cards) || [];
+  const byId = new Map(cards.map(x => [x.id, x]));
+  const ups = ((d && d.edges) || []).filter(e => e[1] === c.id).map(e => byId.get(e[0])).filter(Boolean);
+  const downs = ((d && d.edges) || []).filter(e => e[0] === c.id).map(e => byId.get(e[1])).filter(Boolean);
+  const chips = (list, fallback) => list.flatMap(src =>
+    (src.mods && src.mods.length) ? src.mods.map(m => ({ name: m.name, t: m.type })) : [{ name: src.title, t: fallback }]
+  ).filter(x => x.name).slice(0, 6);
+  const line = (lab, list, fallback, ph) => `<div class="mline"><span class="mlab">${lab}</span><span class="mchips"${list.length ? '' : ` data-ph="${ph}"`}>` +
+    (list.length ? list.map(m => `<span class="mod t-${m.t}">${esc(m.name)}</span>`).join('') : '') + '</span></div>';
+  if (c.kind !== 'proc') {
+    const ms = (c.mods || []).map(m => ({ name: m.name, t: m.type }));
+    if (!ms.length) return '';
+    return `<div class="mods">${line(MOD_LAB[c.kind] || '模块', ms, '', '')}</div>`;
+  }
+  return `<div class="mods">${line('素材', chips(ups, 'mat'), 'mat', '没接到素材')}` +
+    `${line('工具', (c.mods || []).map(m => ({ name: m.name, t: m.type })), 'tool', '没写怎么做')}` +
+    `${line('成果', chips(downs, 'res'), 'res', '没有产出')}</div>`;
+}
+
+function cardEl(c, d) {
   const el = document.createElement('div');
   el.className = 'node k-' + c.kind;
   el.dataset.id = c.id;
   el.innerHTML = `
     <div class="hd"><span class="kind">${KIND_LABEL[c.kind] || '加工'}</span><div class="t">${esc(c.title)}</div><div class="st"></div></div>
     <div class="body" data-ph="${KIND_PH[c.kind] || ''}">${esc(c.body)}</div>
-    ${modsRow(c)}
+    ${socketRows(c, d)}
     <div class="ft"><div class="checks"></div>${c.impl ? '<span class="gar" title="内部实现已封装：卡片上不显示，点开看">⚙</span>' : ''}</div>
     ${c.impl ? `<details class="limpl"><summary>⚙ 内部实现</summary><pre>${esc(c.impl)}</pre></details>` : ''}`;
-  const d = el.querySelector('details.limpl');
-  if (d) d.addEventListener('toggle', () => { layout(); drawEdges(); });
+  const det = el.querySelector('details.limpl');
+  if (det) det.addEventListener('toggle', () => { layout(); drawEdges(); });
   return el;
 }
 
@@ -225,8 +247,8 @@ function renderDoc(d, opts) {
     keep.add(c.id);
     const sig = sigOf(c);
     const old = live.get(c.id);
-    if (!old) { const el = cardEl(c); el.dataset.sig = sig; canvas.appendChild(el); continue; }
-    if (old.dataset.sig !== sig) { const el = cardEl(c); el.dataset.sig = sig; old.replaceWith(el); }
+    if (!old) { const el = cardEl(c, d); el.dataset.sig = sig; canvas.appendChild(el); continue; }
+    if (old.dataset.sig !== sig) { const el = cardEl(c, d); el.dataset.sig = sig; old.replaceWith(el); }
   }
   for (const [id, el] of live) if (!keep.has(id)) el.remove();
 
