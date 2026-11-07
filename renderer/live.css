@@ -115,3 +115,29 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
   transition:width .16s ease,visibility .16s}
 .ledit.on{width:364px;visibility:visible}
 .lwrap{flex:1 1 auto;min-width:0}
+
+/* 双击面板里的三段：素材 / 模型与接口能力 / 成果（面板自己滚动，不截断） */
+.lx{margin-top:16px;border-top:1px dashed var(--line);padding-top:10px}
+.lx h4{margin:14px 0 6px;font-size:11.5px;color:var(--ink-3);font-weight:600;letter-spacing:.02em}
+.lx h4:first-child{margin-top:2px}
+.lx h4 b{color:var(--ink);font-weight:600}
+.lxlist{display:flex;flex-direction:column;gap:6px}
+.lxrow{display:flex;align-items:center;gap:8px;padding:6px;border:1px solid var(--line);border-radius:8px;background:#fff}
+.lxthumb{width:44px;height:44px;flex:none;border-radius:6px;overflow:hidden;background:var(--paper);
+  display:flex;align-items:center;justify-content:center;font-size:10px;color:var(--ink-3);cursor:zoom-in}
+.lxthumb img{width:100%;height:100%;object-fit:cover}
+.lxname{flex:1;min-width:0;font-size:12px;color:var(--ink);word-break:break-all}
+.lxname em{display:block;font-style:normal;font-size:10.5px;color:var(--ink-3);margin-top:2px}
+.lxmeta{flex:none;font-size:10.5px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.lxopen{flex:none;font-size:10.5px;padding:2px 7px;border:1px solid var(--line);border-radius:6px;background:#fff;cursor:pointer}
+.lxopen:hover{border-color:var(--accent-line);color:var(--accent-ink)}
+.lxcap{font-size:11.5px;line-height:1.6;color:var(--ink-2);background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:7px 9px}
+.lxcap b{color:var(--ink);font-weight:600}
+.lxcap .unknown{color:#b45309}
+.lx-empty{font-size:11.5px;color:var(--ink-3);padding:4px 2px}
+/* 放大查看 */
+.lview{position:fixed;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;gap:10px;
+  background:rgba(20,18,16,.82);z-index:200;cursor:zoom-out}
+.lview.on{display:flex}
+.lview img{max-width:86vw;max-height:80vh;border-radius:10px;box-shadow:0 18px 60px rgba(0,0,0,.45);background:#fff}
+.lviewcap{color:#f4efe7;font-size:12px;opacity:.9}
