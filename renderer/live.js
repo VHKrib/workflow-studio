@@ -187,10 +187,24 @@ async function stopFollow() {
   const box = () => document.getElementById('ltip');
   let seq = 0;
   const sizeOf = n => n >= 1048576 ? (n / 1048576).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B';
+  let lastX = 0, lastY = 0;
   const place = (el, x, y) => {
+    lastX = x; lastY = y;
     const r = el.getBoundingClientRect();
-    el.style.left = Math.max(8, Math.min(x + 14, window.innerWidth - r.width - 12)) + 'px';
-    el.style.top = Math.max(8, Math.min(y + 16, window.innerHeight - r.height - 12)) + 'px';
+    const left = Math.max(8, Math.min(x + 14, window.innerWidth - r.width - 12));
+    let top = Math.max(8, Math.min(y + 16, window.innerHeight - r.height - 12));
+    if (top + r.height > window.innerHeight - 8) top = Math.max(8, window.innerHeight - r.height - 8);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  };
+  // 图片/视频是后加载的：尺寸一变就重新摆，别让它顶出窗口
+  const replaceOnLoad = el => {
+    const media = el.querySelector('img,video');
+    if (!media) return;
+    const fix = () => { if (el.classList.contains('on')) place(el, lastX, lastY); };
+    if (media.complete || media.readyState >= 1) fix();
+    media.addEventListener('load', fix, { once: true });
+    media.addEventListener('loadedmetadata', fix, { once: true });
   };
   const showText = (el, chip, x, y) => {
     const raw = chip.dataset.tip || '';
@@ -209,6 +223,7 @@ async function stopFollow() {
     el.innerHTML = head + body;
     el.classList.add('on', 'rich');
     place(el, x, y);
+    replaceOnLoad(el);
   };
   const show = (chip, x, y) => {
     const el = box(); if (!el) return;
