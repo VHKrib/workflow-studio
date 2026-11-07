@@ -82,6 +82,9 @@ Three ideas it is built around:
 - **Multiple canvases** — left sidebar lists workflows; each has its own cards, edges and agent; export/import as JSON.
 - **Talk a workflow into existence** — 「对话建链路」 opens a temporary canvas: your sentence becomes a draft input card right away, the agent's plan grows card by card while it streams, and 「存成正式」 turns it into a normal workflow (or `✕` throws it away).
 - **Copy a workflow** — one click (`复制链路` or the `⧉` on any row) makes an independent copy: cards, edges, modules, wording, executor. Rename suffix keeps the list unambiguous; editing one never touches the other.
+- **Watch a real conversation turn into a chain** — 「⋯ → 实时画布」 opens a separate, read-only window: pick a recent conversation (who / when / what it is doing), flip **跟随**, and the canvas shows only what the request was and what came back from it — a card per thing you asked for, plus the file / answer / handoff that was delivered. Reads, commands and lookups do not get cards of their own: they fold into one plain-language line ("read 3 files · ran 2 commands") on that request's card, with every command under **⚙ 内部实现**, and the card turns into the answer in place when the reply lands. Reads are **read-only** (`sqlite3 -readonly` + `?mode=ro`); the window never writes, and closing it leaves the main window — and the conversation — untouched.
+
+  ![live canvas](docs/live.png)
 - **Check before running** — a local static pass flags broken links, process cards missing an input or output, empty cards and chains split in two — each with the card name and how to fix it. A **read-only rehearsal** then asks the executor, card by card, what it would do and what it is missing; it runs with **zero tools** (no commands, no file writes, no messages, no publishing, no spending) and the answers land back on the cards. One click clears them.
 - **Radial menu** — press and hold right mouse button (or `Space`) for add / ask / duplicate / delete / validate / run.
 
@@ -262,14 +265,20 @@ node with no incoming edge. Nothing is stored server-side; export the JSON if yo
 main.js            Electron main: window, agent list, chat bridge, file dialogs
 preload.js         contextBridge -> window.tcflow
 chain.js           read-only scan of another agent's own records (profile, skills, state.db)
+livefeed.js        read-only session feed: recent conversations across profiles + message increments
+actmap.js          conversation actions -> chain cards (pure: merge, update in place, plain-language front)
 linkstore.js       the shared per-workflow state file (<userData>/links/<id>.json)
 versions.js        version snapshots, trimmed to the newest 20
 renderer/
   index.html       top bar, canvas, side panel, run dialog, radial menu
   app.js           state, card render, edges, pan/zoom, radial menu, option parsing
+  live.html        the separate read-only live canvas window (pick a conversation + follow switch)
+  live.js          live canvas: render the feed doc, wrap layout, follow tail, remember state
   style.css        design tokens (paper #f5f3ef / ink #111 / orange #ff5a1f)
+  live.css         only what the live window adds (bar, switch, impl fold)
 tools/shot.js      CDP screenshot helper (reads CDP_PORT, defaults to 9222)
 tools/eval.js      CDP evaluate helper (headless DOM assertions)
+tools/verify-actmap.js  offline check: a real conversation -> which cards (no network, no model)
 tools/scan-public.js  scans everything git tracks for names/paths that must not go public
 docs/              screenshot + the socket animation (dock.gif, recorded by cdp-dock.js --record)
 skills/            workflow-studio: development handbook, CDP checks, and fixtures/ with archived answers

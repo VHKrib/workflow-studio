@@ -1,0 +1,47 @@
+/* 独立实时画布：只放直播这一件事——一条对话、一个开关、一块只读画布。
+   颜色 / 卡片样式全部复用 style.css 的平台 token，这里只补顶栏、开关和「内部实现」折叠块。 */
+body.live{display:flex;flex-direction:column;overflow:hidden}
+
+.lbar{flex:none;height:46px;display:flex;align-items:center;gap:10px;
+  padding:0 14px 0 88px;background:var(--surface);border-bottom:1px solid var(--line);-webkit-app-region:drag}
+.lbrand{font-size:12.5px;font-weight:600;letter-spacing:.04em;color:var(--ink-3);flex:none}
+.lpick{-webkit-app-region:no-drag;position:relative;display:flex;align-items:center;min-width:0;flex:0 1 520px}
+.lpick select{-webkit-app-region:no-drag;appearance:none;-webkit-appearance:none;width:100%;
+  font:inherit;font-size:12.5px;color:var(--ink);background:#fff;border:1px solid var(--line-strong);
+  border-radius:var(--radius-sm);padding:5px 26px 5px 9px;outline:none;cursor:pointer;text-overflow:ellipsis}
+.lpick select:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.lpick::after{content:'';position:absolute;right:10px;top:50%;width:6px;height:6px;pointer-events:none;
+  border-right:1.5px solid var(--ink-3);border-bottom:1.5px solid var(--ink-3);transform:translateY(-70%) rotate(45deg)}
+
+/* 一个开关：开 = 跟随（每秒读一次增量），关 = 停下、画面留在原地 */
+.lswitch{-webkit-app-region:no-drag;display:flex;align-items:center;gap:7px;cursor:pointer;user-select:none;flex:none}
+.lswitch input{position:absolute;opacity:0;width:0;height:0}
+.ltrack{position:relative;width:34px;height:19px;border-radius:999px;background:var(--line-strong);transition:background .15s}
+.ltrack::after{content:'';position:absolute;left:2px;top:2px;width:15px;height:15px;border-radius:50%;
+  background:#fff;box-shadow:0 1px 2px rgba(17,17,17,.28);transition:transform .15s}
+.lswitch input:checked + .ltrack{background:var(--accent)}
+.lswitch input:checked + .ltrack::after{transform:translateX(15px)}
+.lswitch input:focus-visible + .ltrack{box-shadow:0 0 0 3px var(--accent-soft)}
+.lword{font-size:12.5px;color:var(--ink-2)}
+.lswitch input:checked ~ .lword{color:var(--accent-ink)}
+
+.lstat{font-size:11.5px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lwrap{flex:1 1 auto;position:relative;min-height:0}
+
+/* 空画面的一句话（有卡就收） */
+.lempty{position:absolute;left:50%;top:46%;transform:translate(-50%,-50%);pointer-events:none;
+  font-size:12.5px;color:var(--ink-3);background:color-mix(in srgb,var(--surface) 88%,transparent);
+  padding:9px 16px;border:1px solid var(--soft-line);border-radius:999px}
+.lempty.off{display:none}
+
+/* 这张卡是直播里长出来的：不许拖、不许改，只读 */
+body.live .node{cursor:default}
+body.live .node .body{-webkit-line-clamp:5}
+details.limpl{margin:0 12px 10px;font-size:10.5px;color:var(--ink-3)}
+details.limpl summary{cursor:pointer;list-style:none;color:var(--accent-ink);opacity:.85}
+details.limpl summary::-webkit-details-marker{display:none}
+details.limpl summary:hover{opacity:1}
+details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
+  background:var(--card);border:1px solid var(--soft-line);border-radius:8px;
+  font-family:var(--mono);font-size:10.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word;
+  color:var(--ink-2);user-select:text;cursor:text}

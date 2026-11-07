@@ -30,6 +30,17 @@ contextBridge.exposeInMainWorld('tcflow', {
     ipcRenderer.on('link:external', h);
     return () => ipcRenderer.removeListener('link:external', h);
   },
+  // 独立实时画布（只读）：开窗 / 列最近有活动的对话 / 上次的选中与开关 / 跟随 / 单次取一份
+  openLive: () => ipcRenderer.invoke('live:open'),
+  liveList: () => ipcRenderer.invoke('live:list'),
+  liveState: () => ipcRenderer.invoke('live:state'),
+  liveFollow: (payload) => ipcRenderer.invoke('live:follow', payload),
+  liveSnapshot: (payload) => ipcRenderer.invoke('live:snapshot', payload),
+  onLiveDoc: (cb) => {
+    const h = (_e, doc) => cb(doc);
+    ipcRenderer.on('live:doc', h);
+    return () => ipcRenderer.removeListener('live:doc', h);
+  },
   saveFlow: (flow) => ipcRenderer.invoke('flow:save', flow),
   openFlow: () => ipcRenderer.invoke('flow:open'),
 });
