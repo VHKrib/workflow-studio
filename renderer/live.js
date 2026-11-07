@@ -266,7 +266,7 @@ const KIND_MOD = { in: 'mat', proc: 'tool', out: 'res' };
 const MOD_T = { mat: '素材', tool: '工具', res: '成果' };
 const modsOfCard = card => (card.mods || []).map(m => ({ ...m, type: m.type || KIND_MOD[card.kind] }));
 const implOfCard = card => String(card.impl || '');
-function panelHTML(card) {
+function panelHTML(card, agentName) {
   const kind = KINDS[card.kind] || KINDS.proc;
   return `
     <input id="pTitle" class="titleinp" value="${esc(card.title)}" spellcheck="false" placeholder="卡片名">
@@ -278,6 +278,21 @@ function panelHTML(card) {
     <div class="pmods"><span class="lab">${MOD_T[KIND_MOD[card.kind]]}</span>
       <div class="pm-list" id="pMods">${modsOfCard(card).map((m, i) => `<span class="mod t-${m.type} ed"><span class="mn" contenteditable="plaintext-only" spellcheck="false" data-i="${i}">${esc(m.name)}</span><b class="mx" data-x="${i}" title="删掉这块">✕</b></span>`).join('')}<input id="pModAdd" class="pm-add" placeholder="+ ${MOD_T[KIND_MOD[card.kind]]}（回车添加）"></div>
     </div>
+
+    <div class="chat">
+      <div class="chat-hd"><b>和 ${esc(agentName)} 聊这张卡</b><span class="kbd">Enter 发送</span></div>
+      <div class="chat-log" id="chatLog"></div>
+      <div class="chat-chips">
+        <span class="qchip" data-q="review">评审这张卡</span>
+        <span class="qchip" data-q="next">✦ 下一步候选</span>
+        <span class="qchip" data-q="flow">看整条流程</span>
+      </div>
+      <div class="chat-in">
+        <textarea id="chatIn" rows="2" placeholder="问点什么…（Enter 发送 · Shift+Enter 换行）"></textarea>
+        <button id="chatSend" class="primary">发送</button>
+      </div>
+    </div>
+
 
     <details class="internal">
       <summary>⚙ 内部实现 · 校验 · 卡片上不显示</summary>
@@ -295,9 +310,10 @@ function openEditor(id) {
   if (!card || !$id('ledit')) return;
   editingId = id;
   $id('ledTitle').textContent = (KINDS[card.kind] || KINDS.proc).label + '卡 · ' + card.title;
-  $id('ledBody').innerHTML = panelHTML(card);      // ← 主画布那段模板原样渲染
+  $id('ledBody').innerHTML = panelHTML(card, (doc && doc.conv && doc.conv.who) || '它的执行方');      // ← 主画布那段模板原样渲染
   $id('ledit').classList.add('on');
   wireEditor(card);
+  wireChat(card);
   const t = $id('pTitle');
   if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
 }
@@ -338,6 +354,61 @@ function wireEditor(card) {
     card.mods = card.mods || [];
     card.mods.push({ type: KIND_MOD[card.kind], name });
     openEditor(card.id); touch(card, true);
+  });
+}
+
+// 和这张卡的执行方聊一句（气泡样式沿用主画布那套 .msg）
+function chatPaint(card) {
+  const log = document.getElementById('chatLog');
+  if (!log) return;
+  const list = card.chat || [];
+  log.innerHTML = list.length
+    ? list.map(m => m.role === 'me'
+      ? `<div class="msg me">${esc(m.text)}</div>`
+      : `<div class="msg agent"><div class="who">${esc((doc.conv && doc.conv.who) || '执行方')}</div>${esc(m.text)}</div>`).join('')
+    : '<div class="msg empty">还没聊过。问一句它当时为什么这么做。</div>';
+  log.scrollTop = log.scrollHeight;
+}
+async function chatSend(card, text) {
+  const q = String(text || '').trim();
+  if (!q) return;
+  card.chat = card.chat || [];
+  card.chat.push({ role: 'me', text: q });
+  chatPaint(card);
+  const log = document.getElementById('chatLog');
+  if (log) log.insertAdjacentHTML('beforeend', '<div class="msg thinking" id="chatWait">正在问它…</div>');
+  const prompt = [
+    '【实时画布】下面是一条链路里的一张卡，和用户问的问题。只回答，不改画布、不跑命令。',
+    `卡片（${(KINDS[card.kind] || KINDS.proc).label}）：${card.title}`,
+    `内容：${card.body || '（空）'}`,
+    `内部实现：${card.impl || '（空）'}`,
+    `用户问：${q}`,
+    '直接用中文回答，三行以内。',
+  ].join('\n');
+  let answer = '';
+  try {
+    const r = await window.tcflow.askAgent({ profile: (doc.conv && doc.conv.profile) || '', prompt });
+    answer = (r && r.ok && String(r.text || '').trim()) || '（它没有回答）';
+  } catch (e) { answer = '问失败：' + (e && e.message || e); }
+  const wait = document.getElementById('chatWait');
+  if (wait) wait.remove();
+  card.chat.push({ role: 'agent', text: answer });
+  chatPaint(card);
+  touch(card, false);
+}
+function wireChat(card) {
+  chatPaint(card);
+  const input = document.getElementById('chatIn');
+  const btn = document.getElementById('chatSend');
+  if (btn) btn.onclick = () => { if (input) { chatSend(card, input.value); input.value = ''; } };
+  if (input) input.onkeydown = e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); chatSend(card, input.value); input.value = ''; }
+  };
+  document.querySelectorAll('#ledBody .qchip').forEach(c => c.onclick = () => {
+    const q = c.dataset.q === 'review' ? '这张卡按现在的写法能做出来吗？有什么风险？'
+      : c.dataset.q === 'next' ? '下一步该做什么？给出具体做法。'
+      : '把这条链路从头讲一遍，指出最可能出错的一步。';
+    chatSend(card, q);
   });
 }
 

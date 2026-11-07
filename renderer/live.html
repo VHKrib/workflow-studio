@@ -21,23 +21,24 @@
   </div>
   <!-- 这条链路真正反复用到的东西：素材 / 实现路径 / 结果（同名涨计数）；寒暄闲聊不进这里也不上画布 -->
   <div class="lents" id="lents"></div>
+  <div class="lmain">
+    <!-- 左侧卡片面板：位置、宽度、字段都和主画布一样（双击卡片打开） -->
+    <aside class="panel ledit" id="ledit">
+      <div class="ph"><b id="ledTitle">卡片</b><span id="ledClose" title="关掉">✕</span></div>
+      <div class="pb" id="ledBody"></div>
+    </aside>
+
   <div class="canvaswrap lwrap">
     <div id="wrap"><div id="canvas"><svg id="edges"></svg></div></div>
     <div class="lempty" id="lempty">选一条对话，再打开「跟随」</div>
     <div class="ltip" id="ltip"></div>
-    <!-- 双击卡片打开：里面就是主画布那张卡片信息（同一段模板、同一套样式） -->
-    <aside class="ledit" id="ledit">
-      <div class="panel lpanel">
-        <div class="ph"><b id="ledTitle">卡片</b><span id="ledClose" title="关掉">✕</span></div>
-        <div class="pb" id="ledBody"></div>
-      </div>
-    </aside>
     <div class="zoombar">
       <span id="zoomOut" title="缩小">−</span>
       <span id="zoom">100%</span>
       <span id="zoomIn" title="放大">+</span>
       <span id="zoomReset" title="复位">⌂</span>
     </div>
+  </div>
   </div>
 <script src="live.js"></script>
 </body>
