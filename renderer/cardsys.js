@@ -287,3 +287,42 @@ function findDock(n, el, x, y) {
   }
   return null;
 }
+
+// 排版也是主画布那份（列按深度、竖向居中、列宽 330、间距 40）
+function layoutChain(w) {
+  const depth = new Map(w.nodes.map(n => [n.id, 0]));
+  for (let it = 0; it < w.nodes.length; it++) {
+    let ch = false;
+    for (const [a, b] of w.edges) { const d = depth.get(a) + 1; if (d > depth.get(b)) { depth.set(b, d); ch = true; } }
+    if (!ch) break;
+  }
+  for (const n of w.nodes) {
+    if (n.kind !== 'in') continue;
+    const outs = w.edges.filter(([a]) => a === n.id).map(([, b]) => depth.get(b));
+    if (outs.length) depth.set(n.id, Math.max(0, Math.min(...outs) - 1));
+  }
+  const cols = [];
+  w.nodes.forEach((n, i) => { const d = depth.get(n.id); (cols[d] = cols[d] || []).push(n); n._i = i; });
+  const pos = new Map();
+  cols.forEach((col, d) => {
+    if (!col) return;
+    const bary = n => { const ps = w.edges.filter(([, b]) => b === n.id).map(([a]) => pos.get(a)).filter(v => v != null); return ps.length ? ps.reduce((s, v) => s + v, 0) / ps.length : 1e3 + n._i; };
+    if (d > 0) col.sort((a, b) => bary(a) - bary(b) || a._i - b._i);
+    col.forEach((n, i) => pos.set(n.id, i));
+  });
+  const COLW = 330, GAP = 40;
+  w.nodes.forEach(n => { n.x = depth.get(n.id) * COLW; n.y = 0; delete n._i; });
+  render();
+  const h = n => { const e = canvas.querySelector(`.node[data-id="${n.id}"]`); return e ? e.offsetHeight : 200; };
+  const heights = cols.map(col => col ? col.reduce((s, n) => s + h(n), 0) + GAP * (col.length - 1) : 0);
+  const tall = Math.max(0, ...heights);
+  cols.forEach((col, d) => {
+    if (!col) return;
+    let y = Math.round((tall - heights[d]) / 2);
+    col.forEach(n => {
+      n.y = y; y += h(n) + GAP;
+      const e = canvas.querySelector(`.node[data-id="${n.id}"]`); if (e) e.style.top = (n.y + OY) + 'px';
+    });
+  });
+  drawEdges();
+}
