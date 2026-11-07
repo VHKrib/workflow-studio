@@ -166,19 +166,27 @@ const cmdWord = cmd => {
   return first ? '跑命令' : '';
 };
 
-// 从终端命令里认「碰到的文件」：绝对路径 + 有扩展名 + 不是代码文件。
-// 一次调用里的同一个文件只算一次（不是按出现次数涨计数）。
+// 从终端命令里认「真被用到」的文件：只有真正读内容的命令才算（ls/stat/shasum 只是列名字，不算用）
+// 一次调用里的同一个文件只算一次；命令自己写出来的文件（ffmpeg 输出 / OUT=…）不算素材。
+const READ_CMDS = /^(cat|head|tail|grep|egrep|ffmpeg|python3?|node|blender|sqlite3|curl|shasum|md5|base64)$/;
 function filesInCommand(cmd) {
-  const out = new Set();
   const s = String(cmd || '');
+  const first = (s.trim().match(/^(?:cd\s+\S+\s*&&\s*)?([A-Za-z0-9_.-]+)/) || [])[1] || '';
+  if (!READ_CMDS.test(first)) return [];
+  const isFfmpeg = first === 'ffmpeg';
+  const found = [];
   for (const m of s.matchAll(/(?:^|[\s"'=(])(\/[^\s"'()<>;,|]+)/g)) {
     const p = normPath(m[1]);
     if (!p) continue;
     if (!/\.[A-Za-z0-9]{1,6}$/.test(p)) continue;                        // 目录不算材料
     if (isCodeFile(p)) continue;                                          // 脚本 / 代码是「怎么做的」
-    out.add(p);
+    const before = s.slice(Math.max(0, m.index - 40), m.index);
+    if (/(OUT|output|dst|dest|>\s*)$/i.test(before)) continue;            // 命令写出的目标
+    found.push(p);
   }
-  return [...out];
+  // ffmpeg 的最后一个路径参数是输出，不算素材
+  if (isFfmpeg && found.length > 1) found.pop();
+  return [...new Set(found)];
 }
 
 // 回答里显式交付的文件：MEDIA:/path（Hermes 的交付写法）
@@ -305,13 +313,14 @@ function applyCall(ev, unit, call, msg) {
   if (SKIP.has(name)) { ev.stats.skipped++; return null; }
   if (!unit) return null;
   const at = msg.at, msgId = msg.id;
-  const ok = call.ok !== false;
+  const ok = call.ok === false ? false : (call.ok === null || call.ok === undefined) ? null : true;
   const word = toolWord(name);
   if (word) { if (!unit.methods.some(m => m.w === word)) unit.methods.push({ w: word }); }
 
-  // 读：材料（或旧产物）。**这一步自己刚做出来的东西，回读只是检查，不算再当素材用**
+  // 读：材料（或旧产物）。**这一步自己刚做出来的东西，回读只是检查，不算再当素材用；读失败了也不算用到**
   const use = p => {
     if (!p) return;
+    if (ok === false) return;
     const k = pathKey(p);
     const art = ev.arts.get(k);
     const mat = ev.mats.get(k);
@@ -376,7 +385,8 @@ function applyAnswer(ev, unit, m) {
 // 读一轮消息，更新底账。按消息 id 去重（轮询重复读到同一条不涨计数、不重复建实体）。
 function buildEvidence(msgs, conv) {
   const ev = createEvidence(conv);
-  const sorted = (msgs || []).slice().sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
+  const sorted = (msgs || []).filter(m => m && typeof m === 'object').slice()
+    .sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
   const okOf = new Map();
   const msgsById = new Map();
   for (const m of sorted) {
@@ -455,8 +465,9 @@ function buildEvidence(msgs, conv) {
   const lastMsg = sorted[sorted.length - 1];
   ev.units.forEach((u, i) => {
     if (!u.calls.length) { u.status = u.ask ? 'empty' : 'empty'; return; }
-    const outs = u.outs.filter(o => o.ok !== false);
+    const outs = u.outs.filter(o => o.ok === true);
     if (outs.length) u.status = 'done';
+    else if (u.outs.some(o => o.ok === null)) u.status = 'doing';   // 写了但结果还没回来
     else if (u.outs.length) u.status = 'failed';                 // 写了但都失败
     else if (u.writeTries && u.failed) u.status = 'failed';
     else if (u.proposed) u.status = 'proposed';
@@ -527,7 +538,7 @@ function artCard(a, v, label) {
   const nm = label || a.name;
   return {
     id: artCardId(a, v.v), kind: 'out', at: v.at, ver: v.v, versions: a.versions.length,
-    title: clip(nm, 22), body: '', note: '', status: v.ok === false ? 'failed' : 'done', branch: 'main',
+    title: clip(nm, 22), body: '', note: '', status: v.ok === false ? 'failed' : v.ok === null ? 'doing' : 'done', branch: 'main',
     mods: [{ type: 'res', name: clip(nm, 10) }], impl: '', uses: 0,
   };
 }
@@ -548,6 +559,26 @@ function buildGraph(ev, plan) {
   const edges = [];                        // [from, to, kind]
   const has = (a, b) => edges.some(([x, y]) => x === a && y === b);
   const add = (a, b, k) => { if (!a || !b || a === b || has(a, b)) return; edges.push([a, b, k || 'use']); };
+  // 「改」边不允许成环：两步互指「因为看了对方才改」不可能成立，遇到就记问题、不连
+  // 判定要看整张依赖图（产物 → 加工：make / use / revise），只看改边会漏掉「甲做了 A、乙改 A、甲又改乙的产物」这种环
+  const dagReach = (from, to) => {
+    const seen = new Set([from]); const q = [from];
+    while (q.length) {
+      const k = q.pop();
+      if (k === to) return true;
+      for (const [a, b, kind] of edges) {
+        if (kind === 'evolve') continue;
+        if (a === k && !seen.has(b)) { seen.add(b); q.push(b); }
+      }
+    }
+    return false;
+  };
+  const addRevise = (a, b) => {
+    if (!a || !b || has(a, b)) return true;
+    if (dagReach(b, a)) return false;
+    edges.push([a, b, 'revise']);
+    return true;
+  };
   const problems = [];
   const segments = [];
 
@@ -592,7 +623,8 @@ function buildGraph(ev, plan) {
     const keys = new Set();
     let bad = '';
     for (const st of plan.steps) {
-      if (!st || !st.key) { bad = '有一步没给 key'; break; }
+      if (!st || typeof st !== 'object') { bad = '步骤格式不对（不是对象）'; break; }
+      if (!st.key) { bad = '有一步没给 key'; break; }
       if (keys.has(String(st.key))) { bad = '重复的步骤 key：' + st.key; break; }
       keys.add(String(st.key));
       if (st.status === 'proposed' && st.msg) continue;             // 只提方案没执行：没有调用，按消息号单独立一张卡
@@ -617,7 +649,7 @@ function buildGraph(ev, plan) {
       extra.branch = clip(String(st.branch || 'main'), 12);
       extra.implExtra = String(st.impl || '');
       // 状态以底账为准：模型说「未执行」，但记录里真有产出 → 就是已完成；反之亦然
-      if (u.outs.length) extra.status = u.outs.some(o => o.ok !== false) ? 'done' : 'failed';
+      if (u.outs.length) extra.status = u.outs.some(o => o.ok === true) ? 'done' : u.outs.some(o => o.ok === null) ? 'doing' : 'failed';
       else if (st.status === 'proposed' || u.proposed) extra.status = 'proposed';
       else extra.status = u.status;
     }
@@ -646,7 +678,10 @@ function buildGraph(ev, plan) {
       const prevId = verCards.get(o.key + '@v' + (o.v - 1));
       const curId = verCards.get(o.key + '@v' + o.v);
       if (!prevId) continue;
-      if (!has(prevId, c.id)) { add(prevId, c.id, 'revise'); c.revises = (c.revises || []).concat(prevId); }
+      if (!has(prevId, c.id)) {
+        if (addRevise(prevId, c.id)) c.revises = (c.revises || []).concat(prevId);
+        else { problems.push(`「${c.title}」和上一版的「改」关系会绕成环，没有连`); c.status = 'pending'; }
+      }
       if (curId && !has(prevId, curId)) add(prevId, curId, 'evolve');
     }
     // 6) 人话的修改原因：这一步前面那条用户消息（真说过话才算），加上看了哪一版
@@ -660,7 +695,8 @@ function buildGraph(ev, plan) {
       for (const ref of st.after) {
         const hit = resolveRef(cards, ref);
         if (!hit) { c.status = 'pending'; c.note = clip((c.note ? c.note + ' · ' : '') + '引用的上一版产物在记录里找不到', 120); problems.push(`「${c.title}」说的「因为看了${typeof ref === 'string' ? ref : ''}」找不到对应产物`); continue; }
-        add(hit.id, c.id, 'revise'); c.revises = (c.revises || []).concat(hit.id);
+        if (!addRevise(hit.id, c.id)) { c.status = 'pending'; problems.push(`「${c.title}」说的「因为看了这一版才改」会绕成环，没有连`); continue; }
+        c.revises = (c.revises || []).concat(hit.id);
       }
     }
     return c;
@@ -670,9 +706,12 @@ function buildGraph(ev, plan) {
   // 只提了做法、没动手的（记录里确实没有调用）：单独一张「未执行」卡，不连线到任何产物
   if (plan && Array.isArray(plan.steps)) {
     for (const st of plan.steps) {
+      if (!st || typeof st !== 'object') continue;
       if (!(st.status === 'proposed' && st.msg)) continue;
       const m = ev.msgsById && ev.msgsById.get(Number(st.msg));
       if (!m || String(m.text || '').trim().length < 8) { problems.push(`「${st.title || st.key}」说的方案在记录里找不到对应的回答`); continue; }
+      // 这条消息本身带着真实调用：说明它是干活的，不是「只提方案」——标成未执行会和已完成重复
+      if ((m.tools || []).length || ev.calls.some(c => c.msg === Number(st.msg))) { problems.push(`「${st.title || st.key}」说没执行，但消息 ${st.msg} 里有真实调用，已按记录处理`); continue; }
       const c = {
         id: 'p:proposed' + st.msg, kind: 'proc', unit: '', at: m.at || 0,
         title: clip(String(st.title || '提议的做法'), 24), body: clip(String(st.body || ''), BODY_CHARS),
@@ -722,6 +761,18 @@ function buildGraph(ev, plan) {
   }
   const keep = new Set(list.map(c => c.id));
   const cleanEdges = edges.filter(([a, b]) => keep.has(a) && keep.has(b));
+  // 使用次数一律按最终连线重算（同一版本被几次真实加工用到 = 几条「用」边）
+  {
+    const useCount = new Map();
+    for (const [a, , k] of cleanEdges) if (k === 'use') useCount.set(a, (useCount.get(a) || 0) + 1);
+    list = list.map(c => {
+      if (c.kind === 'proc') return c;
+      const n = useCount.get(c.id) || 0;
+      const body = n > 1 ? String(c.body).replace(/被用到|被 \d+ 次加工用到/, `被 ${n} 次加工用到`)
+        : String(c.body).replace(/被 \d+ 次加工用到/, '被用到');
+      return Object.assign({}, c, { uses: n, body });
+    });
+  }
   // 9) 实体统计（只按真实调用；文字提及不算）
   const entities = {
     materials: [...ev.mats.values()].filter(m => m.uses.length).sort((a, b) => b.uses.length - a.uses.length).slice(0, 8)
@@ -769,6 +820,7 @@ function versionBodyArt(a, v) {
   const bits = [isVideo(a.path) ? '视频' : isImage(a.path) ? '图' : '文件'];
   if (a.versions.length > 1) bits.push(`第 ${v.v} 版`);
   if (v.ok === false) bits.push('这次没成功');
+  else if (v.ok === null) bits.push('还在写，没回结果');
   else bits.push('已完成');
   if (v.unit) bits.push('由这一步产出');
   return bits.join(' · ');
