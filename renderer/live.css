@@ -99,10 +99,12 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
 .ltip b{display:block;font-size:12px;color:var(--ink);margin-bottom:2px}
 
 /* 能预览就真预览：图片按看图、视频按播放器、文本按文档段落 */
-.ltip.rich{padding:8px}
+.ltip.rich{padding:8px;max-width:min(420px,calc(100vw - 32px))}
 .ltip .lmeta{display:block;font-size:10.5px;color:var(--ink-3);margin:-1px 0 6px}
-.ltip .limg{display:block;max-width:360px;max-height:260px;border-radius:8px;object-fit:contain;background:#fff}
-.ltip .lvid{display:block;width:360px;max-height:260px;border-radius:8px;background:#000}
-.ltip .ltxt{max-width:360px;max-height:240px;overflow:auto;margin:0;padding:8px 10px;border-radius:8px;
+/* 预览不超过浮层、也不超过窗口：宽高都用 min() 夹住，图再大也只缩不放 */
+.ltip .limg{display:block;width:auto;height:auto;max-width:100%;max-height:min(320px,calc(100vh - 120px));
+  border-radius:8px;object-fit:contain;background:#fff}
+.ltip .lvid{display:block;width:100%;max-width:400px;max-height:min(300px,calc(100vh - 120px));border-radius:8px;background:#000}
+.ltip .ltxt{max-width:100%;max-height:min(260px,calc(100vh - 140px));overflow:auto;margin:0;padding:8px 10px;border-radius:8px;
   background:var(--surface,#f7f5f1);border:1px solid var(--soft-line,#e7e1d6);font-family:var(--mono,ui-monospace,Menlo,monospace);
   font-size:11px;line-height:1.65;white-space:pre-wrap;word-break:break-word;color:var(--ink-2)}
