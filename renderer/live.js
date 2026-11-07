@@ -51,7 +51,10 @@ const statusWord = s => ({
 }[s] || '');
 // 原因标签上不露证据号（「你说 7425「…」」→「你说「…」」），证据本来就在内部实现里
 const humanNote = s => String(s || '')
-  .replace(/(你说|人说|消息|人在)\s*\d{3,}\s*[「:：，,]?\s*/g, '$1')
+  .replace(/(用户|你说|人说|消息|人在|第)\s*\d{3,}\s*[「:：，,]?\s*/g, '$1')
+  .replace(/\b\d{3,}\b\s*/g, '')                     // 光秃秃的证据号（内部实现里有）
+  .replace(/[「」]/g, '')                            // 只剩单边的引号不好看，去掉装饰引号
+  .replace(/[，,：:\s]+(?=[「])/g, '')
   .replace(/^[，,：:\s]+|[，,：:\s]+$/g, '')
   .trim();
 function paintEmpty() {
@@ -62,13 +65,8 @@ function paintEmpty() {
 function paintStat() {
   if (!doc || !doc.conv) { setStat(cur ? '等第一条消息…' : ''); return; }
   const n = (doc.cards || []).length;
-  const skipped = (doc.stats && doc.stats.chatter) || 0;
-  const tail = skipped ? ` · 忽略闲聊 ${skipped} 条` : '';
-  const tr = doc.truncated || (doc.stats && doc.stats.truncated) ? ' · 只看了最近一段' : '';
-  const seg = (doc.segments || []).filter(s => s.length > 1).length;
-  const multi = seg > 1 ? ` · ${seg} 段` : '';
-  const p = (doc.problems || []).length ? ` · ${doc.problems[0]}` : '';
-  setStat(`${n} 张卡 · ${following ? '跟到 ' + hhmmss(doc.at) : '已暂停'}${tail}${tr}${multi}${p}`);
+  if (!n) { setStat(following ? '跟随中 · 还没解析' : '已暂停 · 还没解析'); return; }
+  setStat(`已解析：${n} 张卡${doc.name ? ' · ' + doc.name : ''}`);
 }
 
 // 三栏实体：素材 / 实现路径 / 结果。同名只涨计数，不重复占位——这条链路里真正反复用的是这些。
@@ -107,11 +105,9 @@ async function analyzeNow(manual) {
       fitted = false;
       renderDoc(r.doc, { analyzed: true });
       analyzedKey = cur;
-      window.__liveMapping = r.mapping || null;              // 只读调试口：对照证据（验收用，界面不显示）
-      if (r.mapping && r.mapping.rows) console.log('[实时画布] 对照证据 ' + r.mapping.rows.length + ' 步')
-      setStat(`已解析：${r.doc.cards.length} 张卡 · ${r.doc.edges.length} 条关系${r.name ? ' · ' + r.name : ''}${r.problems && r.problems.length ? ' · ' + r.problems[0] : ''}`);
+      setStat(`已解析：${r.doc.cards.length} 张卡${r.name ? ' · ' + r.name : ''}`);
     } else {
-      setStat('解析没成：' + ((r && r.error) || '未知原因') + '（先看底账那版）');
+      setStat('解析没成：' + ((r && r.error) || '未知原因'));
     }
   } catch (e) {
     setStat('解析失败：' + (e && e.message || e));
@@ -183,33 +179,36 @@ const KIND_PH = { in: '这一步要先有什么', proc: '这一步让人做什�
 const MOD_LAB = { in: '素材', proc: '工具', out: '成果' };
 const MOD_TYPE = { in: 'mat', proc: 'tool', out: 'res' };
 
+// 卡面三块和主画布同一套含义：素材 / 工具 / 成果（由真实边反推，都在 doc.cards[].mods 里）
+const MOD_LABEL = { mat: '素材', tool: '工具', res: '成果' };
+function modsRow(c) {
+  const ms = Array.isArray(c.mods) ? c.mods : [];
+  if (!ms.length) return '';
+  const order = c.kind === 'in' ? ['mat'] : c.kind === 'out' ? ['res'] : ['mat', 'tool', 'res'];
+  const lines = order.map(t => {
+    const list = ms.filter(m => m.type === t);
+    if (!list.length) return '';
+    return `<div class="mline"><span class="mlab">${MOD_LABEL[t]}</span><span class="mchips">${list.map(m => `<span class="mod t-${t}">${esc(m.name)}</span>`).join('')}</span></div>`;
+  }).join('');
+  return lines ? `<div class="mods">${lines}</div>` : '';
+}
+
 function cardEl(c) {
   const el = document.createElement('div');
-  el.className = 'node k-' + c.kind + (c.branch && c.branch !== 'main' ? ' branch' : '')
-    + (c.status ? ' st-' + c.status : '');
+  el.className = 'node k-' + c.kind;
   el.dataset.id = c.id;
-  const type = MOD_TYPE[c.kind] || 'tool';
-  // 正面不放工具名/模块名（那是内部实现，也和正文重复）；体量靠正文 + 标签说清
-  const st = c.status ? statusWord(c.status) : '';
-  const note = humanNote(c.note);
-  const chips = (st ? `<span class="chip st-${esc(c.status)}">${esc(st)}</span>` : '') +
-    (c.versions > 1 ? `<span class="chip ver" title="同一个文件的第几版">v${c.ver}</span>` : '') +
-    (c.uses > 1 ? `<span class="chip use" title="被几次加工用到（只算真实调用）">被用 ${c.uses} 次</span>` : '') +
-    (note ? `<span class="chip note" title="为什么做 / 为什么改">改 · ${esc(note)}</span>` : '') +
-    (c.branch && c.branch !== 'main' ? `<span class="chip br">${esc(c.branch)}</span>` : '');
   el.innerHTML = `
     <div class="hd"><span class="kind">${KIND_LABEL[c.kind] || '加工'}</span><div class="t">${esc(c.title)}</div><div class="st"></div></div>
     <div class="body" data-ph="${KIND_PH[c.kind] || ''}">${esc(c.body)}</div>
-    <div class="ft"><div class="checks">${chips}</div>${c.impl ? '<span class="gar" title="内部实现与证据：卡片上不显示，点开看">⚙</span>' : ''}</div>
-    ${c.impl ? `<details class="limpl"><summary>⚙ 内部实现 / 证据</summary><pre>${esc(c.impl)}</pre></details>` : ''}`;
+    ${modsRow(c)}
+    <div class="ft"><div class="checks"></div>${c.impl ? '<span class="gar" title="内部实现已封装：卡片上不显示，点开看">⚙</span>' : ''}</div>
+    ${c.impl ? `<details class="limpl"><summary>⚙ 内部实现</summary><pre>${esc(c.impl)}</pre></details>` : ''}`;
   const d = el.querySelector('details.limpl');
   if (d) d.addEventListener('toggle', () => { layout(); drawEdges(); });
   return el;
 }
 
-
-const sigOf = c => JSON.stringify([c.kind, c.title, c.body, c.impl, (c.mods || []).map(m => m.type + ':' + m.name), c.n,
-  c.note || '', c.branch || '', c.status || '', c.ver || 0, c.versions || 0, c.uses || 0]);
+const sigOf = c => JSON.stringify([c.kind, c.title, c.body, c.impl, (c.mods || []).map(m => m.type + ':' + m.name)]);
 
 function renderDoc(d, opts) {
   if (!d || !Array.isArray(d.cards)) return;
@@ -241,52 +240,56 @@ function renderDoc(d, opts) {
 // 排布：按「从入口走了几步」分列，同一列上下堆。分叉自然在同一列错开，读成树枝。
 // 「改」和「新版」是回指/版本链，不推后一列（否则同一文件的新版本会被推到很远的右边）。
 function layout() {
-  const COLW = 340, ROWGAP = 26;
+  const COLW = 340, ROWGAP = 26, MAXBAND = 1500, GAPY = 160;
   pos.clear();
   const cards = doc ? doc.cards : [];
   if (!cards.length) return;
+  const byId = new Map(cards.map(c => [c.id, c]));
   const ids = cards.map(c => c.id);
-  const out = new Map(ids.map(i => [i, []]));
-  const indeg = new Map(ids.map(i => [i, 0]));
-  for (const e of (doc.edges || [])) {
-    const [a, b, k] = e;
-    if (!out.has(a) || !out.has(b) || a === b) continue;
-    if (k === 'revise' || k === 'evolve') continue;
-    out.get(a).push(b);
-    indeg.set(b, (indeg.get(b) || 0) + 1);
-  }
-  const depth = new Map();
-  const queue = ids.filter(i => (indeg.get(i) || 0) === 0);
-  if (!queue.length) queue.push(ids[0]);
-  for (const i of queue) depth.set(i, 0);
-  let guard = 0;
-  while (queue.length && guard++ < ids.length * 8 + 2000) {
-    const i = queue.shift();
-    for (const j of out.get(i) || []) {
-      const d = (depth.get(i) || 0) + 1;
-      if (!depth.has(j) || depth.get(j) < d) { depth.set(j, d); queue.push(j); }
+  // 每一段（互不相干的一截）单独排，按段上下分开——不硬连成一条长蛇
+  const segs = ((doc.segments && doc.segments.length) ? doc.segments : [ids])
+    .map(s => s.filter(id => byId.has(id))).filter(s => s.length);
+  let top = 0;
+  for (const seg of segs) {
+    const inSeg = new Set(seg);
+    const outE = new Map(seg.map(i => [i, []]));
+    const indeg = new Map(seg.map(i => [i, 0]));
+    for (const e of (doc.edges || [])) {
+      const [a, b, k] = e;
+      if (!inSeg.has(a) || !inSeg.has(b) || a === b) continue;
+      if (k === 'revise' || k === 'evolve') continue;
+      outE.get(a).push(b);
+      indeg.set(b, (indeg.get(b) || 0) + 1);
     }
-  }
-  ids.forEach(i => { if (!depth.has(i)) depth.set(i, 0); });
-
-  const byDepth = new Map();
-  for (const c of cards) {
-    const d = depth.get(c.id) || 0;
-    if (!byDepth.has(d)) byDepth.set(d, []);
-    byDepth.get(d).push(c);
-  }
-  for (const [d, list] of [...byDepth.entries()].sort((a, b) => a[0] - b[0])) {
-    let y = 0;
-    for (const c of list) {
-      const el = canvas.querySelector(`.node[data-id="${CSS.escape(c.id)}"]`);
+    // 层数用**最短**路径算，不用最长：有环时最长会一直把卡片往右推（实测一张卡被推到第 296 列）
+    const depth = new Map();
+    const queue = seg.filter(i => (indeg.get(i) || 0) === 0);
+    if (!queue.length) queue.push(seg[0]);
+    for (const i of queue) depth.set(i, 0);
+    while (queue.length) {
+      const i = queue.shift();
+      for (const j of outE.get(i) || []) if (!depth.has(j)) { depth.set(j, (depth.get(i) || 0) + 1); queue.push(j); }
+    }
+    for (const i of seg) if (!depth.has(i)) depth.set(i, 0);
+    const maxD = Math.max(0, ...seg.map(i => depth.get(i)));
+    const colY = new Map();
+    let band = 0, bottom = 0;
+    for (const id of seg) {
+      const el = canvas.querySelector(`.node[data-id="${CSS.escape(id)}"]`);
       if (!el) continue;
-      const x = d * COLW;
-      el.style.left = (x + OX) + 'px';
-      el.style.top = (y + OY) + 'px';
+      const d = depth.get(id) || 0;
       const h = el.offsetHeight || 150;
-      pos.set(c.id, { x: x + OX, y: y + OY, w: el.offsetWidth || 244, h });
-      y += h + ROWGAP;
+      let key = band + ':' + d;
+      let y = colY.get(key) || 0;
+      if (y + h > MAXBAND) { band++; key = band + ':' + d; y = 0; }   // 一列太高：本段里另起一条带
+      const x = d * COLW + band * (maxD + 1.5) * COLW;
+      el.style.left = (x + OX) + 'px';
+      el.style.top = (top + y + OY) + 'px';
+      pos.set(id, { x: x + OX, y: top + y + OY, w: el.offsetWidth || 244, h });
+      colY.set(key, y + h + ROWGAP);
+      bottom = Math.max(bottom, y + h);
     }
+    top += bottom + GAPY;
   }
 }
 

@@ -9,7 +9,6 @@ const { readChain } = require('./chain');
 const { createLinkStore } = require('./linkstore');
 const { createVersionStore } = require('./versions');
 const livefeed = require('./livefeed');
-const livegraph = require('./livegraph');
 const HERMES = path.join(os.homedir(), '.hermes', 'hermes-agent', '.hermes', 'bin', 'hermes');
 
 // 共享链路状态文件：人和 agent 共用一份底稿（画布写、agent 读；外面改了画布认领回来）
@@ -175,7 +174,7 @@ function createWindow() {
 // ---------- 独立实时画布：只读跟一条别人的对话 ----------
 // 主窗口是唯一的写者；这个窗口只显示主进程读出来的东西（不写会话库、不写链路状态）。
 let MAIN_WIN = null;
-const LIVE = { win: null, timer: 0, busy: false, feed: null, conv: null, msgs: [], plan: null, ev: null, lastId: 0, lastError: '' };
+const LIVE = { win: null, timer: 0, busy: false, feed: null, conv: null, msgs: [], plan: null, doc: null, lastId: 0, lastError: '' };
 const LIVE_STATE = { profile: '', session: '', on: false };
 const LIVE_POLL_MS = 800;          // 每 ≤1 秒读一次增量
 
@@ -216,40 +215,24 @@ function mergeMsgs(list) {
   LIVE.msgs = [...by.values()].sort((a, b) => (Number(a.id) || 0) - (Number(b.id) || 0));
   return LIVE.msgs;
 }
-function docNow() {
-  const ev = livegraph.buildEvidence(LIVE.msgs, LIVE.conv);
-  const doc = livegraph.buildGraph(ev, LIVE.plan);
-  LIVE.ev = ev;
-  return doc;
-}
 async function liveLoad(profile, session) {
   const conv = await findConv(profile, session);
   if (!conv) return { ok: false, error: '这条对话已经不在最近的活动里了' };
-  const same = LIVE.feed && LIVE.feed.conv && LIVE.feed.conv.key === conv.key;
+  const same = LIVE.conv && LIVE.conv.key === conv.key;
   if (!same) {
-    LIVE.feed = { conv: { profile, session, who: conv.who, key: conv.key, title: conv.doing } };
-    LIVE.conv = LIVE.feed.conv;
-    LIVE.msgs = []; LIVE.plan = null; LIVE.lastId = 0; LIVE.ev = null;
+    LIVE.conv = { key: conv.key, profile, session, who: conv.who, title: conv.doing };
+    LIVE.msgs = []; LIVE.plan = null; LIVE.doc = null; LIVE.lastId = 0;
   }
   const r = await livefeed.readMessages(profile, session, LIVE.lastId);
   if (r.error) return { ok: false, error: r.error };
-  const msgs = r.msgs.slice();
-  // 窗口从中间截的：开头那句如果不可用（不是人的要求 / 是系统注入），往前找最近一句真的是人话的要求补进来
-  const usable = m => {
-    if (!m || m.role !== 'user') return false;
-    const c = livegraph.cleanAsk(m.text);
-    return (c.images && c.images.length) || livegraph.splitAsk(c.text).body.length >= 4;
-  };
-  if (!LIVE.lastId && msgs.length && !usable(msgs[0])) {
-    const asks = await livefeed.askCandidates(profile, session, msgs[0].id);
-    const ask = asks.find(m => { const c = livegraph.cleanAsk(m.text); return c.text && c.text.length <= 600 && livegraph.splitAsk(c.text).body.length >= 4; });
-    if (ask) msgs.unshift(ask);
-  }
-  mergeMsgs(msgs);
+  mergeMsgs(r.msgs);
   LIVE.lastId = LIVE.msgs.reduce((n, m) => Math.max(n, Number(m.id) || 0), 0);
-  const doc = docNow();
-  console.log(`[实时画布] 只读读取「${conv.who} · ${conv.doing}」：${r.msgs.length} 条（sqlite3 -readonly file:…?mode=ro）· 底账 ${doc.stats.cards} 张卡`);
-  return { ok: true, doc };
+  console.log(`[实时画布] 只读读取「${conv.who} · ${conv.doing}」：${r.msgs.length} 条（sqlite3 -readonly file:…?mode=ro）`);
+  // 卡只有一个来源：解析。跟随只在有新消息时把「已经解析好的那份」再推一遍，形状不会变成另一套。
+  return { ok: true, doc: LIVE.doc || emptyDoc() };
+}
+function emptyDoc() {
+  return { conv: LIVE.conv, at: Math.round(Date.now() / 1000), cards: [], edges: [], name: '', stats: { messages: LIVE.msgs.length } };
 }
 async function liveTick() {
   if (LIVE.busy || !LIVE_STATE.on || !LIVE_STATE.profile || !LIVE_STATE.session) return;
@@ -262,7 +245,7 @@ async function liveTick() {
     mergeMsgs(r.msgs);
     LIVE.lastId = LIVE.msgs.reduce((n, m) => Math.max(n, Number(m.id) || 0), 0);
     console.log(`[实时画布] 增量 ${r.msgs.length} 条（只读）`);
-    sendLive(docNow());
+    if (LIVE.doc) sendLive(LIVE.doc);
   } finally { LIVE.busy = false; }
 }
 function openLiveWindow() {
@@ -328,32 +311,47 @@ ipcMain.handle('version:push', (e, { id, entry }) => {
 });
 ipcMain.handle('version:drop', (e, id) => { if (liveSender(e)) return { ok: false, error: '实时画布是只读窗口' }; return versions().drop(id); });
 // 独立实时画布：开窗 / 列最近有活动的对话 / 上次的选中与开关 / 跟随（只读） / 单次取一份
-// 实时画布：让平台主管把这条对话**分成几步**（每步一段消息号），并给人话的名字与修改原因。
-// 关系（用了哪版材料、做出哪版产物、因为看了哪版才改）一律由 livegraph 的底账算，模型说错也进不来。
-const livePrompt = ({ who, topic, ev }) => [
-  '【实时画布】你是平台主管，在把一条真实工作对话，画成工作流开发平台里的链路。',
-  '只做分析：不执行、不跑命令、不读写文件、不发消息、不付费。材料已经由程序只读整理成底账（证据号=消息号）。',
+// 实时画布的口径：**卡片和「读取 agent 链路」完全一样**——输入 / 加工 / 输出三种卡，
+// 每张卡带素材·工具·成果模块与内部实现，正文说人话。不做版本卡、不做点评卡、不做分支。
+const LIVE_PLAIN = [
+  '卡片内容一律说人话，而且要说具体：',
+  '① 用的是什么——哪几张图（什么图、几张）、哪些数据；',
+  '② 做了什么加工——怎么挑、怎么比、怎么改、按什么标准算合格；',
+  '③ 交出什么——什么文件/清单，里面每条写什么。',
+  '不要写「处理数据」「整理一下」这种空话。命令、脚本、文件路径、字段名一律只放「内部实现」，不进卡片正文。',
+].join('');
+const LIVE_MODS = 'mods 把这张卡用到的东西拆成短词模块（每块 8 个字以内，说人话）：输入卡写素材（哪几张图、哪些数据），加工卡写工具（怎么挑、怎么比、怎么查），输出卡写成果（交出的文件里有哪几样）。';
+
+const livePrompt = ({ who, topic, ask, steps, reads, writes, said }) => [
+  '【实时画布】你是平台主管，在把一条真实工作对话，画成工作流开发平台里的卡片。',
+  '只做分析：不执行、不跑命令、不读写文件、不发消息、不付费。下面是只读出来的材料。',
   '',
   `岗位：${who}`,
   `这件事：${topic || '（无题）'}`,
   '',
-  livegraph.brief(ev),
+  '派活原文（节选）：', String(ask || '（没有）').slice(0, 900),
   '',
-  '请把这条对话分成若干「加工步骤」。规则：',
-  '1. 一步 = 一段连续的消息号范围（from/to）。范围必须落在真实调用上、彼此不重叠；',
-  '   同一次加工里连写几个文件算一步；看过结果再改 / 再出一版 = 另一步。',
-  '2. 只读不产出、只为看一眼的动作不要单独成步（并进前后那步）；确实是在核对某个产物时，可以单独一步并标 status。',
-  '3. 状态只用 done / failed / proposed / doing：记录里真有产出的才是 done；调用了但没产出、或写了又失败的标 failed；',
-  '   只在回答里提了做法、没有任何调用（或范围里确实没有写操作）的标 proposed；收尾还没出结果标 doing。',
-  '4. note 只写「为什么做 / 为什么改」，优先引用人在消息号 X 说的原话要点（一行以内）；没有原因就不写。',
-  '5. after 可选：这一步是因为看了哪一版才改的，写 {"path":"完整路径","ver":版本号}；不确定就别写，不要猜。',
-  '6. title ≤ 12 字；body ≤ 60 字说人话（用了什么素材、怎么做、交出什么）；impl 只放命令 / 路径 / 工具，不进正文。',
-  '7. 不许编造记录里没有的步骤、材料、产物；历史窗口截断（见底账最后一行）就少画，缺口不要补圆。',
-  '只输出一个 JSON，不要解释、不要代码块标记：',
-  '{"name":"12 字内","summary":"一句话","steps":[{"key":"s1","from":7426,"to":7470,"title":"重出三张草图板","body":"……","impl":"……","note":"……","status":"done","after":[{"path":"……","ver":1}]}]}',
+  '真正做过的步骤（按顺序，工具名 + 参数要点）：', String(steps || '（没有）').slice(0, 3200),
+  '',
+  `读过的文件：${String(reads || '').slice(0, 700) || '（没有）'}`,
+  `写出的文件：${String(writes || '').slice(0, 700) || '（没有）'}`,
+  '',
+  '它的交付（节选）：', String(said || '（没有）').slice(0, 1600),
+  '',
+  '请这样画（和「读取 agent 链路」同一套规矩）：',
+  '1. 只画这条对话里反复在做的主线，4–9 张卡；寒暄、测试、系统通知不画。',
+  '2. 输入卡：它真正调用的文件/素材；加工卡：它具体怎么干；输出卡：它交出了什么。',
+  '3. 连线只按这条路走：输入 → 加工 → 输出（输出也可以再喂给下一张加工）。输入卡只往外连，什么都不连进输入卡；',
+  '   每张加工卡至少有一个来源（输入卡或上一张加工/输出），至少交出一张输出卡；整条连成一片，不能断成几截。',
+  LIVE_PLAIN,
+  LIVE_MODS,
+  '4. impl 写执行时真正用到的：技能名、目录、工具、字段名（这些不进卡片正文）。',
+  '5. 只输出一个 JSON 对象，不要解释，不要代码块标记。格式：',
+  '{"name":"工作流名（12 字内）","summary":"一句话说清这条链路","cards":[{"key":"c1","kind":"in","title":"短标题","body":"这一步要什么/做什么/交出什么","impl":"技能/目录/工具/字段","mods":["模块短词"]}],"edges":[["c1","c2"]]}',
 ].join('\n');
 
-function extractPlan(text) {
+// 解析：只认「cards 是非空数组」的那个候选（提示词里的示例也长得合法，取最后一个真答案）
+function extractCards(text) {
   const t = String(text || '');
   const tries = [];
   for (const m of t.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) tries.push(m[1]);
@@ -362,23 +360,103 @@ function extractPlan(text) {
   if (a >= 0 && b > a) tries.push(t.slice(a, b + 1));
   let o = null;
   for (const cand of tries) {
-    try { const x = JSON.parse(cand.trim()); if (x && Array.isArray(x.steps) && x.steps.length) { o = x; break; } } catch (_) { }
+    try { const x = JSON.parse(cand.trim()); if (x && Array.isArray(x.cards) && x.cards.length) { o = x; break; } } catch (_) { }
   }
   if (!o) return null;
-  const steps = o.steps.map((s, i) => ({
-    key: String(s.key || 's' + (i + 1)),
-    from: Number(s.from) || 0, to: Number(s.to) || 0,
-    msg: Number(s.msg) || 0,
-    title: String(s.title || '').slice(0, 24),
-    body: String(s.body || '').slice(0, 120),
-    impl: String(s.impl || '').slice(0, 600),
-    note: String(s.note || '').slice(0, 120),
-    status: ['done', 'failed', 'proposed', 'doing'].includes(s.status) ? s.status : 'done',
-    branch: String(s.branch || 'main').slice(0, 12),
-    after: Array.isArray(s.after) ? s.after.filter(x => x && typeof x === 'object' && x.path).slice(0, 4) : [],
-  })).filter(s => (s.status === 'proposed' && s.msg) || (s.from && s.to && s.to >= s.from));
-  if (!steps.length) return null;
-  return { name: String(o.name || '').slice(0, 40), summary: String(o.summary || '').slice(0, 120), steps };
+  const KIND_MOD = { in: 'mat', proc: 'tool', out: 'res' };
+  const cards = [];
+  (Array.isArray(o.cards) ? o.cards : []).forEach((c, i) => {
+    if (!c || cards.length >= 14) return;
+    const kind = ['in', 'proc', 'out'].includes(c.kind) ? c.kind : '';
+    const title = String(c.title || '').replace(/\s+/g, ' ').trim().slice(0, 24);
+    const body = String(c.body || '').replace(/\s+/g, ' ').trim().slice(0, 220);
+    if (!kind || !title || !body || /^(短标题|标题|卡名|示例)$/.test(title)) return;
+    const mods = (Array.isArray(c.mods) ? c.mods : []).map(m => String(typeof m === 'string' ? m : (m && m.name) || ''))
+      .map(x => x.replace(/\s+/g, ' ').trim()).filter(x => x && !/^(模块短词|短词)$/.test(x))
+      .slice(0, 6).map(name => ({ type: KIND_MOD[kind], name: name.slice(0, 16) }));
+    const key = String(c.key || 'c' + (i + 1));
+    cards.push({ id: key, kind, title, body, impl: String(c.impl || '').slice(0, 400), mods });
+  });
+  if (!cards.length) return null;
+  const byKey = new Map(cards.map(c => [c.id, c]));
+  const byTitle = new Map(cards.map(c => [c.title, c]));
+  const edges = [];
+  const reach = (from, to) => { const seen = new Set([from]), todo = [from]; while (todo.length) { const k = todo.pop(); if (k === to) return true; for (const [x, y] of edges) if (x === k && !seen.has(y)) { seen.add(y); todo.push(y); } } return false; };
+  const add = (a2, b2) => {
+    if (!a2 || !b2 || a2 === b2 || b2.kind === 'in') return;
+    if (edges.some(([x, y]) => x === a2.id && y === b2.id) || reach(b2.id, a2.id)) return;
+    edges.push([a2.id, b2.id]);
+  };
+  const ref = v => byKey.get(String(v)) || byTitle.get(String(v == null ? '' : v).trim());
+  for (const e of (Array.isArray(o.edges) ? o.edges : [])) add(ref(Array.isArray(e) ? e[0] : e && e.from), ref(Array.isArray(e) ? e[1] : e && e.to));
+  // 闸门里的补线：没来源的加工接前面最近的输入/加工；没产出的加工接后面最近的输出；落单的输入/输出各接一次
+  const has = (a2, b2) => edges.some(([x, y]) => x === a2 && y === b2);
+  cards.forEach((c, i) => {
+    if (c.kind === 'proc') {
+      if (!edges.some(([, y]) => y === c.id)) {
+        const prev = cards.slice(0, i).reverse();
+        const src = prev.find(x => x.kind === 'in') || prev.find(x => x.kind === 'proc') || cards.find(x => x.kind === 'in');
+        if (src) add(src, c);
+      }
+      if (!edges.some(([x]) => x === c.id)) {
+        const next = cards.slice(i + 1);
+        const dst = next.find(x => x.kind === 'out') || next.find(x => x.kind === 'proc') || null;
+        if (dst) add(c, dst);
+      }
+    }
+    if (c.kind === 'in' && !edges.some(([x]) => x === c.id)) {
+      const p = cards.slice(i + 1).find(x => x.kind === 'proc') || cards.find(x => x.kind === 'proc');
+      if (p) add(c, p);
+    }
+    if (c.kind === 'out' && !edges.some(([, y]) => y === c.id)) {
+      const p = cards.slice(0, i).reverse().find(x => x.kind === 'proc' || x.kind === 'in');
+      if (p) add(p, c);
+    }
+  });
+  // 模型给了指向「被滤掉的卡」的连线：一律丢掉，别留悬空的线
+  const alive = new Set(cards.map(c => c.id));
+  const clean = edges.filter(([x, y]) => alive.has(x) && alive.has(y));
+  return { name: String(o.name || '').slice(0, 20), summary: String(o.summary || '').slice(0, 120), cards, edges: clean };
+}
+
+// 质量闸：和读取链路一个口径——三类齐全、每张加工都有来源和产出、整条连成一片
+function cardProblem(p) {
+  if (!p || !p.cards.length) return '没拆出卡片';
+  const has = k => p.cards.some(c => c.kind === k);
+  if (p.cards.length < 3 || !has('in') || !has('proc') || !has('out')) return '拆出来的卡不全（输入、加工、输出都得有）';
+  const bad = p.cards.filter(c => (c.kind === 'proc' && (!p.edges.some(([, y]) => y === c.id) || !p.edges.some(([x]) => x === c.id)))
+    || (c.kind === 'in' && !p.edges.some(([x]) => x === c.id))
+    || (c.kind === 'out' && !p.edges.some(([, y]) => y === c.id)));
+  if (bad.length) return '有卡没接上：' + bad.map(c => c.title).join('、');
+  const seen = new Set([p.cards[0].id]), todo = [p.cards[0].id];
+  while (todo.length) {
+    const k = todo.pop();
+    for (const [a2, b2] of p.edges) { const o2 = a2 === k ? b2 : b2 === k ? a2 : null; if (o2 && !seen.has(o2)) { seen.add(o2); todo.push(o2); } }
+  }
+  if (seen.size < p.cards.length) return '链路断成了几截';
+  return '';
+}
+
+// 把这条对话整理成和读取链路同一形状的结构化原料
+function liveMaterial(msgs) {
+  const base = p => String(p || '').replace(/\/+$/, '').split('/').pop();
+  const reads = new Map(), writes = new Map(), steps = [], said = [];
+  let ask = '';
+  for (const m of msgs) {
+    if (m.role === 'user') { if (!ask) ask = String(m.text || '').replace(/\s+/g, ' ').slice(0, 900); continue; }
+    for (const t of (m.tools || [])) {
+      const a = t.args || {};
+      const arg = a.path || a.file_path || a.command || a.name || a.query || a.url || '';
+      steps.push(`${t.name}${arg ? ' ' + String(arg).slice(0, 70) : ''}`);
+      const f = base(a.path || a.file_path || '');
+      if (f && /^(read_file|vision_analyze|file_read)$/.test(t.name)) reads.set(f, (reads.get(f) || 0) + 1);
+      if (f && /^(write_file|patch|edit_file|apply_patch)$/.test(t.name)) writes.set(f, (writes.get(f) || 0) + 1);
+    }
+    const txt = String(m.text || '').replace(/\s+/g, ' ').trim();
+    if (txt.length > 60) said.push(txt.slice(0, 300));
+  }
+  const fmt = m => [...m.entries()].sort((x, y) => y[1] - x[1]).slice(0, 12).map(([n, c]) => (c > 1 ? `${n}×${c}` : n)).join('、');
+  return { ask, steps: steps.slice(-140).join('\n'), reads: fmt(reads), writes: fmt(writes), said: said.slice(-6).join('\n---\n') };
 }
 
 ipcMain.handle('live:analyze', async (_e, { profile, session, topic }) => {
@@ -387,28 +465,32 @@ ipcMain.handle('live:analyze', async (_e, { profile, session, topic }) => {
     const r = await livefeed.readMessages(profile, session, 0, { limit: 200 });
     if (r.error) return { ok: false, error: r.error };
     if (!r.msgs.length) return { ok: false, error: '这条对话还没有内容' };
-    if (!LIVE.conv || LIVE.conv.key !== profile + ':' + session) {
-      LIVE.conv = { key: profile + ':' + session, profile, session, who: livefeed.whoOf(profile), title: topic };
-      LIVE.msgs = []; LIVE.plan = null;
-    }
+    LIVE.conv = { key: profile + ':' + session, profile, session, who: livefeed.whoOf(profile), title: topic };
     mergeMsgs(r.msgs);
-    const ev = livegraph.buildEvidence(LIVE.msgs, LIVE.conv);
-    const prompt = livePrompt({ who: livefeed.whoOf(profile), topic, ev });
-    const res = await askAgentClean({ profile: 'default', prompt, toolsets: 'todo,no_mcp', timeoutMs: 300000 });
-    if (!res.ok) return { ok: false, error: '分析没跑完（' + res.code + '）', secs: (Date.now() - t0) / 1000 };
-    const plan = extractPlan(res.text);
-    if (!plan) return { ok: false, error: '分析没给出可用的步骤分段', raw: String(res.text || '').slice(-600), secs: (Date.now() - t0) / 1000 };
-    // 上一次的图有效就留着：新的一份不成立时，不拿半份糊上（buildGraph 里会把整份作废并说明）
-    const prev = LIVE.plan;
-    LIVE.plan = plan;
-    const doc = docNow();
-    if (doc.problems.length && doc.cards.every(c => c.kind !== 'proc')) {
-      LIVE.plan = prev;
-      return { ok: false, error: '这次分的步不成立：' + doc.problems.join('；'), secs: (Date.now() - t0) / 1000 };
+    const mat = liveMaterial(LIVE.msgs);
+    const prompt = livePrompt({ who: livefeed.whoOf(profile), topic, ...mat });
+    let plan = null, lastText = '', why = '';
+    // 模型偶尔少画一类卡/漏连线：和读取链路一样自动再拆一次（最多两次），不合格就不上画布
+    for (let attempt = 0; attempt < 2 && !plan; attempt++) {
+      const p = attempt === 0 ? prompt
+        : prompt + '\n\n上一次拆得不对（' + why + '）。这次**只输出 JSON 本身**，并且输入、加工、输出三类卡都要有，每张加工卡都要有来源和产出，整条连成一片。';
+      const res = await askAgentClean({ profile: 'default', prompt: p, toolsets: 'todo,no_mcp', timeoutMs: 300000 });
+      if (!res.ok) { why = '分析没跑完（' + res.code + '）'; continue; }
+      lastText = String(res.text || '');
+      const cand = extractCards(lastText);
+      if (!cand) { why = '分析没给出可用的链路'; continue; }
+      why = cardProblem(cand);
+      if (!why) plan = cand;
     }
-    const map = livegraph.mapping(LIVE.ev, doc);
-    console.log(`[实时画布] 解析完成：${doc.cards.length} 张卡 / ${doc.edges.length} 条关系 / ${map.rows.length} 步 · 用时 ${((Date.now() - t0) / 1000).toFixed(1)}s${doc.problems.length ? ' · ' + doc.problems.join('；') : ''}`);
-    return { ok: true, doc, name: plan.name, summary: plan.summary, mapping: map, problems: doc.problems, secs: (Date.now() - t0) / 1000 };
+    if (!plan) { LIVE.plan = null; return { ok: false, error: (why ? '链路没拆好：' + why : '分析没给出可用的链路'), retried: true, raw: lastText.slice(-400), secs: (Date.now() - t0) / 1000 }; }
+    LIVE.plan = plan;
+    LIVE.doc = {
+      conv: LIVE.conv, at: Math.round(Date.now() / 1000),
+      cards: plan.cards.map(c => ({ ...c, n: 1 })), edges: plan.edges,
+      name: plan.name, summary: plan.summary, stats: { messages: LIVE.msgs.length },
+    };
+    console.log(`[实时画布] 解析完成：${LIVE.doc.cards.length} 张卡 / ${LIVE.doc.edges.length} 条连线 · ${plan.name || ''} · 用时 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+    return { ok: true, doc: LIVE.doc, name: plan.name, summary: plan.summary, secs: (Date.now() - t0) / 1000 };
   } catch (e) { return { ok: false, error: String(e && e.message || e), secs: (Date.now() - t0) / 1000 }; }
 });
 

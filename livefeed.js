@@ -18,11 +18,13 @@ const ROOT = process.env.WF_LIVE_DIR ? path.resolve(process.env.WF_LIVE_DIR) : p
 const PROFILES = path.join(ROOT, 'profiles');
 
 const LIST_LIMIT = 40;        // 列表最多 40 条「最近有活动的对话」
+const LIST_PER_PROFILE = 6;   // 每个岗位最近的几条一定留着：别的岗位再热闹，也不把自己的最近对话挤出去
 const LIST_DAYS = 14;         // 只看最近 14 天动过的
 const LIST_PER_DB = 12;       // 每个岗位最多取 12 条，再跨岗位合并排序
 const MSG_LIMIT = 200;        // 初次读最近 200 条；之后每次增量最多 200 条
-const EV_TEXT = 600;          // 一条消息正文最多读 600 字（不把整库拉进内存）
-const EV_CALLS = 4000;        // 一条消息里的工具参数最多读 4000 字
+const EV_TEXT = 4000;         // 一条消息正文最多读 4000 字（实测有 926 字的结果，600 字会把尾巴切掉）
+const EV_CALLS = 30000;       // 一条消息里的工具参数最多读 30000 字（实测单个 write_file 参数 8836 字；
+                              // 截断会把 JSON 解析失败、整条调用丢掉，产物就没了）
 
 const sq = s => "'" + String(s).replace(/'/g, "''") + "'";
 const WRITE_WORD = /\b(insert|update|delete|drop|alter|create|attach|detach|replace|pragma|vacuum|reindex|begin|commit)\b/i;
@@ -119,7 +121,17 @@ async function listConversations() {
     }
   }));
   rows.sort((a, b) => b.at - a.at);
-  return rows.slice(0, LIST_LIMIT);
+  // 跨岗位合并后按时间取前 N 条会把某些岗位最近的对话挤出去（实测：某岗位最新一条排在 41 位）。
+  // 先保证每个岗位最近的几条都在，再按时间把剩下的填满，最后整体按时间排。
+  const picked = [], rest = [], seenN = new Map();
+  for (const r of rows) {
+    const n = seenN.get(r.profile) || 0;
+    if (n < LIST_PER_PROFILE) { picked.push(r); seenN.set(r.profile, n + 1); }
+    else rest.push(r);
+  }
+  const out = picked.concat(rest).slice(0, LIST_LIMIT);
+  out.sort((a, b) => b.at - a.at);
+  return out;
 }
 
 function parseCalls(raw) {
@@ -146,15 +158,21 @@ function toolFailed(content) {
 }
 
 function normRow(m) {
+  const tools = m.role === 'assistant' ? parseCalls(m.tool_calls) : [];
+  const rawCalls = String(m.tool_calls || '').trim();
   return {
     id: Number(m.id) || 0,
     role: String(m.role || ''),
     at: Math.round((Number(m.at) || 0) * 1000),
     text: m.role === 'assistant' || m.role === 'user' ? String(m.content || '') : '',
-    tools: m.role === 'assistant' ? parseCalls(m.tool_calls) : [],
+    tools,
     toolName: m.tool_name || '',
     toolCallId: m.tool_call_id || '',
     ok: m.role === 'tool' ? !toolFailed(m.content) : undefined,
+    result: m.role === 'tool' ? String(m.content || '') : '',
+    // 超出读取上限 / JSON 读不出来：这一条里的产出可能没算到，要如实标出来，不能当「没有产出」
+    cut: Number(m.tc_len) > EV_CALLS || Number(m.ct_len) > EV_TEXT,
+    broken: m.role === 'assistant' && !!rawCalls && rawCalls !== '[]' && !tools.length,
   };
 }
 
@@ -163,8 +181,8 @@ function normRow(m) {
 async function askCandidates(profile, session, beforeId, limit = 8) {
   if (!safeName(profile) || !safeName(session) || !beforeId) return [];
   const file = dbOf(profile);
-  const cols = `id, role, tool_name, tool_call_id, substr(coalesce(content,''),1,${EV_TEXT}) AS content, substr(coalesce(tool_calls,''),1,${EV_CALLS}) AS tool_calls, timestamp`;
-  const sql = `SELECT json_group_array(json_object('id',id,'role',role,'tool_name',tool_name,'tool_call_id',tool_call_id,'content',content,'tool_calls',tool_calls,'at',timestamp))
+  const cols = `id, role, tool_name, tool_call_id, substr(coalesce(content,''),1,${EV_TEXT}) AS content, substr(coalesce(tool_calls,''),1,${EV_CALLS}) AS tool_calls, length(coalesce(content,'')) AS ct_len, length(coalesce(tool_calls,'')) AS tc_len, timestamp`;
+  const sql = `SELECT json_group_array(json_object('id',id,'role',role,'tool_name',tool_name,'tool_call_id',tool_call_id,'content',content,'tool_calls',tool_calls,'ct_len',ct_len,'tc_len',tc_len,'at',timestamp))
     FROM (SELECT ${cols} FROM messages WHERE session_id = ${sq(session)} AND id < ${Math.floor(beforeId)} AND role = 'user' ORDER BY id DESC LIMIT ${Math.floor(limit) || 8})`;
   const r = await query(file, sql);
   if (r.error || !Array.isArray(r.rows)) return [];
@@ -177,8 +195,8 @@ async function readMessages(profile, session, afterId = 0, opts = {}) {
   if (!safeName(profile) || !safeName(session)) return { error: '会话标识不合法' };
   const file = dbOf(profile);
   try { fs.accessSync(file, fs.constants.R_OK); } catch (e) { return { error: '会话库不可读：' + profile }; }
-  const cols = `id, role, tool_name, tool_call_id, substr(coalesce(content,''),1,${EV_TEXT}) AS content, substr(coalesce(tool_calls,''),1,${EV_CALLS}) AS tool_calls, timestamp`;
-  const pick = `SELECT json_group_array(json_object('id',id,'role',role,'tool_name',tool_name,'tool_call_id',tool_call_id,'content',content,'tool_calls',tool_calls,'at',timestamp)) FROM (`;
+  const cols = `id, role, tool_name, tool_call_id, substr(coalesce(content,''),1,${EV_TEXT}) AS content, substr(coalesce(tool_calls,''),1,${EV_CALLS}) AS tool_calls, length(coalesce(content,'')) AS ct_len, length(coalesce(tool_calls,'')) AS tc_len, timestamp`;
+  const pick = `SELECT json_group_array(json_object('id',id,'role',role,'tool_name',tool_name,'tool_call_id',tool_call_id,'content',content,'tool_calls',tool_calls,'ct_len',ct_len,'tc_len',tc_len,'at',timestamp)) FROM (`;
   const sql = afterId
     ? pick + `SELECT ${cols} FROM messages WHERE session_id = ${sq(session)} AND id > ${Math.floor(afterId)} ORDER BY id LIMIT ${MSG_LIMIT})`
     : opts.oldest
@@ -192,4 +210,4 @@ async function readMessages(profile, session, afterId = 0, opts = {}) {
   return { msgs, file, initial: !afterId, limit: MSG_LIMIT };
 }
 
-module.exports = { ROOT, LIST_LIMIT, MSG_LIMIT, listConversations, readMessages, askCandidates, whoOf, dbOf, roURI, assertSelect };
+module.exports = { ROOT, LIST_LIMIT, MSG_LIMIT, listConversations, readMessages, askCandidates, whoOf, dbOf, roURI, assertSelect, EV_TEXT, EV_CALLS, normRow };

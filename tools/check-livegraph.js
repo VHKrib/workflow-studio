@@ -240,5 +240,79 @@ const edgesOf = (doc, a, b, k) => doc.edges.filter(([x, y, kk]) => (!a || x === 
   ok('face-human-impl-tech', dirty.length === 0 && impl.length >= 1, { dirty: dirty.map(c => c.title), impl: impl.length });
 }
 
+// ---------- 7) 取料上限：长参数不能被截断（截断 = JSON 读不出来 = 产物丢了） ----------
+{
+  const feed = require('../livefeed');
+  // 实测隔板对话里有 8836 字的 write_file 参数，产出路径写在脚本尾部；上限必须容得下
+  ok('feed-caps-cover-real-args', feed.EV_CALLS >= 12000 && feed.EV_TEXT >= 2000, { calls: feed.EV_CALLS, text: feed.EV_TEXT });
+  const body = 'x'.repeat(8800);
+  const args = JSON.stringify({ content: body, path: '/demo/交付/长脚本.py' });
+  const tc = JSON.stringify([{ id: 'c1', type: 'function', function: { name: 'write_file', arguments: args } }]);
+  const row = feed.normRow({ id: 1, role: 'assistant', content: '', tool_calls: tc, timestamp: 1, tc_len: tc.length, ct_len: 0 });
+  ok('feed-long-args-parsed', row.tools.length === 1 && row.tools[0].args.path === '/demo/交付/长脚本.py' && row.broken === false, { tools: row.tools.length, path: row.tools[0] && row.tools[0].args.path });
+  const cutRow = feed.normRow({ id: 2, role: 'assistant', content: '', tool_calls: tc, timestamp: 1, tc_len: feed.EV_CALLS + 1, ct_len: 0 });
+  ok('feed-cut-flagged', cutRow.cut === true);
+  const badRow = feed.normRow({ id: 3, role: 'assistant', content: '', tool_calls: '[{"id":"c1","function":{"name":"write_file","arguments":"{\\"pa', timestamp: 1, tc_len: 60, ct_len: 0 });
+  ok('feed-broken-flagged', badRow.broken === true && badRow.tools.length === 0);
+}
+
+// ---------- 8) 脚本产出 / 同路径重写 / 脚本里复用旧结果 / 卡面三块 ----------
+{
+  const RES = (name, args, content) => {
+    const id = ++seq, cid = 'call_' + id;
+    return [
+      { id, role: 'assistant', text: '', at: id * 1000, tools: [{ name, args, callId: cid }] },
+      { id: ++seq, role: 'tool', text: '', result: content, at: seq * 1000, toolName: name, toolCallId: cid, ok: true },
+    ];
+  };
+  seq = 0;
+  const msgs = flat([
+    U('先把参考图描成线稿'),
+    T('read_file', { path: '/demo/参考/素描.png' }),
+    RES('terminal', { command: 'cd /demo && python3 line.py' }, '{"output": "OK\\n-> /demo/交/线稿-下落.png 2211747 160f570e948d\\n", "exit_code": 0}'),
+    A('线稿好了 MEDIA:/demo/交/线稿-下落.png'),
+    U('齿部连在一起了，分开重出'),
+    RES('terminal', { command: 'cd /demo && python3 line2.py' }, '{"output": "线稿-下落.png 2058826 ee7bdd6f2bee\\n", "cwd": "/demo/交", "exit_code": 0}'),
+    A('改好了 MEDIA:/demo/交/线稿-下落.png'),
+  ]);
+  const doc = build(msgs, null);
+  const outs = doc.cards.filter(c => c.kind === 'out' && /线稿-下落/.test(c.title));
+  ok('result-output-attributed', outs.length === 2, { outs: outs.map(c => c.ver) });
+  ok('rewrite-keeps-old-version', outs.length === 2 && outs[0].ver === 1 && outs[1].ver === 2
+    && /160f570e948d/.test(outs[0].impl) && /ee7bdd6f2bee/.test(outs[1].impl), { impl: outs.map(c => (c.impl || '').split('\n').slice(-2)) });
+  ok('result-output-size-on-face', outs.some(c => /KB|MB/.test(c.body)));
+  // 卡面三块：素材 / 工具 / 成果（和主画布同一套含义）
+  const proc = doc.cards.filter(c => c.kind === 'proc');
+  const kinds = new Set(proc.flatMap(c => (c.mods || []).map(m => m.type)));
+  ok('face-mods-three-kinds', kinds.has('mat') && kinds.has('tool') && kinds.has('res'), { kinds: [...kinds] });
+  ok('face-mods-in-out', doc.cards.filter(c => c.kind === 'in').every(c => (c.mods || []).every(m => m.type === 'mat'))
+    && doc.cards.filter(c => c.kind === 'out').every(c => (c.mods || []).every(m => m.type === 'res')));
+}
+{
+  // 脚本里点名了已有素材（旧结果被再加工）：算一次真实使用，而且只有一条使用边
+  const RES = (name, args, content) => {
+    const id = ++seq, cid = 'call_' + id;
+    return [
+      { id, role: 'assistant', text: '', at: id * 1000, tools: [{ name, args, callId: cid }] },
+      { id: ++seq, role: 'tool', text: '', result: content, at: seq * 1000, toolName: name, toolCallId: cid, ok: true },
+    ];
+  };
+  seq = 0;
+  const msgs = flat([
+    U('先出一张素描'),
+    T('read_file', { path: '/demo/参考/实物.png' }),
+    RES('terminal', { command: 'cd /demo && python3 sketch.py' }, '{"output": "-> /demo/交/素描-装配.png 2423715 15a17c8b9c\\n", "exit_code": 0}'),
+    U('照这张素描的画风，把线稿重出一版'),
+    RES('write_file', { path: '/demo/scratch/line.py', content: 'STYLE = os.path.join(OUT, "素描-装配.png")\nopen(STYLE, "rb")\n' }, '{"output": "ok", "exit_code": 0}'),
+    RES('terminal', { command: 'cd /demo/scratch && python3 line.py' }, '{"output": "-> /demo/交/线稿-装配.png 1234567 aabbccdd11\\n", "exit_code": 0}'),
+  ]);
+  const doc = build(msgs, null);
+  const sketch = doc.cards.filter(c => /素描-装配/.test(c.title));
+  const useEdges = doc.edges.filter(([a, b, k]) => k === 'use' && sketch.some(c => c.id === a));
+  const procs = doc.cards.filter(c => c.kind === 'proc');
+  ok('script-mention-reuse', useEdges.length === 1 && useEdges[0][1] === procs[procs.length - 1].id, { useEdges, procs: procs.map(c => c.title) });
+  ok('script-mention-not-double', (doc.cards.find(c => /素描-装配/.test(c.title)) || {}).uses === 1, { cards: doc.cards.filter(c => /素描-装配/.test(c.title)).map(c => [c.kind, c.uses]) });
+}
+
 console.log(fail ? `\n${fail} 条没过` : '\n全部通过');
 process.exit(fail ? 1 : 0);
