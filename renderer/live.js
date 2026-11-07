@@ -60,7 +60,9 @@ const humanNote = s => String(s || '')
 function paintEmpty() {
   const empty = !doc || !doc.cards || !doc.cards.length;
   $('#lempty').classList.toggle('off', !empty);
-  if (empty) $('#lempty').textContent = cur ? (following ? '正在读这条对话…' : '打开「跟随」开始直播') : '选一条对话，再打开「跟随」';
+  if (empty) $('#lempty').textContent = cur
+    ? (following ? '跟着这条对话，点「解析链路」开始' : '点「解析链路」把这条对话画成卡')
+    : '选一条对话';
 }
 function paintStat() {
   if (!doc || !doc.conv) { setStat(cur ? '等第一条消息…' : ''); return; }
@@ -165,13 +167,9 @@ $('#lfol').checked = following;
   paintStat(); paintEmpty();
   maybeAnalyze();
 }
-function maybeAnalyze() {
-  if (analyzing || !following || !cur) return;
-  const n = doc && doc.stats ? (doc.stats.messages || 0) : 0;
-  if (n < ANALYZE_MIN_MSGS) return;
-  if (analyzedKey === cur && Date.now() - lastAnalyzed < ANALYZE_EVERY) return;
-  setTimeout(() => analyzeNow(false), 500);
-}
+// 跟随只负责「读消息、更新状态」，**不自动解析**：解析是人点出来的，跑完自动保存；
+// 不满意再点「重新生成」，新的没拆好就还是旧那份。
+function maybeAnalyze() { /* 故意留空：自动重解析会让每次打开都白跑一次模型 */ }
 
 async function stopFollow() {
   const found = list.find(c => c.key === cur);
