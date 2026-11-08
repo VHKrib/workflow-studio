@@ -109,7 +109,7 @@ const msgsLine = msgs => (msgs || []).filter(Boolean).map(m => {
 {
   seq = 0;
   const msgs = flat([
-    U('把示例资料整理成一版说明'),
+    U('把示例材料整理成一版说明'),
     T('read_file', { path: '/demo/资料/示例需求.md' }),
     T('write_file', { path: '/demo/交付/说明一.md' }),
     A('写好了。MEDIA:/demo/交付/说明一.md'),

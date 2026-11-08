@@ -41,7 +41,7 @@ const edgesOf = (doc, a, b, k) => doc.edges.filter(([x, y, kk]) => (!a || x === 
 {
   seq = 0;
   const msgs = flat([
-    U('把示例资料整理成一版说明'),
+    U('把示例材料整理成一版说明'),
     T('read_file', { path: '/demo/资料/示例需求.md' }),
     T('vision_analyze', { image_url: '/demo/参考/示例主图.png' }),
     T('write_file', { path: '/demo/交付/说明-v1.md' }),
