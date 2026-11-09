@@ -611,6 +611,10 @@ button:disabled{opacity:.45;cursor:default;pointer-events:none}
 /* 实时工作流：和一条工作流一样，占画布区；从右边列表切进来 */
 .liveview{position:absolute;inset:0;display:none;flex-direction:column;background:var(--paper);z-index:6;border-radius:0}
 .canvaswrap.live .liveview{display:flex}
+/* 确定工作流之后：左边只读参考，右边是复制出来的可编辑工作流 */
+.canvaswrap.live.split .liveview{right:auto;width:50%;border-right:1px solid var(--line);box-shadow:10px 0 26px rgba(20,16,12,.06)}
+.canvaswrap.live.split > #wrap{display:block !important;position:absolute;inset:0 0 0 50%}
+.canvaswrap.live.split > .zoombar{left:auto;right:16px}
 .canvaswrap.live > #wrap,.canvaswrap.live > .zoombar,.canvaswrap.live > .dock,
 .canvaswrap.live > .dock-fab,.canvaswrap.live > #emptyRead{display:none !important}
 .liveview webview{flex:1 1 auto;border:0;display:flex;background:var(--paper)}

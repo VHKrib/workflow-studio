@@ -18,6 +18,7 @@ let following = false;
 let doc = null;
 let pos = new Map();       // 卡 id → {x, y, w, h}（画布坐标，含 ORIGIN）
 let fitted = false;
+let readOnly = false;      // 确定工作流之后：这块变成只读参考
 
 const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 const pad2 = n => String(n).padStart(2, '0');
@@ -730,7 +731,7 @@ const implOf = n => String((n && n.impl) || '').trim();
 const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y]);
 function findDock() { return null; }                     // 实时窗口不接插槽（连线是解析出来的，不靠拖）
 function saveStore() { persist(); }              // 拖动收尾：存位置
-function openCard(n) { openEditor(n.id); }       // 双击 / ⚙ 都进同一个面板
+function openCard(n) { if (readOnly) { setStat('左边是只读参考，改到右边那张画布上'); return; } openEditor(n.id); }   // 双击 / ⚙ 都进同一个面板
 function chatAsk() { const i = document.getElementById('chatIn'); if (i) i.focus(); }
 
 // 只读窗口里的「连线」按钮：不建新关系，只提示一句
@@ -756,7 +757,7 @@ function applyZoom() {
 
 // 存盘
 function persist() {
-  if (!doc) return;
+  if (!doc || readOnly) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => { window.tcflow.liveDocSave(doc).catch(() => {}); }, 400);
 }
@@ -986,6 +987,8 @@ function bindCanvas() {
     const t = ev.target || {};
     const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '') || t.isContentEditable;
     const meta = ev.metaKey || ev.ctrlKey;
+    if (readOnly && (ev.key === 'Delete' || ev.key === 'Backspace')) return;
+    if (readOnly && meta) return;
     const k = String(ev.key || '').toLowerCase();
     if (meta && k === 'z') { ev.preventDefault(); if (ev.shiftKey) redo(); else undo(); return; }
     if (meta && k === 'y') { ev.preventDefault(); redo(); return; }
@@ -999,8 +1002,41 @@ function bindCanvas() {
   });
 }
 
+function setReadOnly(v) {
+  readOnly = !!v;
+  document.body.classList.toggle('ro', readOnly);
+  canvas.classList.toggle('ro', readOnly);
+  const btn = document.getElementById('lconfirm');
+  if (btn) {
+    btn.disabled = readOnly;
+    btn.textContent = readOnly ? '已确定 · 左侧只读' : '确定工作流';
+  }
+  if (readOnly) { closeEditor(); setStat('左边是只读参考，右边那张画布可以改'); }
+}
+
+function confirmFlow() {
+  if (readOnly) return;
+  if (!doc || !doc.cards || !doc.cards.length) { setStat('还没有解析出链路，先点「解析链路」'); return; }
+  const btn = document.getElementById('lconfirm');
+  if (btn) { btn.disabled = true; btn.textContent = '确定中…'; }
+  const copy = JSON.parse(JSON.stringify(doc));
+  window.tcflow.liveConfirm({ doc: copy, name: doc.name }).then(r => {
+    if (r && r.ok) { setStat('已复制成一条可编辑的工作流：左边只读，右边改'); }
+    else {
+      if (btn) { btn.disabled = false; btn.textContent = '确定工作流'; }
+      setStat('没确定成：' + ((r && r.error) || '未知原因'));
+    }
+  }).catch(() => {
+    if (btn) { btn.disabled = false; btn.textContent = '确定工作流'; }
+    setStat('没确定成：连不上主窗口');
+  });
+}
+
 async function init() {
   bindCanvas();
+  const cf = document.getElementById('lconfirm');
+  if (cf) cf.onclick = confirmFlow;
+  if (window.tcflow.onLiveReadonly) window.tcflow.onLiveReadonly(v => setReadOnly(v));
   $('#lconv').addEventListener('pointerdown', () => loadList());
   $('#lconv').addEventListener('change', e => {
     const key = e.target.value;

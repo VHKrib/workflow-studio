@@ -42,6 +42,19 @@ contextBridge.exposeInMainWorld('tcflow', {
   liveAnalyze: (payload) => ipcRenderer.invoke('live:analyze', payload),
   livePeek: (payload) => ipcRenderer.invoke('live:peek', payload),
   liveDocSave: (doc) => ipcRenderer.invoke('live:doc:save', doc),
+  // 「确定工作流」：把实时解析出来的这份复制成一条可编辑的工作流（转发给主窗口去建）
+  liveConfirm: (payload) => ipcRenderer.invoke('live:confirm', payload),
+  onLiveConfirm: (cb) => {
+    const h = (_e, doc) => cb(doc);
+    ipcRenderer.on('live:confirm-to-app', h);
+    return () => ipcRenderer.removeListener('live:confirm-to-app', h);
+  },
+  // 确认之后左边那块只读参考：true = 只读
+  onLiveReadonly: (cb) => {
+    const h = (_e, v) => cb(v);
+    ipcRenderer.on('live:readonly', h);
+    return () => ipcRenderer.removeListener('live:readonly', h);
+  },
   onLiveShow: (cb) => {
     const h = () => cb();
     ipcRenderer.on('live:show', h);

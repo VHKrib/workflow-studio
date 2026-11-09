@@ -115,7 +115,8 @@ async function bootLiveView() {
 async function enterLive() {
   liveMode = true;
   const cw = document.querySelector('.canvaswrap');
-  if (cw) cw.classList.add('live');
+  if (cw) { cw.classList.remove('split'); cw.classList.add('live'); }
+  const wv0 = $('#liveWV'); if (wv0) { try { wv0.send('live:readonly', false); } catch (e) { } }
   const name = $('#flowName');
   if (name) { name.value = '实时工作流'; name.readOnly = true; }
   const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = 'none';
@@ -124,11 +125,52 @@ async function enterLive() {
   const wv = $('#liveWV');
   if (wv) { try { window.tcflow.liveAttach(wv.getWebContentsId()).catch(() => {}); } catch (e) { } }
 }
+// 「确定工作流」：把左边解析出来的这份复制成一条正式工作流，右边立刻可以改；左边只读留着对照。
+function adoptLiveFlow(doc) {
+  if (!doc || !Array.isArray(doc.cards) || !doc.cards.length) return null;
+  const base = String(doc.name || '实时工作流').trim() || '实时工作流';
+  const w = {
+    id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
+    name: base + ' · 已确定',
+    agent: (doc.conv && doc.conv.profile) || '',
+    nodes: doc.cards.map(c => Object.assign({}, c, { manual: true, checks: c.checks || [], status: c.status || 'idle' })),
+    edges: (doc.edges || []).map(e => [e[0], e[1]]),
+    chat: [],
+    version: 1,
+    updated_at: Date.now(),
+    fromLive: { profile: (doc.conv && doc.conv.profile) || '', session: (doc.conv && doc.conv.session) || '' }
+  };
+  store.workflows.unshift(w);
+  store.current = w.id;
+  selId = null; panelCardId = null;
+  saveStore();
+  renderWorkflowList();
+  render();
+  enterSplit();
+  // 分屏是刚加的，等一帧拿到右半边的真实宽度再对准，否则会按 0 宽算缩放（画布看着是空的）
+  requestAnimationFrame(() => requestAnimationFrame(() => { try { fitView(true, 0.2); } catch (e) { } }));
+  const fs = $('#footStat'); if (fs) fs.textContent = '已确定：右边这条可以改，左边是只读参考';
+  return w;
+}
+
+function enterSplit() {
+  const cw = document.querySelector('.canvaswrap');
+  if (!cw) return;
+  liveMode = true;
+  cw.classList.add('live', 'split');
+  const name = $('#flowName'); if (name) name.readOnly = false;
+  const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = '';
+  const wv = $('#liveWV');
+  if (wv) { try { wv.send('live:readonly', true); } catch (e) { } }
+  renderWorkflowList();
+}
+
 function exitLive() {
   if (!liveMode) return;
   liveMode = false;
   const cw = document.querySelector('.canvaswrap');
-  if (cw) cw.classList.remove('live');
+  if (cw) cw.classList.remove('live', 'split');
+  const wv = $('#liveWV'); if (wv) { try { wv.send('live:readonly', false); } catch (e) { } }
   const name = $('#flowName');
   if (name) name.readOnly = false;
   const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = '';
@@ -156,6 +198,7 @@ function bindUI() {
   $('#btnLive').onclick = () => enterLive();
   // 实时画布：开在主窗口里（同一个窗口铺满一层），不再另开窗口
   window.tcflow.onLiveShow(() => enterLive());
+  if (window.tcflow.onLiveConfirm) window.tcflow.onLiveConfirm(doc => adoptLiveFlow(doc));
 
   $('#btnValidate').onclick = () => validateAll();
   $('#btnRun').onclick = openRunModal;
@@ -2731,7 +2774,7 @@ function uniqueFlowName(base, selfId) {
 }
 // 缩放到整条流程都看得见（0.4–1），摆在右下角对话框的左边；
 // fold=true 时，挨着对话框放不下（要缩到 0.5 以下）就把对话框收成药丸，别让卡片压在它底下
-function fitView(fold = false) {
+function fitView(fold = false, minZoom = 0.3) {
   const ns = (flow() || {}).nodes || [];
   if (!ns.length) return centerView();
   const size = n => { const e = canvas.querySelector(`.node[data-id="${n.id}"]`); return [e ? e.offsetWidth : 244, e ? e.offsetHeight : 160]; };
@@ -2742,7 +2785,7 @@ function fitView(fold = false) {
   if (fold && dock && need(wrap.clientWidth - dock, wrap.clientHeight) < 0.5) { dockOpen = false; renderDock(); dock = 0; }
   const W = Math.max(320, wrap.clientWidth - dock), H = wrap.clientHeight;
   const fit = need(W, H);
-  zoom = Math.max(0.3, Math.min(1, Math.floor(fit * 20) / 20));     // 0.3 是缩放条的下限：对话框开着时宁可字小一点，也别让卡压在它底下
+  zoom = Math.max(minZoom, Math.min(1, Math.floor(fit * 20) / 20));     // 0.3 是缩放条的下限：对话框开着时宁可字小一点，也别让卡压在它底下
   applyZoom();
   // 放得下就居中；还是放不下就从左上角开始（先看见输入卡），往右拖着看
   const wide = (x1 - x0 + 2 * pad) * zoom > W, tall = (y1 - y0 + 2 * pad) * zoom > H;

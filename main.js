@@ -706,6 +706,15 @@ ipcMain.handle('live:peek', (_e, { path: p } = {}) => {
 });
 
 // 人在实时画布上改过的卡片：存回同一份文件（下次打开就是改后的样子）
+// 「确定工作流」：实时画布把解析结果递上来，转给主窗口去建一条可编辑的工作流
+ipcMain.handle('live:confirm', (_e, payload) => {
+  const doc = payload && payload.doc ? payload.doc : payload;
+  if (!doc || !Array.isArray(doc.cards) || !doc.cards.length) return { ok: false, error: '还没有可确定的链路' };
+  if (!MAIN_WIN || MAIN_WIN.isDestroyed()) return { ok: false, error: '主窗口不在了' };
+  MAIN_WIN.webContents.send('live:confirm-to-app', doc);
+  return { ok: true, cards: doc.cards.length, edges: (doc.edges || []).length };
+});
+
 ipcMain.handle('live:doc:save', (_e, doc) => {
   if (!doc || !doc.conv || !Array.isArray(doc.cards)) return { ok: false, error: '内容不完整' };
   const okSave = saveLiveDoc(doc);

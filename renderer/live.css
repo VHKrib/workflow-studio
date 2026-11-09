@@ -59,6 +59,12 @@ details.limpl pre{margin:6px 0 0;padding:7px 8px;max-height:170px;overflow:auto;
   font-size:12px;cursor:pointer;color:var(--ink)}
 .lana:hover{background:color-mix(in srgb, var(--foreground) 6%, transparent)}
 .lana:disabled{opacity:.55;cursor:default}
+.lconfirm{border-color:var(--accent-line);color:var(--accent-ink);font-weight:600}
+.lconfirm:hover:not(:disabled){background:color-mix(in srgb, var(--accent) 10%, transparent)}
+/* 只读参考：卡片不再接受指针，观感也压灰一点 */
+#canvas.ro .node{pointer-events:none;filter:saturate(.85) opacity(.92)}
+body.ro .lbar{padding-right:8px}
+body.ro .lword{opacity:.5}
 
 /* 精修理由（为什么改 / 和上一版差在哪） */
 .node .note{margin-top:6px;font-size:11.5px;line-height:1.5;color:var(--ink-2);opacity:.85;border-left:2px solid var(--soft-line);padding-left:6px}
