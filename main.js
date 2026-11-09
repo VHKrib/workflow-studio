@@ -769,7 +769,9 @@ ipcMain.handle('run:pull', async (_e, { profile, limit } = {}) => {
       let hitHere = 0;
       for (const msg of r2.msgs) {
         const text = [msg.text, msg.result, JSON.stringify(msg.tools || [])].filter(Boolean).join('\n');
-        for (const p of text.match(RUN_FILE_RE) || []) {
+        for (const raw of text.match(RUN_FILE_RE) || []) {
+          const p = raw.replace(/^(?:MEDIA:|file:\/\/)/i, '').replace(/[)\]}>,.;:]+$/, '');   // MEDIA: 前缀 / 结尾标点都去掉
+          if (!p.includes('/') || p.includes('://')) continue;
           const name = p.split('/').pop();
           const at = Number(msg.at) || 0;
           const prev = seen.get(p);
