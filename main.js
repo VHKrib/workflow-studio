@@ -738,15 +738,22 @@ const RUN_FILE_RE = /(?:~|\.{1,2}\/)?[^\s"'`，。；、）)】\\]*?\/[^\s"'`，
 ipcMain.handle('run:pull', async (_e, { profile, limit, minutes: minutesArg } = {}) => {
   try {
     // 只读这个执行方自己的对话，而且只要最近一段时间的（默认 20 分钟）：它是谁就只读谁。
+    // 窗口从「你上次跟它说话」开始算：跑多久都能取到，也不会混进更早的文件
     const minutes = Math.max(1, Math.min(240, Number(minutesArg) || 20));
-    const since = Date.now() - minutes * 60 * 1000;
-    const r2 = await livefeed.recentMessages(profile, 1200);
+    const r2 = await livefeed.recentMessages(profile, 3000);
     if (!r2 || !r2.msgs) return { ok: false, error: (r2 && r2.error) || '读不到这个执行方的会话库' };
+    let sinceAt = 0, sinceId = 0;
+    for (const m of r2.msgs) {
+      if (m.role !== 'user') continue;
+      sinceAt = Number(m.at) || 0; sinceId = m.id || 0;     // 最后一条用户消息（列表按 id 升序，最后命中的就是最新的）
+    }
+    if (!sinceAt) sinceAt = Date.now() - minutes * 60 * 1000;   // 没有用户消息时退回固定窗口
+
     const seen = new Map();
     let scanned = 0;
     for (const msg of r2.msgs) {
       const at = Number(msg.at) || 0;
-      if (at && at < since) continue;                       // 只认窗口内的消息
+      if (at && at < sinceAt) continue;                     // 只认那次请求之后产出的东西
       scanned++;
       const text = [msg.text, msg.result, JSON.stringify(msg.tools || [])].filter(Boolean).join('\n');
       for (const raw of text.match(RUN_FILE_RE) || []) {
@@ -763,7 +770,7 @@ ipcMain.handle('run:pull', async (_e, { profile, limit, minutes: minutesArg } = 
       .filter(f => !/\/(package-lock\.json|package\.json|config\.yaml|SKILL\.md)$/i.test(f.path))
       .filter(f => !/^\/(tmp|private\/tmp|var\/folders)\//.test(f.path))
       .sort((a, b) => b.at - a.at).slice(0, 40);
-    return { ok: true, conv: { profile, sources: files.length ? [profile] : [], minutes }, files, scanned };
+    return { ok: true, conv: { profile, sources: files.length ? [profile] : [], minutes, sinceAt, sinceId }, files, scanned };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }
