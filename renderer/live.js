@@ -627,7 +627,7 @@ function delCard(id) {
   selId = null;
   renderDoc(doc, { keepView: true });
   persist();
-  toast('已删除这张卡（⌘Z 可撤销）');
+  toast('已删除这张卡（' + MOD + 'Z 可撤销）');
 }
 
 // 改/删单个元素（素材、工具、做法、成果）
@@ -639,7 +639,7 @@ function delMod(cardId, type, name) {
   renderDoc(doc, { keepView: true });
   if (editingId === cardId) openEditor(cardId);
   persist();
-  toast('已删除元素「' + name + '」（⌘Z 可撤销）');
+  toast('已删除元素「' + name + '」（' + MOD + 'Z 可撤销）');
 }
 function renameMod(cardId, type, name) {
   const c = find(cardId);
@@ -1057,7 +1057,18 @@ function confirmFlow() {
   });
 }
 
+const IS_MAC = /Mac/i.test(navigator.platform || '');
+const KEYMOD = IS_MAC ? '⌘' : 'Ctrl+';
+function localizeKeys() {
+  if (IS_MAC) return;
+  const fix = t => String(t).replace(/⇧⌘/g, 'Shift+Ctrl+').replace(/⌘/g, 'Ctrl+');
+  document.querySelectorAll('[title]').forEach(el => {
+    const t = el.getAttribute('title');
+    if (t && t.indexOf('⌘') >= 0) el.setAttribute('title', fix(t));
+  });
+}
 async function init() {
+  localizeKeys();
   bindCanvas();
   if (REF) {
     document.body.classList.add('refmode');

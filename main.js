@@ -10,7 +10,10 @@ const { createLinkStore } = require('./linkstore');
 const { createVersionStore } = require('./versions');
 const livefeed = require('./livefeed');
 const { pathToFileURL } = require('url');
-const HERMES = path.join(os.homedir(), '.hermes', 'hermes-agent', '.hermes', 'bin', 'hermes');
+const { hermesBin } = require('./platform');
+const HERMES = hermesBin();          // mac/linux: ~/.hermes/.../bin/hermes；Windows: hermes.cmd（自动开 shell）
+// 绝对路径要真的存在；只写命令名（交给 PATH）就不检查文件
+function hermesMissing() { return /[\\/]/.test(HERMES.cmd) && !fs.existsSync(HERMES.cmd); }
 
 // 共享链路状态文件：人和 agent 共用一份底稿（画布写、agent 读；外面改了画布认领回来）
 let LINKS = null;
@@ -69,11 +72,11 @@ function listAgents() {
 // toolsets：只给分析用的那几样（如 'todo,no_mcp'），agent 就碰不到终端、文件、发消息、MCP 接口——真正的只读
 function askAgent({ profile, prompt, timeoutMs = 120000, toolsets }) {
   return new Promise((resolve) => {
-    if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES });
+    if (hermesMissing()) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES.cmd });
     const args = ['-p', profile, 'chat'];
     if (toolsets) args.push('-t', String(toolsets));
     args.push('-q', prompt);
-    const child = execFile(HERMES, args,
+    const child = execFile(HERMES.cmd, args,
       { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024, env: { ...process.env } },
       (err, stdout, stderr) => {
         resolve({ ok: !err, code: err ? (err.code || 'err') : 0, text: (stdout || stderr || '').slice(-20000) });
@@ -85,11 +88,11 @@ function askAgent({ profile, prompt, timeoutMs = 120000, toolsets }) {
 // 只要干净答案：走 stream-json，取 result 事件里的正文（不带回显、不带思考过程）
 function askAgentClean({ profile, prompt, toolsets, timeoutMs = 240000 }) {
   return new Promise((resolve) => {
-    if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在' });
+    if (hermesMissing()) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES.cmd });
     const args = ['-p', profile, 'chat', '--format', 'stream-json'];   // 不加 --source：网关只认固定几种，写了会直接失败
     if (toolsets) args.push('-t', String(toolsets));
     args.push('-q', prompt);
-    execFile(HERMES, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, env: { ...process.env } }, (err, stdout) => {
+    execFile(HERMES.cmd, args, { timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, env: { ...process.env }, shell: HERMES.shell }, (err, stdout) => {
       const lines = String(stdout || '').split('\n');
       let text = '';
       for (const line of lines) {
@@ -115,13 +118,13 @@ const CHAT_FAKE = process.env.WF_CHAT_FAKE || '';
 // 只读预演固定用零工具工具组：主进程这边再盖一次——渲染层就算传错，也拿不到终端/文件/消息/MCP
 const PREVIEW_TOOLSETS = 'context_engine,no_mcp';
 ipcMain.handle('agent:stream', (e, { profile, prompt, runId, timeoutMs = 180000, toolsets, preview }) => new Promise((resolve) => {
-  if (!fs.existsSync(HERMES)) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES });
+  if (hermesMissing()) return resolve({ ok: false, error: 'hermes 入口不存在: ' + HERMES.cmd });
   if (preview) toolsets = PREVIEW_TOOLSETS;
   const args = ['-p', profile, 'chat', '--format', 'stream-json'];
   if (toolsets) args.push('-t', String(toolsets));     // 只给指定工具组（分析链路时 todo,no_mcp：不能跑命令、不能写文件、不碰 MCP 接口）
   args.push('-q', prompt);
   const fake = (READ_FAKE === 'hang' && toolsets === 'todo,no_mcp') || (CHAT_FAKE === 'hang' && !toolsets);
-  const child = fake ? spawn('/bin/sleep', ['600'], { env: { ...process.env } }) : spawn(HERMES, args, { env: { ...process.env } });
+  const child = fake ? spawn(process.execPath, ['-e', 'setTimeout(()=>{},600000)'], { env: { ...process.env } }) : spawn(HERMES.cmd, args, { env: { ...process.env }, shell: HERMES.shell });
   runs.set(runId, child);
   if (preview) console.log(`[预演] 起进程：hermes -p ${profile} chat --format stream-json -t ${toolsets}（零工具 · 只出结论）`);
   let buf = '', finalText = '', tokens = null, err = '', killedByTimeout = false, toolCalls = 0;
@@ -315,6 +318,10 @@ function handleOpenUrl(url) {
   if (/^workflow-studio:\/\/(live|实时)/i.test(s)) openLiveWindow();
 }
 function registerProtocol() {
+  if (process.platform === 'linux' && !app.isPackaged) {   // Linux 开发态没有 .desktop，登记不了，别刷失败日志
+    console.log('[唤起] Linux 开发态跳过协议登记（打包后才生效）');
+    return;
+  }
   try {
     // 开发态（electron .）要把脚本路径一起登记，打包后直接登记即可
     if (process.defaultApp && process.argv.length >= 2) app.setAsDefaultProtocolClient(PROTO, process.execPath, [path.resolve(process.argv[1])]);

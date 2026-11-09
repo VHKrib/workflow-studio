@@ -78,7 +78,20 @@ function cardLine(n, i) {
     (implOf(n) ? `\n   ↳ 内部实现（不进卡片，只给你看）：${implOf(n)}` : '');
 }
 
+const IS_MAC = /Mac/i.test(navigator.platform || '');
+const KEYMOD = IS_MAC ? '⌘' : 'Ctrl+';
+// 界面文案写的是 Mac 的 ⌘；非 mac 平台在启动时换成 Ctrl+
+function localizeKeys() {
+  if (IS_MAC) return;
+  const fix = t => String(t).replace(/⇧⌘/g, 'Shift+Ctrl+').replace(/⌘/g, 'Ctrl+');
+  document.querySelectorAll('[title]').forEach(el => {
+    const t = el.getAttribute('title');
+    if (t && t.indexOf('⌘') >= 0) el.setAttribute('title', fix(t));
+  });
+}
+
 (async () => {
+  localizeKeys();
   agents = await window.tcflow.listAgents();
   loadStore();
   if (!store.workflows.length) createWorkflow('商品卖点链路', true);

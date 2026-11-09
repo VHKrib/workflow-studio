@@ -13,7 +13,7 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 
-const SQLITE = fs.existsSync('/usr/bin/sqlite3') ? '/usr/bin/sqlite3' : 'sqlite3';
+const SQLITE = require('./platform').sqliteBin();   // mac: /usr/bin/sqlite3；Windows: sqlite3.exe
 const ROOT = process.env.WF_LIVE_DIR ? path.resolve(process.env.WF_LIVE_DIR) : path.join(os.homedir(), '.hermes');
 const PROFILES = path.join(ROOT, 'profiles');
 

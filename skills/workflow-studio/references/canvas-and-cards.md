@@ -176,3 +176,10 @@
 - 保留时先 `commitVersion(w)`（它会更新 `w.version`），再 `w.name = 基名 + ' · v' + w.version`。
 - `loadStore()` 收尾做一次**开机校正**：名字尾巴的 `vN` 与 `w.version` 不一致就地改成 `w.version`（`saveLocal`，不记版本）——老数据里两套计数留下的错位会被自动修好。
 - 切换工作流时也调 `syncNameVersion()`，避免中间态没对齐。
+
+### 跨平台（macOS / Windows / Linux）
+
+- 外部命令的位置统一走 `platform.js`：`hermesBin()`（Windows 取 `hermes.cmd` 且 `shell:true`，PATH 兜底）、`sqliteBin()`（mac 优先 `/usr/bin/sqlite3`，Windows 走 `sqlite3.exe` 或常见安装路径）、`modKey()`。
+- **不要在业务代码里再写死 `/usr/bin/...`、`/bin/sleep` 或 `⌘` 文案**：渲染层的快捷键文案由 `localizeKeys()` 在启动时把 `⌘` 换成 `Ctrl+`（mac 原样），新增提示要用 `KEYMOD` 拼。
+- 改这几处后跑 `npm run test:platform`（不需要 Electron），断言三平台解析结果。
+- Windows 启动器是 `打开工作流开发平台.bat`；Linux 开发态跳过协议登记（`workflow-studio://` 需要打包后的 `.desktop`）。

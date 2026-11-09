@@ -4,10 +4,17 @@
   "description": "A desktop canvas for composing agent workflows out of input / process / output cards. One workflow = one canvas, one agent per workflow.",
   "main": "main.js",
   "license": "MIT",
-  "keywords": ["workflow", "electron", "agent", "canvas", "orchestration"],
+  "keywords": [
+    "workflow",
+    "electron",
+    "agent",
+    "canvas",
+    "orchestration"
+  ],
   "scripts": {
     "start": "electron .",
-    "shot": "node tools/shot.js"
+    "shot": "node tools/shot.js",
+    "test:platform": "node tools/test-platform.js"
   },
   "devDependencies": {
     "electron": "^32.0.0"

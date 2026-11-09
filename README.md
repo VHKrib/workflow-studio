@@ -152,6 +152,23 @@ npm start
 Requires Node 18+ and the [Hermes Agent CLI](https://hermes-agent.nousresearch.com/docs) on `PATH`
 if you want the agent features. Without it the app still runs as a pure canvas.
 
+### macOS / Windows / Linux
+
+Electron is cross-platform and this app has no native modules, so the same source runs on all three.
+
+| | how to start |
+|---|---|
+| macOS | double-click `打开工作流开发平台.command`, or `npm start` |
+| Windows | double-click `打开工作流开发平台.bat` (installs deps on first run), or `npm start` |
+| Linux | `npm start` |
+
+Platform differences are resolved in `platform.js` and covered by `npm run test:platform`:
+
+- the Hermes CLI path (`.../bin/hermes` on macOS/Linux, `hermes.cmd` on Windows — spawned through a shell there);
+- `sqlite3` lookup (`/usr/bin/sqlite3` when present, `sqlite3.exe` or a common install path on Windows);
+- shortcut labels — the UI shows `⌘Z` on macOS and `Ctrl+Z` elsewhere;
+- the `workflow-studio://` protocol is registered on macOS/Windows; on Linux it applies once the app is packaged (a `.desktop` entry is required).
+
 ### How the agent bridge works
 
 The renderer never touches a shell. It talks to the main process through the channels exposed by `preload.js`:
@@ -263,6 +280,7 @@ node with no incoming edge. Nothing is stored server-side; export the JSON if yo
 
 ```
 main.js            Electron main: window, agent list, chat bridge, file dialogs
+platform.js        cross-platform bits: hermes CLI path, sqlite3 path, shortcut labels
 preload.js         contextBridge -> window.tcflow
 chain.js           read-only scan of another agent's own records (profile, skills, state.db)
 livefeed.js        read-only session feed: recent conversations across profiles + message increments
@@ -279,6 +297,7 @@ renderer/
 tools/shot.js      CDP screenshot helper (reads CDP_PORT, defaults to 9222)
 tools/eval.js      CDP evaluate helper (headless DOM assertions)
 tools/verify-actmap.js  offline check: a real conversation -> which cards (no network, no model)
+tools/test-platform.js  asserts hermes/sqlite/label resolution on macOS, Windows and Linux
 tools/scan-public.js  scans everything git tracks for names/paths that must not go public
 docs/              screenshot + the socket animation (dock.gif, recorded by cdp-dock.js --record)
 skills/            workflow-studio: development handbook, CDP checks, and fixtures/ with archived answers
