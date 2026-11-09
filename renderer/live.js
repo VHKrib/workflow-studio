@@ -1009,7 +1009,7 @@ function setReadOnly(v) {
   const btn = document.getElementById('lconfirm');
   if (btn) {
     btn.disabled = readOnly;
-    btn.textContent = readOnly ? '已确定 · 上方只读' : '确定工作流';
+    btn.textContent = readOnly ? '编辑中 · 上方只读' : '编辑工作流';
   }
   if (readOnly) { closeEditor(); setStat('上面是只读参考，下面那张画布可以改'); }
 }
@@ -1018,17 +1018,17 @@ function confirmFlow() {
   if (readOnly) return;
   if (!doc || !doc.cards || !doc.cards.length) { setStat('还没有解析出链路，先点「解析链路」'); return; }
   const btn = document.getElementById('lconfirm');
-  if (btn) { btn.disabled = true; btn.textContent = '确定中…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '准备编辑…'; }
   const copy = JSON.parse(JSON.stringify(doc));
   window.tcflow.liveConfirm({ doc: copy, name: doc.name }).then(r => {
-    if (r && r.ok) { setStat('已复制成一条可编辑的工作流：下面改，上面只读'); }
+    if (r && r.ok) { setStat('已进入编辑：下面那条可以改，上面这条只读'); }
     else {
       if (btn) { btn.disabled = false; btn.textContent = '确定工作流'; }
-      setStat('没确定成：' + ((r && r.error) || '未知原因'));
+      setStat('没进到编辑：' + ((r && r.error) || '未知原因'));
     }
   }).catch(() => {
     if (btn) { btn.disabled = false; btn.textContent = '确定工作流'; }
-    setStat('没确定成：连不上主窗口');
+    setStat('没进到编辑：连不上主窗口');
   });
 }
 

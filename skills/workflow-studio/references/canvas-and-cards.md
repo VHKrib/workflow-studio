@@ -106,5 +106,16 @@
 - 主窗口 `adoptLiveFlow(doc)`：新建一条工作流（名字加 ` · 已确定`，`nodes` 全部标 `manual:true` 保留解析时的位置，`fromLive` 记住来源岗位/会话），入 store、落 localStorage、选中它。
 - 分屏是**上下**、不是左右（用户明确纠正过「横向分开」）：`.canvaswrap` 加 `split` 类后，上半 `#liveView` 只读参考、下半 `#wrap` 可编辑；`.liveview{top:0;bottom:50%}`、`#wrap{inset:50% 0 0 0}`，zoombar 留在下半的右下角（`bottom:14px`）。
 - 只读靠三层：`#canvas.ro .node{pointer-events:none}`（禁拖动/双击）、`openCard` 直接 return、⌘Z/⌘S/Delete 在 `readOnly` 时短路，`persist()` 也不写。
-- **fitView 必须在分屏之后、下一帧再跑**：分屏前 `#wrap` 还是 `display:none`、尺寸为 0，先算会把缩放压到下限、上面看着是空的。半个画布更矮，`fitView(true, 0.2)` 允许比 0.3 更小，才能一眼看全。
+- **fitView 必须在分屏之后、下一帧再跑**：分屏前 `#wrap` 还是 `display:none`、尺寸为 0，先算会把缩放压到下限、可编辑那半看着是空的。半个画布更矮，`fitView(true, 0.2)` 允许比 0.3 更小，才能一眼看全。
 - 退出分屏：点右栏任意别的（或同一条已确定）工作流走 `exitLive()` → 去掉 `split` 并把 webview 的只读解除；重新进实时视图会恢复可编辑的解析视图。
+
+### 编辑工作流（原「确定工作流」）与 AI 通用化
+
+- 实时画布那颗按钮叫**「编辑工作流」**：点了才把解析结果复制成一条正式工作流（名字先加 ` · 已确定`），并进入上下分屏。
+- 下半区顶部有操作条 `.splitbar`（只在 `.canvaswrap.live.split` 时显示）：
+  - **保留工作流**＝`saveStore()`：落 localStorage、推版本、写共享状态文件，状态栏回报时间。
+  - **AI 通用化**＝把「这一类活儿的做法」写进卡片，而不是这一次的具体实例。
+- 通用化的 prompt 要写死这几条：三类卡（输入/加工/输出）都要有、标题用通称、正文写做法与合格标准、加工工具写通用能力、禁止商品名/货号/人名/本机路径/一次性参数；只允许输出 JSON。
+- **解析 JSON 前必须先 `agentAnswer(r.text)`**：`hermes -p <profile> chat -q` 的 stdout 会先回显 `Query: <提问原文>`，而提问里就带着 JSON 模板——直接取第一个 `{` 会解析到回显里的模板而不是答案；尾巴还有 `Resume this session with …` 会话块。
+- 应用结果时按 `id` 合并：老卡沿用 id 保留位置与历史，新卡用 `uid()` 新建，返回里没有的卡删掉；连线只留两端都存在的，若给不出连线就按 in→proc→out 顺序兜底串起来；最后 `layoutChain → render → fitView(true, 0.2) → saveStore()`（生成一版可回滚的版本）。
+- 失败一律不动原图：解析失败、无卡、抛错都只在下半区状态条回一句，画布保持原样。

@@ -165,12 +165,118 @@ function enterSplit() {
   renderWorkflowList();
 }
 
+// ---------- 分屏下半区：保留 / AI 通用化 ----------
+function splitStat(msg) { const el = $('#splitStat'); if (el) el.textContent = msg || ''; }
+
+function keepFlow() {
+  const w = flow(); if (!w) return;
+  saveStore();
+  const t = new Date();
+  const p2 = n => String(n).padStart(2, '0');
+  splitStat(`已保留 ${p2(t.getHours())}:${p2(t.getMinutes())}:${p2(t.getSeconds())}`);
+}
+
+const GEN_TYPES = new Set(['tool', 'file', 'model', 'check', 'cmd']);
+function normalizeMods(list, kind) {
+  const out = [];
+  for (const m of (Array.isArray(list) ? list : [])) {
+    const name = String(typeof m === 'string' ? m : (m && m.name) || '').trim();
+    if (!name) continue;
+    const type = String((m && m.type) || KIND_MOD[kind] || 'tool');
+    out.push({ id: uid(), type: GEN_TYPES.has(type) ? type : (KIND_MOD[kind] || 'tool'), name });
+  }
+  return out;
+}
+function parseGenJSON(text) {
+  let s2 = String(text || '').trim();
+  s2 = s2.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+  const i = s2.indexOf('{'), j = s2.lastIndexOf('}');
+  if (i < 0 || j <= i) return null;
+  try {
+    const d = JSON.parse(s2.slice(i, j + 1));
+    return d && Array.isArray(d.cards) ? d : null;
+  } catch (e) { return null; }
+}
+function fallbackChain(nodes) {
+  const rank = { in: 0, proc: 1, out: 2 };
+  const sorted = [...nodes].sort((a, b) => (rank[a.kind] - rank[b.kind]));
+  const edges = [];
+  for (let k = 1; k < sorted.length; k++) edges.push([sorted[k - 1].id, sorted[k].id]);
+  return edges;
+}
+function applyGenerated(w, data) {
+  const ok = new Set(['in', 'proc', 'out']);
+  const cards = (data.cards || []).filter(c => c && ok.has(c.kind) && String(c.title || '').trim());
+  if (!cards.length) throw new Error('返回里没有可用卡片');
+  const oldById = new Map(w.nodes.map(n => [n.id, n]));
+  const next = [];
+  for (const c of cards) {
+    const old = c.id && oldById.get(c.id);
+    const mods = normalizeMods(c.mods, c.kind);
+    if (old) next.push(Object.assign(old, { kind: c.kind, title: String(c.title).trim(), body: String(c.body || '').trim(), mods: mods.length ? mods : (old.mods || []) }));
+    else next.push({ id: uid(), kind: c.kind, title: String(c.title).trim(), body: String(c.body || '').trim(), impl: '', mods, checks: [], chat: [], status: 'idle' });
+  }
+  w.nodes = next;
+  const ids = new Set(next.map(n => n.id));
+  let edges = (data.edges || []).filter(e => Array.isArray(e) && e.length === 2 && ids.has(e[0]) && ids.has(e[1]));
+  if (!edges.length) edges = fallbackChain(next);
+  w.edges = edges;
+  if (data.name && String(data.name).trim()) w.name = String(data.name).trim();
+  selId = null; panelCardId = null; panelOpen = false;
+  w.version = (w.version || 1) + 1; w.updated_at = Date.now();
+  layoutChain(w);
+  render(); renderWorkflowList();
+  try { fitView(true, 0.2); } catch (e) { }
+}
+
+async function generalizeFlow() {
+  const w = flow();
+  if (!w || !w.nodes.length) { splitStat('下面这张还是空的'); return; }
+  const gen = $('#splitGen'), keep = $('#splitKeep');
+  if (gen && gen.disabled) return;
+  if (gen) gen.disabled = true; if (keep) keep.disabled = true;
+  splitStat('AI 正在按 输入 / 加工 / 输出 整理…');
+  try {
+    const profile = w.agent || 'default';
+    const brief = chainOrder(w).map(n => `- [${KINDS[n.kind].label}] ${n.title}｜${n.body || '(空)'}｜工具：${(n.mods || []).map(m => m.name).join('、') || '无'}`).join('\n');
+    const prompt = [
+      '你是工作流编辑。下面是一条从某次真实任务里解析出来的链路，分三类卡：输入（素材进来）、加工（怎么处理）、输出（产出什么）。',
+      '请把它改写成「通用工作流」：描述这一类活儿怎么做，而不是这一次具体做了什么。',
+      '规则：',
+      '1) 保留三类卡的先后关系（输入 → 加工 → 输出）；可以增删卡，但三类都要有；',
+      '2) 标题用动作或产物的通称（例：「商品图」「按参考重出线稿」），不要出现具体商品名、货号、店铺名、人名、本机路径、一次性参数；',
+      '3) 正文写做法与合格标准，不写这次的文件名/编号；',
+      '4) 加工卡的工具写通用能力（例：「图像生成模型」「线稿重绘」），不写具体调用编号；输出卡只写产出与验收要点；',
+      '5) 能对上的卡片沿用原 id，位置好保留。',
+      '',
+      '当前链路：',
+      brief,
+      '',
+      '只输出一个 JSON 对象，不要解释、不要代码围栏：',
+      '{"name":"通用工作流名","cards":[{"id":"原卡 id 或空","kind":"in|proc|out","title":"...","body":"...","mods":[{"type":"tool|file|model|check","name":"..."}]}],"edges":[["a","b"]]}',
+    ].join('\n');
+    const r = await window.tcflow.askAgent({ profile, prompt, timeoutMs: window.tcflow.readTimeoutMs });
+    if (!r || !r.ok) { splitStat('AI 没返回：' + String(agentAnswer((r && (r.error || r.text)) || '未知错误')).slice(0, 60)); return; }
+    const clean = agentAnswer(r.text || '');          // hermes 的 stdout 前面有 Query 回显、后面有会话块，先剥掉
+    const data = parseGenJSON(clean);
+    if (!data) { splitStat('AI 返回的不是合法 JSON，这条没动｜' + String(clean).replace(/\s+/g, ' ').slice(0, 90)); return; }
+    applyGenerated(w, data);
+    saveStore();
+    splitStat(`已通用化：${w.nodes.length} 卡 / ${w.edges.length} 连线`);
+  } catch (e) {
+    splitStat('通用化失败：' + String((e && e.message) || e).slice(0, 60));
+  } finally {
+    if (gen) gen.disabled = false; if (keep) keep.disabled = false;
+  }
+}
+
 function exitLive() {
   if (!liveMode) return;
   liveMode = false;
   const cw = document.querySelector('.canvaswrap');
   if (cw) cw.classList.remove('live', 'split');
   const wv = $('#liveWV'); if (wv) { try { wv.send('live:readonly', false); } catch (e) { } }
+  splitStat('');
   const name = $('#flowName');
   if (name) name.readOnly = false;
   const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = '';
@@ -188,6 +294,9 @@ function bindUI() {
   $('#tClear').onclick = clearPreviews;
   $('#btnTempChat').onclick = startTempCanvas;
   $('#tempSave').onclick = promoteTemp;
+  const sk = $('#splitKeep'), sg = $('#splitGen');
+  if (sk) sk.onclick = keepFlow;
+  if (sg) sg.onclick = generalizeFlow;
   $('#tempClose').onclick = closeTempCanvas;
   $('#btnAddCard').onclick = e => { e.stopPropagation(); $('#moreMenu').classList.remove('on'); $('#addMenu').classList.toggle('on'); };
   $('#btnMore').onclick = e => { e.stopPropagation(); $('#addMenu').classList.remove('on'); $('#moreMenu').classList.toggle('on'); };
