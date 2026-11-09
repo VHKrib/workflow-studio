@@ -132,7 +132,8 @@ function adoptLiveFlow(doc) {
   const base = String(doc.name || '实时工作流').trim() || '实时工作流';
   const w = {
     id: 'w' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5),
-    name: base + ' · 已确定',
+    name: base,
+    round: 1,
     agent: (doc.conv && doc.conv.profile) || '',
     nodes: doc.cards.map(c => Object.assign({}, c, { manual: true, checks: c.checks || [], status: c.status || 'idle' })),
     edges: (doc.edges || []).map(e => [e[0], e[1]]),
@@ -245,6 +246,10 @@ function keepFlow() {
   editMode = false;
   canvas.classList.remove('editing');
   if (w.pendingLive) delete w.pendingLive;      // 保留 = 转正，进「历史工作流」列表
+  const stem = String(w.name || '工作流').replace(/\s*·\s*v\d+$/, '');
+  const round = Math.max(1, Number(w.round) || 1);
+  w.name = `${stem} · v${round}`;               // 名字带版本号，不再写「已确定」
+  w.round = round + 1;
   layoutChain(w); render(); renderWorkflowList();
   try { fitView(true, 0.2); } catch (e) { }
   saveStore();
@@ -283,29 +288,47 @@ function fallbackChain(nodes) {
   return edges;
 }
 function applyGenerated(w, data) {
-  const ok = new Set(['in', 'proc', 'out']);
-  const cards = (data.cards || []).filter(c => c && ok.has(c.kind) && String(c.title || '').trim());
-  if (!cards.length) throw new Error('返回里没有可用卡片');
-  const oldById = new Map(w.nodes.map(n => [n.id, n]));
-  const next = [];
-  for (const c of cards) {
-    const old = c.id && oldById.get(c.id);
-    const mods = normalizeMods(c.mods, c.kind);
-    const body = String(c.body || '').trim();
-    if (old) next.push(Object.assign(old, { kind: c.kind, title: String(c.title).trim(), body: editMode ? old.body : body, note: editMode ? body : old.note, mods: mods.length ? mods : (old.mods || []) }));
-    else next.push({ id: uid(), kind: c.kind, title: String(c.title).trim(), body: editMode ? '' : body, note: editMode ? body : '', impl: '', mods, checks: [], chat: [], status: 'idle' });
+  // 严格按现有结构：只改已有卡的内容；不新增卡、不删卡、不动连线；输出/输入的元素不许新增
+  const byId = new Map((data.cards || []).filter(c => c && c.id).map(c => [c.id, c]));
+  const norm = x => String(x || '').replace(/\s+/g, '').toLowerCase();
+  let touched = 0;
+  for (const n of w.nodes) {
+    const g = byId.get(n.id);
+    if (!g) continue;                                  // AI 没返回这张：原样保留
+    const title = String(g.title || '').trim();
+    const body = String(g.body || '').trim();
+    if (title) n.title = title;
+    if (body) { if (editMode) n.note = body; else n.body = body; }
+    // 模块：加工卡可以补工具；输入/输出卡只能在原有条目里改写，不能新增元素
+    const incoming = Array.isArray(g.mods) ? g.mods : [];
+    const have = new Set((n.mods || []).map(m => norm(m.name)));
+    if (n.kind === 'proc') {
+      const merged = (n.mods || []).slice();
+      for (const m of incoming) {
+        const nm = String(typeof m === 'string' ? m : (m && m.name) || '').trim();
+        if (!nm || have.has(norm(nm))) continue;
+        merged.push({ id: uid(), type: GEN_TYPES.has((m && m.type) || '') ? m.type : (KIND_MOD[n.kind] || 'tool'), name: nm });
+        have.add(norm(nm));
+      }
+      n.mods = merged;
+    } else {
+      // 只按原有条目重排/改字，忽略新增项
+      const rename = new Map();
+      for (const m of incoming) {
+        const nm = String(typeof m === 'string' ? m : (m && m.name) || '').trim();
+        if (nm && have.has(norm(nm))) rename.set(norm(nm), nm);
+      }
+      (n.mods || []).forEach(m => { const r = rename.get(norm(m.name)); if (r) m.name = r; });
+    }
+    touched++;
   }
-  w.nodes = next;
-  const ids = new Set(next.map(n => n.id));
-  let edges = (data.edges || []).filter(e => Array.isArray(e) && e.length === 2 && ids.has(e[0]) && ids.has(e[1]));
-  if (!edges.length) edges = fallbackChain(next);
-  w.edges = edges;
-  if (data.name && String(data.name).trim()) w.name = String(data.name).trim();
-  selId = null; panelCardId = null; panelOpen = false;
+  if (data.name && String(data.name).trim()) {
+    w.name = String(data.name).trim().replace(/\s*·\s*v\d+$/, '');
+  }
   w.version = (w.version || 1) + 1; w.updated_at = Date.now();
-  layoutChain(w);
   render(); renderWorkflowList();
   try { fitView(true, 0.2); } catch (e) { }
+  return touched;
 }
 
 async function generalizeFlow() {
@@ -314,36 +337,37 @@ async function generalizeFlow() {
   const gen = $('#splitGen'), keep = $('#splitKeep');
   if (gen && gen.disabled) return;
   if (gen) gen.disabled = true; if (keep) keep.disabled = true;
-  splitStat('AI 正在按 输入 / 加工 / 输出 整理…');
+  splitStat('AI 正在按你现在的结构补全…');
   try {
     const profile = w.agent || 'default';
     const brief = chainOrder(w).map(n => `- [${KINDS[n.kind].label}] ${n.title}｜${n.body || '(空)'}｜工具：${(n.mods || []).map(m => m.name).join('、') || '无'}`).join('\n');
+    const ids = w.nodes.map(n => `${n.id}（${KINDS[n.kind].label}）`).join('、');
     const prompt = [
-      '你是工作流编辑。下面是一条从某次真实任务里解析出来的链路，分三类卡：输入（素材进来）、加工（怎么处理）、输出（产出什么）。',
-      '请把它改写成「通用工作流」：描述这一类活儿怎么做，而不是这一次具体做了什么。',
-      '规则：',
-      '1) 保留三类卡的先后关系（输入 → 加工 → 输出）；可以增删卡，但三类都要有；',
-      '2) 标题用动作或产物的通称（例：「商品图」「按参考重出线稿」），不要出现具体商品名、货号、店铺名、人名、本机路径、一次性参数；',
-      '3) 正文写做法与合格标准，不写这次的文件名/编号；',
-      '4) 加工卡的工具写通用能力（例：「图像生成模型」「线稿重绘」），不写具体调用编号；输出卡只写产出与验收要点；',
-      '5) 能对上的卡片沿用原 id，位置好保留。',
+      '你在编辑一条已经人工确认过的链路。严格按用户现在的结构改，不要自作主张扩链。',
+      '硬规则（违反即作废）：',
+      `1) 卡片集合、顺序、连线一律不动：必须原样返回这些 id，不许新增、不许删除、不许返回新 id —— ${ids}；`,
+      '2) 输出卡（输出）：只允许把已有产物写清楚、去实例化；**不得新增任何产出物或输出元素**（工具/产物列表只能保留原有条目并改写措辞，不能加新条目）；',
+      '3) 输入卡（输入）：只整理已有素材，不新增素材种类；',
+      '4) 加工卡（加工）：可以补全工具、模型、接口（这里是唯一允许加元素的地方），但不得改变这段加工的目的；',
+      '5) 文字：去实例化，不要商品名/货号/店铺名/人名/本机路径/一次性参数；写做法与合格标准；',
+      '6) 名称：给一个通用名字，不要带版本号。',
       '',
-      '当前链路：',
+      '当前链路（按顺序）：',
       brief,
       '',
       '只输出一个 JSON 对象，不要解释、不要代码围栏：',
-      '{"name":"通用工作流名","cards":[{"id":"原卡 id 或空","kind":"in|proc|out","title":"...","body":"...","mods":[{"type":"tool|file|model|check","name":"..."}]}],"edges":[["a","b"]]}',
+      '{"name":"通用工作流名","cards":[{"id":"必须是上面已有的 id","kind":"in|proc|out","title":"...","body":"...","mods":[{"type":"tool|file|model|check","name":"..."}]}],"edges":[["a","b"]]}',
     ].join('\n');
     const r = await window.tcflow.askAgent({ profile, prompt, timeoutMs: window.tcflow.readTimeoutMs });
     if (!r || !r.ok) { splitStat('AI 没返回：' + String(agentAnswer((r && (r.error || r.text)) || '未知错误')).slice(0, 60)); return; }
     const clean = agentAnswer(r.text || '');          // hermes 的 stdout 前面有 Query 回显、后面有会话块，先剥掉
     const data = parseGenJSON(clean);
     if (!data) { splitStat('AI 返回的不是合法 JSON，这条没动｜' + String(clean).replace(/\s+/g, ' ').slice(0, 90)); return; }
-    applyGenerated(w, data);
+    const n = applyGenerated(w, data);
     saveStore();
-    splitStat(`已通用化：${w.nodes.length} 卡 / ${w.edges.length} 连线`);
+    splitStat(`已补全 ${n} 张卡；结构没动（${w.nodes.length} 卡 / ${w.edges.length} 连线）`);
   } catch (e) {
-    splitStat('通用化失败：' + String((e && e.message) || e).slice(0, 60));
+    splitStat('补全失败：' + String((e && e.message) || e).slice(0, 60));
   } finally {
     if (gen) gen.disabled = false; if (keep) keep.disabled = false;
   }
@@ -1113,7 +1137,7 @@ function renderWorkflowList() {
     el.dataset.id = w.id;
     el.onclick = () => switchWorkflow(w.id);
     el.innerHTML = `<div class="wn">${esc(w.name)}${on ? '<span class="wsel">选中</span>' : ''}</div>
-      <div class="ws">${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
+      <div class="ws">v${w.round ? w.round - 1 : (w.version || 1)} · ${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
       <div class="dup" title="复制这条链路">⧉</div>
       <div class="x" title="删除">✕</div>`;
     el.querySelector('.dup').onclick = (ev) => { ev.stopPropagation(); duplicateWorkflow(w.id); };
