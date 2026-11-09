@@ -108,47 +108,34 @@ function peer(srcId, key, on) {
 
 function statusDot(n) { return ({ running: '●', ok: '✓', warn: '!', fail: '✕', ready: '▶' })[n.status] || ''; }
 
-function drawEdges() {
+// 连线的弯曲程度只在结构变化时算一次（自动排版、新建/删除连线、载入）。
+// 拖动卡片只平移/拉长端点，不再按中点重算控制点——拖的时候线不会自己换弯法。
+const EDGE_DX = new Map();          // "a>b" → 控制点水平偏移（一半的水平间距）
+function drawEdges(opts) {
+  const recalc = !!(opts && opts.recalc);
   const w = flow(); if (!w) return;
   const cr = canvas.getBoundingClientRect();
   const P = (x, y) => [(x - cr.left) / zoom, (y - cr.top) / zoom];
-  // 端点：加工卡接在插槽上（素材在左、成果在右）；输入/输出卡接在自己的模块行上
   const end = (el, n, side) => {
     const r = el.getBoundingClientRect();
     const ref = n && n.kind === 'proc' ? el.querySelector(`.sock[data-sock="${side}"]`) : el.querySelector('.mods');
     const rr = ref ? ref.getBoundingClientRect() : r;
     return P(side === 'out' ? r.right : r.left, rr.top + rr.height / 2);
   };
+  const liveKeys = new Set();
   let h = `<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="rgba(17,17,17,.42)"/></marker></defs>`;
   for (const [a, b] of w.edges) {
     const ea = canvas.querySelector(`.node[data-id="${a}"]`), eb = canvas.querySelector(`.node[data-id="${b}"]`);
     if (!ea || !eb) continue;
     const [x1, y1] = end(ea, find(a), 'out'), [x2, y2] = end(eb, find(b), 'in');
-    const mx = (x1 + x2) / 2;
-    h += `<path class="edge" data-k="${a}>${b}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="rgba(17,17,17,.30)" stroke-width="1.6" marker-end="url(#ar)"/>`;
+    const k = a + '>' + b;
+    liveKeys.add(k);
+    let dx = EDGE_DX.get(k);
+    if (recalc || dx === undefined || !Number.isFinite(dx)) { dx = (x2 - x1) / 2; EDGE_DX.set(k, dx); }
+    const c1 = x1 + dx, c2 = x2 - dx;
+    h += `<path class="edge" data-k="${a}>${b}" d="M${x1},${y1} C${c1},${y1} ${c2},${y2} ${x2},${y2}" fill="none" stroke="rgba(17,17,17,.30)" stroke-width="1.6" marker-end="url(#ar)"/>`;
   }
-  edgesSvg.innerHTML = h;
-}
-
-function drawEdges() {
-  const w = flow(); if (!w) return;
-  const cr = canvas.getBoundingClientRect();
-  const P = (x, y) => [(x - cr.left) / zoom, (y - cr.top) / zoom];
-  // 端点：加工卡接在插槽上（素材在左、成果在右）；输入/输出卡接在自己的模块行上
-  const end = (el, n, side) => {
-    const r = el.getBoundingClientRect();
-    const ref = n && n.kind === 'proc' ? el.querySelector(`.sock[data-sock="${side}"]`) : el.querySelector('.mods');
-    const rr = ref ? ref.getBoundingClientRect() : r;
-    return P(side === 'out' ? r.right : r.left, rr.top + rr.height / 2);
-  };
-  let h = `<defs><marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 z" fill="rgba(17,17,17,.42)"/></marker></defs>`;
-  for (const [a, b] of w.edges) {
-    const ea = canvas.querySelector(`.node[data-id="${a}"]`), eb = canvas.querySelector(`.node[data-id="${b}"]`);
-    if (!ea || !eb) continue;
-    const [x1, y1] = end(ea, find(a), 'out'), [x2, y2] = end(eb, find(b), 'in');
-    const mx = (x1 + x2) / 2;
-    h += `<path class="edge" data-k="${a}>${b}" d="M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}" fill="none" stroke="rgba(17,17,17,.30)" stroke-width="1.6" marker-end="url(#ar)"/>`;
-  }
+  for (const k of [...EDGE_DX.keys()]) if (!liveKeys.has(k)) EDGE_DX.delete(k);
   edgesSvg.innerHTML = h;
 }
 
@@ -330,5 +317,5 @@ function layoutChain(w) {
       const e = canvas.querySelector(`.node[data-id="${n.id}"]`); if (e) e.style.top = (n.y + OY) + 'px';
     });
   });
-  drawEdges();
+  drawEdges({ recalc: true });                 // 自动排版改了位置：这里重算一次弯度
 }
