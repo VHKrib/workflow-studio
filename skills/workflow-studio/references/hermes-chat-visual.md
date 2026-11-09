@@ -1,56 +1,62 @@
-# 把 Hermes 的对话视觉搬到本应用（无 React / 无构建）
+# Bringing Hermes' chat look into this app (no React, no build)
 
-用户说「跟 Hermes 一样」时，**去读 Hermes 的源码取真值，不要凭印象调 CSS**。
+When the user says "make it look like Hermes", **read Hermes' source for the real values — do not tune CSS from
+memory**.
 
-## 值从哪来
+## Where the values come from
 
-- 用户跑的是**打包版** Hermes（`~/.hermes/hermes-agent/apps/desktop/release/mac-arm64/Hermes.app`）。
-  打包版**不开 CDP**，`inspecting-hermes-desktop-dom` 那套连不上；也别拿 9222 去撞——那个端口现在是
-  工作流开发平台自己，探到的会是本平台的页面。
-- 直接读源码目录 `~/.hermes/hermes-agent/apps/desktop/`：
+- The user runs the **packaged** Hermes (`~/.hermes/hermes-agent/apps/desktop/release/mac-arm64/Hermes.app`).
+  The packaged build **does not open CDP**, so the `inspecting-hermes-desktop-dom` approach cannot attach; don't
+  poke 9222 either — that port is this app, so you would be inspecting our own page.
+- Read the source directory `~/.hermes/hermes-agent/apps/desktop/` instead:
 
-| 文件 | 拿什么 |
+| File | What to take |
 |---|---|
-| `src/styles.css` | 设计 token：`--conversation-tool-base-size: 0.6875rem`、`--conversation-base-line-height: 1.125rem`、`--conversation-scaffold-text: color-mix(in srgb, var(--ui-base) 64%, transparent)`、`--conversation-scaffold-meta: … 44% …`、`--ui-text-tertiary: … 54% …` |
-| `src/components/chat/scaffold-row.tsx` | 脚手架行（工具/思考标题）的语义与字号、右边距规则 |
-| `src/components/chat/disclosure-row.tsx` | 折叠行交互：无前置箭头、**hover 才出 caret**、hover 底色是贴合文字的小 pill |
-| `src/components/assistant-ui/thread/message-parts.tsx` | `ThinkingDisclosure` / `ReasoningAccordionGroup`：思考标签「Thought for 5s」、正文 `text-xs leading-snug muted/85` |
-| `src/components/assistant-ui/thread/user-message-text.tsx` | 行内 `code` = `rounded bg-current/8 mono 0.92em`；代码块 = `rounded-md border stroke-tertiary bg-current/5 mono 0.86em` |
+| `src/styles.css` | design tokens: `--conversation-tool-base-size: 0.6875rem`, `--conversation-base-line-height: 1.125rem`, `--conversation-scaffold-text: color-mix(in srgb, var(--ui-base) 64%, transparent)`, `--conversation-scaffold-meta: … 44% …`, `--ui-text-tertiary: … 54% …` |
+| `src/components/chat/scaffold-row.tsx` | semantics and sizes of scaffold rows (tool / thinking headers), right-margin rules |
+| `src/components/chat/disclosure-row.tsx` | disclosure interaction: no leading caret, **caret appears on hover**, hover background is a pill hugging the text |
+| `src/components/assistant-ui/thread/message-parts.tsx` | `ThinkingDisclosure` / `ReasoningAccordionGroup`: "Thought for 5s" label, body `text-xs leading-snug muted/85` |
+| `src/components/assistant-ui/thread/user-message-text.tsx` | inline `code` = `rounded bg-current/8 mono 0.92em`; code block = `rounded-md border stroke-tertiary bg-current/5 mono 0.86em` |
 
-## 搬运规则（只用数值与结构，不搬 React）
+## Porting rules (values and structure only, no React)
 
-- 不要引入 React/Tailwind，也不要复制编译后的 CSS（preflight 会打乱本应用的样式）。把 token 翻成现有变量：
-  Hermes 的 `color-mix(in srgb, var(--ui-base) 64%, transparent)` ≈ 这里的
-  `color-mix(in srgb, var(--ink) 64%, transparent)`。
-- **助手消息没有气泡**（纯文本块）；只有用户消息是右侧浅底气泡（`color-mix(ink 7%)`）。
-- **工具行一行一步**：状态点（running 呼吸 / done 绿 / error 红）+ 名称 + 右对齐耗时；点开看参数/结果。
-  不要做成彩色小胶囊。
-- **思考块 `<details open>` 默认展开**（用户点名要看得见思考过程），summary 写「思考 16s · 6095 字」，
-  正文 11.5px、68% 前景色、左侧 1px 细线缩进。
-- 回答 > 900 字折叠「展开全文（N 字）」，正文 `overflow-wrap:anywhere`。
-- agent 选择器用无边框 `<select>` + CSS 小三角 + hover 6% 底；原生白框套橘色胶囊被点名嫌丑。
+- Do not add React or Tailwind, and do not copy compiled CSS (preflight would wreck this app's styles). Translate
+  tokens into the variables we already have: Hermes' `color-mix(in srgb, var(--ui-base) 64%, transparent)` is
+  roughly `color-mix(in srgb, var(--ink) 64%, transparent)` here.
+- **Assistant messages have no bubble** (plain text blocks); only the user's messages get a light bubble on the
+  right (`color-mix(ink 7%)`).
+- **One tool row per step**: status dot (breathing while running / green when done / red on error) + name +
+  right-aligned duration; click to see arguments and result. Not a coloured pill.
+- **The thinking block is `<details open>`, expanded by default** (the user asked to see the reasoning), with a
+  summary like "thinking 16s · 6095 chars", body at 11.5px, 68% foreground and a 1px rule on the left.
+- Answers over 900 characters collapse behind "show full text (N chars)"; body uses `overflow-wrap:anywhere`.
+- The agent picker is a borderless `<select>` with a small CSS caret and a 6% hover background — the native white
+  box inside an orange pill was explicitly called ugly.
 
-## 对话区密度（用户点名嫌过「有点挤」）
+## Chat density (the user once said it felt cramped)
 
-不要用紧凑值。当前落定的一套（可直接照查）：
+Do not use compact values. The settled set (safe to copy):
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| dock 尺寸 | 392×480（`right:14;bottom:52`） |
-| 消息间距（`gap`） | 18px（卡片对话 `.chat-log` 同值） |
-| 正文 | 13px / line-height 1.72 |
-| 用户气泡 | padding 9px 13px，圆角 16，底色 `color-mix(ink 7%)` |
-| 工具行 | 11.5px / 22px 行高，状态点 + 名称 + 右对齐耗时 |
-| 思考行 summary | 11.5px / 22px，hover 才亮、caret 在右 |
-| 思考正文 | 11.5px / 1.6、68% 前景色、左 1px 细线 + 12px 缩进，`max-height:190px` |
-| markdown 段落空行 | 10px |
-| 长回答折叠阀 | 900 字（前 600 字展示 + 「展开全文（N 字）」） |
+| dock size | 392×480 (`right:14;bottom:52`) |
+| message gap | 18px (same for `.chat-log` in card chat) |
+| body text | 13px / line-height 1.72 |
+| user bubble | padding 9px 13px, radius 16, background `color-mix(ink 7%)` |
+| tool row | 11.5px / 22px line height, status dot + name + right-aligned duration |
+| thinking summary | 11.5px / 22px, brightens on hover, caret on the right |
+| thinking body | 11.5px / 1.6, 68% foreground, 1px left rule + 12px indent, `max-height:190px` |
+| markdown paragraph gap | 10px |
+| long-answer threshold | 900 characters (first 600 shown + "show full text (N chars)") |
 
-加新内容时先加空白、再考虑压字号；改完用 DOM 量 `gap / lineHeight / fontSize / dock 宽度` 四值确认。
+When adding content, add whitespace before shrinking type; after a change, measure `gap / lineHeight / fontSize
+/ dock width` in the DOM to confirm.
 
-## 两个容易搞混的点
+## Two easy confusions
 
-- 「视觉跟 Hermes 一样」与「拿到 Hermes 的那份数据」是两件事：真流式走 `--format stream-json`，里面
-  **没有思考正文**；思考只在 `--format text` 里。用 `USE_STREAM` 二选一，别承诺两者同时有。
-- 流式采样时前 10 秒 `text` 长度一直是 0 是正常的：模型先跑工具，工具结束才开始吐字。看到
-  `len:0 / steps:0` 不要判「流式没生效」，等 `tool_use` 或首个 `text` 事件再计时。
+- "Looks like Hermes" and "gets Hermes' data" are different things: real streaming uses `--format stream-json`,
+  which **does not carry the reasoning text**; reasoning only appears with `--format text`. `USE_STREAM` picks
+  one — never promise both at once.
+- During streaming, `text` staying at length 0 for the first 10 seconds is normal: the model runs tools first and
+  only then starts producing text. `len:0 / steps:0` is not a sign that streaming failed — start timing at the
+  first `tool_use` or `text` event.

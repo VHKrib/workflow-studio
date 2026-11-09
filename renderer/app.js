@@ -78,7 +78,7 @@ function cardLine(n, i) {
     (implOf(n) ? `\n   ↳ 内部实现（不进卡片，只给你看）：${implOf(n)}` : '');
 }
 
-const IS_MAC = /Mac/i.test(navigator.platform || '');
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');   // 离线脚本会在 vm 里加载本文件，没有 navigator
 const KEYMOD = IS_MAC ? '⌘' : 'Ctrl+';
 // 界面文案写的是 Mac 的 ⌘；非 mac 平台在启动时换成 Ctrl+
 function localizeKeys() {

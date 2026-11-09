@@ -1057,7 +1057,7 @@ function confirmFlow() {
   });
 }
 
-const IS_MAC = /Mac/i.test(navigator.platform || '');
+const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');   // 离线脚本会在 vm 里加载本文件，没有 navigator
 const KEYMOD = IS_MAC ? '⌘' : 'Ctrl+';
 function localizeKeys() {
   if (IS_MAC) return;

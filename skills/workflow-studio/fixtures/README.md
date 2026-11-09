@@ -1,61 +1,72 @@
-# 拆卡样本（离线回归）
+# Card-splitting fixtures (offline regression)
 
-把真实拆卡回答钉成文件：**不联网、不调模型**，改完解析或提示词跑一条命令，就知道拆卡有没有退步。
+Real splitting answers, frozen into files: **no network, no model call**. After touching the parser or the
+prompt, one command tells you whether splitting got worse.
 
 ```bash
-node skills/workflow-studio/scripts/check-fixtures.js        # 全部样本（好 + 坏）
-node skills/workflow-studio/scripts/check-fixtures.js <目录>  # 只跑一个目录（用来把样本改坏、验证断言真会 FAIL）
+node skills/workflow-studio/scripts/check-fixtures.js        # every fixture (good + bad)
+node skills/workflow-studio/scripts/check-fixtures.js <dir>  # one directory only (break a fixture to prove the assertions really fail)
 ```
 
-## 好样本（真实回答，已脱敏）
+## Good fixtures (real answers, redacted)
 
-| 文件 | 内容 | 来源 |
+| File | Content | Source |
 |---|---|---|
-| `01-product-data-normalize.json` | 商品资料标准化 · 9 卡 11 线（输入 2 / 加工 4 / 输出 3） | 一次真实拆卡回答的原始存档 |
-| `02-storyboard-to-video.json` | 分镜画板到成片 · 9 卡 11 线（输入 3 / 加工 4 / 输出 2） | 一次真实拆卡回答的原始存档 |
-| `03-selling-point-cards.json` | 卖点卡出卡链路 · 9 卡 11 线（输入 2 / 加工 3 / 输出 4） | 一次真实拆卡回答的原始存档 |
+| `01-product-data-normalize.json` | Product data normalisation · 9 cards, 11 edges (2 in / 4 process / 3 out) | raw archive of one real answer |
+| `02-storyboard-to-video.json` | Storyboard to finished video · 9 cards, 11 edges (3 in / 4 process / 2 out) | raw archive of one real answer |
+| `03-selling-point-cards.json` | Selling-point card chain · 9 cards, 11 edges (2 in / 3 process / 4 out) | raw archive of one real answer |
 
-这三份都是当时真正落进画布的那几次（落卡后的状态文件与回答的卡片数、连线数一致）。脱敏只换词：**能指到具体团队、角色、机器、商品的词一律换掉**，卡片类型、连线、模块、正文的写法原样保留。
-`answer` 按 JSON 对象存（内容一字未改），脚本再序列化喂给解析器。
+All three are runs that really landed on a canvas (card and edge counts match the state file afterwards).
+Redaction only swaps words: anything pointing at a specific team, role, machine or product is replaced; card
+kinds, edges, modules and body wording stay as they were. `answer` is stored as a JSON object (content
+untouched); the script serialises it for the parser.
 
-## 坏样本（自己造的，`bad/`）
+## Bad fixtures (hand-made, `bad/`)
 
-| 文件 | 造的是什么 | 现有行为（断言就照这个写） |
+| File | What it fakes | Current behaviour (assertions follow this) |
 |---|---|---|
-| `bad-01-two-islands.json` | 两条互不相干的小链 | 质量闸挡住：`链路断成了几截` |
-| `bad-02-in-to-in.json` | 输入卡连到输入卡 | 自动修好：丢掉那条，给没人喂的加工卡补线、给落单的输入卡挂到加工卡上，过闸 |
-| `bad-03-truncated.json` | 写了一半的 JSON（流被截断） | 解析不出完整计划，质量闸判 `没拆出卡片`；流式预览里能先看到 2 张 |
-| `bad-04-proc-only.json` | 只有加工卡 | 质量闸挡住：`拆出来的卡不全（输入、加工、输出得都有）` |
-| `bad-05-no-edges.json` | 完全没给连线 | 自动修好：按卡片顺序补线（进 → 工 → 出），过闸 |
+| `bad-01-two-islands.json` | two unrelated mini chains | quality gate blocks: `chain split into pieces` |
+| `bad-02-in-to-in.json` | an input card wired into an input card | auto-fixed: that edge is dropped, the unfed process card gets an edge, the orphan input card is attached; gate passes |
+| `bad-03-truncated.json` | half-written JSON (stream cut off) | no complete plan, gate reports `no cards`; the streaming preview shows 2 cards first |
+| `bad-04-proc-only.json` | process cards only | quality gate blocks: `cards incomplete (need input, process and output)` |
+| `bad-05-no-edges.json` | no edges at all | auto-fixed: edges added in card order (in → process → out), gate passes |
 
-「挡住」和「自动修好」都是现有行为，断言按现状写；**不许为了样本好过而改解析规则**——要改规则得说清是哪个现象、为什么这样改对。
+"Blocks" and "auto-fixes" are existing behaviour; assertions describe the present. **Do not bend the parsing
+rules to make a fixture pass** — changing a rule needs a named symptom and a reason.
 
-## 文件格式
+## File format
 
 ```jsonc
 {
-  "meta":   { "id": "…", "title": "…", "from": "哪次验收 / 时间 / 卡号", "note": "脱敏说明" },
+  "meta":   { "id": "…", "title": "…", "from": "which review / when / which card", "note": "redaction note" },
   "expect": {
-    "cards": 9,                        // 解析出的卡片数；null = 期望解析不出计划
+    "cards": 9,                        // parsed card count; null = expects no plan
     "kinds": { "in": 2, "proc": 4, "out": 3 },
-    "titles": ["…"],                   // 卡片顺序和标题
-    "edges": [["c1", "c3"]],           // 解析后的连线（顺序也算）
-    "gate": "",                        // planProblem 的结论，空串 = 过闸
-    "autoFix": false,                  // 解析后的连线跟回答里给的是否不一样
-    "partial": 2,                      // 可选：流式预览先看到几张
-    "wired": false, "single": false    // 可选：坏样本声明「本来就该没接上 / 本来就该断成几截」
+    "titles": ["…"],                   // card order and titles
+    "edges": [["c1", "c3"]],           // parsed edges (order counts)
+    "gate": "",                        // planProblem verdict, empty = passes
+    "autoFix": false,                  // parsed edges differ from the answer's
+    "partial": 2,                      // optional: cards visible in the streaming preview
+    "wired": false, "single": false    // optional: bad fixtures meant to stay unwired / split
   },
-  "answer": { "name": "…", "cards": [], "edges": [] }   // 或用字符串（截断样本）
+  "answer": { "name": "…", "cards": [], "edges": [] }   // or a string (truncated fixture)
 }
 ```
 
-脚本对每份样本断言：卡片数、卡片顺序、三类都有、连线逐条、没有连进输入卡的线、每张卡都接上、整条连成一片、质量闸结论、脱敏（不含本机绝对路径 / 9 位以上数字 / 邮箱 / 团队角色字样 / 本机 profile id）。
-脱敏里的 profile id 是拿 `~/.hermes/profiles` 下的目录名整词比对的（短 id 不会命中普通英文单词）；换台机器没有这个目录就跳过这一条，其余断言照跑。
+Per fixture the script asserts: card count, order, all three kinds present, edges one by one, no edge into an
+input card, every card connected, one single component, the quality-gate verdict, and redaction (no absolute
+local paths, no 9+ digit numbers, no emails, no team/role words, no local profile ids).
 
-**最容易漏的是 impl 里的文件名**：`cards/<批次>.<某个执行方>.json` 这类看着像中性路径，其实把执行方的 id 带进仓库了。脱敏时把 impl 里的目录/文件名也换成中性词。
+Profile ids are matched as whole words against the directory names under `~/.hermes/profiles` (short ids never
+hit ordinary English words); on a machine without that directory the check is skipped and the rest still runs.
 
-## 加新样本
+**The easiest thing to miss is a filename inside `impl`**: something like `cards/<batch>.<some-executor>.json`
+looks like a neutral path but carries an executor id into the repo. Redact directory and file names in `impl`
+too.
 
-1. 把真实回答存成 `NN-<短名>.json`，脱敏后用上面的格式补 `meta` 和 `expect`（`expect` 按回答本身该长成的样子写，别照解析器输出抄）。
-2. `node skills/workflow-studio/scripts/check-fixtures.js` 跑通。
-3. 在本文的表格里补一行来源（时间 + 卡号）。
+## Adding a fixture
+
+1. Save the real answer as `NN-<short-name>.json`, redact it, and add `meta` and `expect` in the format above
+   (write `expect` as what the answer *should* become, not a copy of what the parser currently outputs).
+2. Run `node skills/workflow-studio/scripts/check-fixtures.js`.
+3. Add a row to the table above with the source (when + which card).

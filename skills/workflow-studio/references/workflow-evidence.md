@@ -1,51 +1,82 @@
-# 工作流解析：原始证据、卡片一致性与验证顺序
+# Workflow analysis: raw evidence, card consistency and verification order
 
-用于读取 agent、实时会话建图、不同入口的卡片对照。这里是诊断和验证规程，不为任何尚未完成独立验收的解析器或布局算法背书。
+Used when reading an agent, mapping a live conversation, and comparing cards between entry points. This is a
+diagnostic and verification procedure; it endorses no parser or layout algorithm that has not been through an
+independent review of its own.
 
-## 1. 先固定一个真实业务样张
+## 1. Fix one real business sample first
 
-- 确认目标业务、目标会话与当前代码分支，不靠岗位名或最近活动列表猜会话。
-- 对照用户认可的现有卡片，列清每格的业务含义：输入材料、加工做法、交付成果；主画布与实时窗口允许范围不同，不允许卡片粒度退化成消息/工具日志。
-- 先写最小关系对照：源材料/版本 → 加工 → 产物/版本；另外记录用户针对哪份产物要求调整哪一环节。不要先写一大套通用版本框架再找样张验证。
+- Agree on the target business, the target conversation and the current code branch. Do not guess the
+  conversation from role names or a recent-activity list.
+- Against cards the user already accepts, write down what each cell means: input material, process method,
+  delivered result. The main canvas and the live window may cover different scopes, but card granularity must
+  never degrade into message or tool log lines.
+- Write the minimal relationship sample first: source material/version → process → product/version; separately
+  record which product the user asked to change and which step was adjusted. Do not build a generic versioning
+  framework first and look for a sample afterwards.
 
-## 2. 先查取料完整性，再改提示词
+## 2. Check that the material was read completely before touching the prompt
 
-1. 对目标会话库使用只读连接；可用 `sqlite3 -readonly "file:<数据库路径>?mode=ro" "PRAGMA table_info(messages);"` 确认实际 schema，再按会话标识查询。用参数绑定，查询只取目标范围，不导出整库。
-2. 核对目标是否被跨岗位全局排序挤出列表。列表不可选不等于会话不存在，先定位目标记录再判断分析入口。
-3. 对比原始正文、工具参数和工具结果长度与实际读取上限；同时检查上游 SQL 的 substr 和下游 slice，不能只调其中一处。
-4. 先完整解码 tool_calls，再整理摘要；字符串被截断后 JSON 解码失败不能静默变成空数组。对长脚本特别检查末尾的复制、导出和产物路径。
-5. 将截断、无法解码、缺失工具结果、窗口外上下文明示为证据限制。只在授权范围内补读所需上下文并先脱敏；不能把没读到称为没发生，也不能仅增大上限便宣称完整。
+1. Use a read-only connection to the target session database. Confirm the real schema with
+   `sqlite3 -readonly "file:<db path>?mode=ro" "PRAGMA table_info(messages);"`, then query by session id with
+   bound parameters, limited to the target range — never dump the whole database.
+2. Check whether the target was pushed out of a cross-role global ordering. "Not selectable in the list" does
+   not mean the conversation is missing; locate the record first, then judge the analysis entry point.
+3. Compare raw body, tool arguments and tool result lengths against the actual read limit; check both the
+   upstream SQL `substr` and the downstream `slice` — fixing only one is not enough.
+4. Decode `tool_calls` completely before summarising. A truncated string that fails JSON decoding must not
+   silently become an empty array. For long scripts, check trailing copy, export and output paths especially.
+5. State truncation, undecodable data, missing tool results and out-of-window context as evidence limits. Read
+   more context only within authorisation and redact first; "not read" is not "did not happen", and raising the
+   limit alone is not "complete".
 
-## 3. 核对实体、成功状态与关系
+## 3. Verify entities, success states and relationships
 
-| 要核对的东西 | 必须区分 |
+| What | Must be distinguished |
 |---|---|
-| 材料身份 | 同名不同目录、同路径先后不同内容、来源不明的相对路径 |
-| 材料复用 | 实际加工使用，与文字提及、回读质检、重复轮询不同 |
-| 产物归属 | 工具调用及对应结果，不能把异步结果归给收到结果时恰好最近的一步 |
-| 产物版本 | 已有指纹/字节等证据支持的变化，与仅推测改过不同；证据缺失就保留未知 |
-| 执行状态 | 明确成功、失败、尚无结果、只提出方案；没有错误不等于已成功 |
-| 修改原因 | 评价了哪个产物、要求改哪个环节，与实际读入哪个产物不同 |
-| 采用状态 | 最新、代理自称完成、用户明确确认，不能互相替代 |
+| material identity | same name in different directories; same path with different contents over time; relative paths of unknown origin |
+| material reuse | actually used by a process vs mentioned in text, re-read for QA, or polled repeatedly |
+| product attribution | the tool call and its matching result; an async result does not belong to whatever step happened to be nearest when it arrived |
+| product version | changes backed by fingerprints/bytes vs assumed edits; keep it unknown when evidence is missing |
+| execution state | explicit success, failure, no result yet, proposal only; no error does not mean success |
+| reason for change | which product was evaluated and which step was asked to change, distinct from which product was actually read |
+| adoption state | latest, agent-claims-done, user-confirmed — none substitutes for another |
 
-变量赋值、命令里出现路径或回答里声称产出，不能单独证明文件已读/已写；结合实际执行、对应工具结果和交付凭证核对。旧输出被真实用作素材时复用其实体；只是触发意见时使用调整关系，不制造材料边。
+A variable assignment, a path appearing in a command, or a claim of output in a reply is not proof that a file
+was read or written; verify against the actual run, the matching tool result and the delivery evidence. When an
+older output is genuinely used as material, reuse its entity; when it merely triggered an opinion, record an
+adjustment relationship instead of inventing a material edge.
 
-区分材料流、加工产出、版本演变、反馈原因。不能因为文件同路径重写就自动推断用户看过旧版并据此要求修改；也不能为让图连成一片按前后最近节点补因果。
+Keep material flow, process output, version evolution and feedback reason apart. A file rewritten at the same
+path does not imply the user saw the older version and asked for a change based on it; and do not wire
+cause-and-effect to the nearest node just to make the graph connected.
 
-## 4. 对照两种分析入口的字段与展示
+## 4. Compare fields and rendering across both entry points
 
-沿提示词 → 原始模型回答 → 解析后对象 → IPC → 卡片组件逐层检查标题、正文、mods、impl 和关系。
+Walk prompt → raw model answer → parsed object → IPC → card component, checking title, body, mods, impl and
+relationships at every layer.
 
-- 提示词要求模块但解析器清空它，继续改提示词没有用。
-- 加工卡的素材与成果应由真实上下游关系推导，做法模块描述采用的方法，而不是仅列跑命令、写文件等泛称。
-- 只读窗口可以没有编辑按钮，但不能删掉材料、工具和成果信息。
-- 路径、命令、证据标识封进内部实现；正文的版本号、尺寸、帧位置等业务数字要保留，不能为了清证据号把所有长数字全删。
-- 同一 CSS class 或相似 JSON 不能证明口径一致，用同一业务样张逐卡对照含义、模块和来源/成果关系。
+- If the prompt asks for modules but the parser clears them, editing the prompt further is pointless.
+- A process card's materials and results must be derived from real upstream/downstream relationships; its
+  method module describes the approach, not generic "ran commands" or "wrote files".
+- The read-only window may drop edit buttons, but it must not drop material, tool and result information.
+- Paths, commands and evidence identifiers go into internal wiring; business numbers in the body (version
+  numbers, sizes, frame positions) stay — do not delete every long number just to clean evidence ids.
+- The same CSS class or similar JSON does not prove consistent semantics; compare meaning, modules and
+  source/result relationships card by card on the same business sample.
 
-## 5. 再验证图与界面
+## 5. Verify the graph and the interface afterwards
 
-1. 独立用例覆盖材料复用、材料改版、同名不同来源、同路径重写、旧结果复用、失败/未执行/进行中、截断及重复消息。
-2. 校验未知引用、自连、互指与时间上不可能的调整；材料依赖与反馈/版本关系分开检查。保证异常图不会让布局循环或产生极远坐标。
-3. 在隔离实例里用真实目标会话生成全图及必要局部图，亲眼检查卡面含义、模块、分叉、关键文字和重叠。不要为得到一张好图反复重跑挑结果冒充稳定。
-4. 将命令结果、原始解析、对照表与截图绑定到同一代码版本。任何后续解析或布局修改都使相关旧证据失效。
-5. 效果图标待验；最终独立验收仍按其完整职责执行。测试支线交付了一份能揭错的脚本，或证据支线完成查询，不代表产品已经通过。
+1. Independent cases must cover material reuse, material revision, same name from different sources, rewriting
+   the same path, reusing an old result, failure/not-executed/in-progress, truncation and duplicate messages.
+2. Validate unknown references, self-loops, mutual references and temporally impossible adjustments; check
+   material dependencies separately from feedback/version relationships. A broken graph must not make layout
+   loop or produce far-away coordinates.
+3. In an isolated instance, generate the full graph from a real target conversation plus any necessary local
+   views, and inspect card meaning, modules, branches, key text and overlap with your own eyes. Do not re-run
+   repeatedly and pick a good-looking result while claiming stability.
+4. Bind command output, raw parsing, the comparison table and screenshots to the same code version. Any later
+   change to parsing or layout invalidates the earlier evidence.
+5. Screenshot evidence stays unverified until reviewed; final independent acceptance still follows its own full
+   responsibility. A branch delivering a script that can expose errors, or a branch finishing a query, does not
+   mean the product passed.

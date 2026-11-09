@@ -284,7 +284,8 @@ const edgesOf = (doc, a, b, k) => doc.edges.filter(([x, y, kk]) => (!a || x === 
   // 卡面三块：素材 / 工具 / 成果（和主画布同一套含义）
   const proc = doc.cards.filter(c => c.kind === 'proc');
   const kinds = new Set(proc.flatMap(c => (c.mods || []).map(m => m.type)));
-  ok('face-mods-three-kinds', kinds.has('mat') && kinds.has('tool') && kinds.has('res'), { kinds: [...kinds] });
+  // 加工卡的方法模块有两种叫法：真实工具是 'tool'（带 caps），做法摘要是 'how'；两种都算加工侧
+  ok('face-mods-three-kinds', kinds.has('mat') && (kinds.has('tool') || kinds.has('how')) && kinds.has('res'), { kinds: [...kinds] });
   ok('face-mods-in-out', doc.cards.filter(c => c.kind === 'in').every(c => (c.mods || []).every(m => m.type === 'mat'))
     && doc.cards.filter(c => c.kind === 'out').every(c => (c.mods || []).every(m => m.type === 'res')));
 }

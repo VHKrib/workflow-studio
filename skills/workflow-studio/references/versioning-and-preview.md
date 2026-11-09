@@ -1,55 +1,88 @@
-# 编辑成版、回滚、复制与只读预演
+# Edits become versions; rollback, copy and read-only rehearsal
 
-先核当前分支的状态与脚本，再按当前职责执行；这里只说明产品行为和验证依据，不授权主管代替执行或独立验收。
+Check the current branch state and scripts first, then act within your own responsibility; this page documents
+product behaviour and the evidence used to verify it.
 
-## 1. 一次内容改动只记一版
+## 1. One content change records one version
 
-- 完整内容快照应覆盖名称、执行方、节点类型/正文/内部实现/模块/校验、连线与版本元信息；坐标可保存在快照中，但不参与内容指纹。
-- 连续打字或同一批增卡连线只产生一版；拖动、缩放、面板开关、选择、聊天与查看结果不算内容变更。
-- 只保留最近 20 版，不做全量审计历史。版本条目说清哪张卡改了什么，按输入/加工/输出分别表达换材料、换做法、换交付，不只写修改。
-- 每次编辑先更新内存与画布，再按防抖写本地和共享结构，失焦/切卡/关闭前补交尚未落盘的编辑。仅重置计时器不等于已保存。
-- 输入中不能重建详情面板。标题可暂时为空，提交时归一；模块改名也要同步内容、提交版次并保焦点。
-- 谁改的按实际确认来源记录；agent 提议由人确认应用不等于 agent 可直接写画布。
+- A complete content snapshot covers name, executor, node kinds/body/internal wiring/modules/checks, edges and
+  version metadata. Coordinates may live in the snapshot but do not take part in the content fingerprint.
+- A burst of typing, or one batch of card additions with their edges, produces one version. Dragging, zooming,
+  opening panels, selecting, chatting and viewing results are not content changes.
+- Only the newest 20 versions are kept — this is not a full audit history. A version entry names which card
+  changed and what changed, phrased per kind (input: swapped materials; process: changed method; output:
+  changed deliverable), not just "edited".
+- Every edit updates memory and the canvas first, then debounce-writes local storage and the shared structure;
+  blur, switching cards or closing flushes pending edits. Resetting a timer is not the same as saving.
+- Never rebuild the detail panel while the user is typing. A title may be temporarily empty and normalised on
+  submit; renaming a module must update content, record a version and keep focus.
+- Record whoever actually confirmed the change: an agent proposal applied by a person is not the agent writing
+  to the canvas directly.
 
-## 2. 回滚恢复结构，不抹掉后续可达性
+## 2. Rollback restores structure without erasing what came after
 
-- 回滚也生成一版，记录回到哪里，不直接删除后面的记录；因此可以再回来。
-- 恢复节点、边、模块、正文、内部实现、校验、执行方和名称；现存节点保留当前位置，恢复出现的节点用快照坐标，避免位置作为隐性内容版本。
-- 先停该工作流正在跑的对话，再应用旧结构；取消后的输出不得继续解析候选或改卡。
-- 下一次调用 agent 时注入当前版本、回滚事实和新结构；后续又改过时，不能继续宣称刚回滚且之后都作废。
-- 外部认领和回滚按节点 id 保留本机聊天、状态和预演，不拿公共结构覆盖这些本机记录。
+- A rollback also creates a version, recording where it went back to; later records are not deleted, so you can
+  return to them.
+- Restore nodes, edges, modules, body, internal wiring, checks, executor and name. Existing nodes keep their
+  current position; restored nodes use snapshot coordinates, so position never becomes a hidden content version.
+- Stop the workflow's running conversation first, then apply the old structure. Output arriving after a cancel
+  must not be parsed into candidates or mutate cards.
+- The next agent call injects the current version, the rollback fact and the new structure. If the chain was
+  edited again afterwards, stop claiming "just rolled back and everything after is void".
+- External claims and rollbacks keep local chat, status and rehearsal per node id; the shared structure never
+  overwrites those local records.
 
-## 3. 复制是独立工作流
+## 3. A copy is an independent workflow
 
-- 复制内容、模块、校验、坐标、执行方与连线，节点和模块使用新 id，边重新映射；改任一副本不影响另一条。
-- 不带节点对话或预演结果。名称去重，从一条清楚的复制基线开始记版本。
-- 选中对象就是当前画布那条，应有可见标记并持久化；删除或加载后不存在的 current 回退到有效对象，不停留在空引用。
-- 正常关闭再重开验证选择记忆，不用强杀造成的 Chromium 延迟落盘判断功能失败。
+- Copy content, modules, checks, coordinates, executor and edges; nodes and modules get new ids and edges are
+  remapped, so editing one copy never touches the other.
+- No node conversations and no rehearsal results come along. De-duplicate the name, and start versioning from a
+  clear copy baseline.
+- The selected workflow is the one on the canvas; it needs a visible marker and must persist. If `current`
+  points at something deleted or missing after load, fall back to a valid one instead of keeping a dead
+  reference.
+- Verify selection memory with a normal close and reopen — not with a force-kill, whose delayed Chromium write
+  does not prove the feature broken.
 
-## 4. 测试只对选中的一条
+## 4. Tests only run against the selected workflow
 
-静态体检不调用模型，至少检查：
-- 未指定执行方、空工作流或空卡。
-- 边引用不存在节点、自连、长环。
-- 输入无去向或被反向喂入、加工缺来源/缺产物、输出无产生者。
-- 多个互不相干片段；点名涉及的卡与补法，不只给一个失败标志。
+The static pass calls no model and at least checks:
 
-真实业务里的失败、进行中、提议或证据不足步骤要按其状态解释，不能为了三类齐全编造产物。
+- no executor assigned; empty workflow or empty card;
+- an edge referencing a missing node, a self-loop, a long cycle;
+- an input with nowhere to go or fed backwards, a process step missing a source or a product, an output with no
+  producer;
+- several unrelated fragments.
 
-只读预演必须由主进程限制到零执行工具的组，当前实现常用 `context_engine,no_mcp`，使用前核它在本版本不会解析出执行工具。逐卡询问会怎样做、缺什么，不真正生成、付费、发布、发消息或改文件。
+Name the cards involved and how to fix them; a bare failure flag is not enough.
 
-- 结果可回填到本机节点及测试弹层，不涨内容版本，不进共享结构。
-- 每次记录真实工具调用数；正常应是零，不能用提示词里的只读二字代替权限证明。
-- 清除结果要同步移除节点标记、详情与弹层内容。
-- 关闭测试、切工作流、新建、回滚或关窗时停止正在跑的预演，已完成结论可保留。
+Real business steps that failed, are in progress, are only proposed or lack evidence must be explained by their
+state — never invent products just to make all three kinds present.
 
-## 5. 隔离回归
+A read-only rehearsal must be limited by the main process to a zero-tool group; the current implementation uses
+`context_engine,no_mcp`, and you must confirm it resolves to no executable tools in this version. Ask each card
+what it would do and what it lacks; never generate, pay, publish, message or write files.
 
-通过 `terminal` 在设置了 `CDP_PORT` 的自有实例运行：
+- Results may be written back to local nodes and the test dialog; they do not bump content versions and never
+  enter the shared structure.
+- Record the real tool-call count each time; it should be zero — the word "read-only" in a prompt is not proof
+  of permissions.
+- Clearing results must also remove node markers, details and dialog content.
+- Closing the test dialog, switching workflow, creating a new one, rolling back or closing the window stops a
+  rehearsal in flight; finished verdicts may stay.
 
-- `skills/workflow-studio/scripts/cdp-version.js`：成版、合批、只留最近版本、回滚与位置不成版。
-- `skills/workflow-studio/scripts/cdp-edit.js`：逐字段成版、连打合版、焦点、同步、切卡收尾与回滚。
-- `skills/workflow-studio/scripts/cdp-copy.js`：副本独立、名称与选择、静态体检、顶栏与菜单。
-- `--chat`、`--preview`、模拟挂起等可选模式先读当前脚本与所需环境变量；真实调用与离线测试分别报告，不把未跑选项算通过。
+## 5. Isolated regression
 
-比对画布、本地记录、共享底稿和 agent 所见事实是否一致。修改最后一个字段或布局后，必须重跑对应检查；前一版测试不能证明未验证的尾部改动。
+Run inside your own instance with `CDP_PORT` set:
+
+- `skills/workflow-studio/scripts/cdp-version.js` — versioning, batching, keeping only the newest, rollback, and
+  position changes not creating versions.
+- `skills/workflow-studio/scripts/cdp-edit.js` — a version per field, burst merging, focus, sync, flush on card
+  switch, rollback.
+- `skills/workflow-studio/scripts/cdp-copy.js` — copies are independent, naming and selection, static pass, top
+  bar and menu.
+- Optional modes (`--chat`, `--preview`, simulated hang) need their current script and environment variables
+  read first. Report real calls and offline tests separately; an option that was not run is not a pass.
+
+Compare canvas, local records, shared state file and what the agent sees. After changing the last field or the
+layout, re-run the matching check — an earlier run does not prove an unverified tail change.

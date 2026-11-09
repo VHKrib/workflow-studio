@@ -1,31 +1,46 @@
-# 跨平台（macOS / Windows / Linux）
+# Cross-platform (macOS / Windows / Linux)
 
-Electron 本身三平台都跑；这个应用没有原生模块、路径全走 `os.homedir()`/`path.join`、快捷键判 `metaKey || ctrlKey`、`window-all-closed` 已按 `darwin` 分支，所以同一份源码可以直接上 Windows/Linux。
+Electron runs on all three; this app has no native modules, every path goes through `os.homedir()` /
+`path.join`, shortcuts test `metaKey || ctrlKey`, and `window-all-closed` already branches on `darwin` — so the
+same source runs on Windows and Linux.
 
-## 唯一出口：仓库根 `platform.js`
+## One exit point: `platform.js` at the repo root
 
 - `hermesBin({platform, home, exists})` → `{ cmd, shell }`
-  - mac/linux：`~/.hermes/hermes-agent/.hermes/bin/hermes`；
-  - Windows：依次试 `hermes.cmd` / `.exe` / `.bat`，都没有就退回命令名 `hermes.cmd`；
-  - **Windows 上 `.cmd/.bat` 必须 `shell: true`**（`execFile` 与 `spawn` 都不认批处理），其它平台保持 `false`。
-- `hermesMissing()` 只在 `cmd` 含路径分隔符（`/[\\/]/`）时才 `existsSync`；纯命令名交给 PATH —— 否则「PATH 里有 hermes」会被误判成「入口不存在」。
-- `sqliteBin()`：mac 优先 `/usr/bin/sqlite3`，Windows 查 `C:\Program Files\sqlite3\sqlite3.exe`、`C:\sqlite3\sqlite3.exe`、家目录，兜底 `sqlite3.exe`（找不到时的报错由调用方兜住）。
-- `modKey(platform)`：`darwin → '⌘'`，其它 `→ 'Ctrl+'`。
+  - macOS/Linux: `~/.hermes/hermes-agent/.hermes/bin/hermes`;
+  - Windows: try `hermes.cmd` / `.exe` / `.bat` in that order, then fall back to the bare name `hermes.cmd`;
+  - **on Windows `.cmd`/`.bat` need `shell: true`** (`execFile` and `spawn` do not run batch files); other
+    platforms keep `false`.
+- `hermesMissing()` only calls `existsSync` when `cmd` contains a path separator; a bare command name is left
+  to `PATH` — otherwise "hermes is on PATH" would be misreported as "executable missing".
+- `sqliteBin()`: `/usr/bin/sqlite3` on macOS/Linux when present; on Windows it checks
+  `C:\Program Files\sqlite3\sqlite3.exe`, `C:\sqlite3\sqlite3.exe` and the home directory, then falls back to
+  `sqlite3.exe` (the caller handles "not found").
+- `modKey(platform)`: `darwin → '⌘'`, everything else `'Ctrl+'`.
 
-## 渲染层文案
+## Renderer labels
 
-- 源码里照旧写 `⌘Z`；`app.js` 与 `live.js` 各有一份 `IS_MAC / KEYMOD / localizeKeys()`，启动时把 `[title*="⌘"]` 里的 `⇧⌘`、`⌘` 换成 `Shift+Ctrl+`、`Ctrl+`，mac 上原样返回。
-- 新写的提示/toast 用 `KEYMOD` 拼，别再把 `⌘` 写进字符串。
+- Source keeps writing `⌘Z`; `app.js` and `live.js` each carry `IS_MAC / KEYMOD / localizeKeys()`, which on
+  non-mac platforms rewrites `⇧⌘` and `⌘` inside `[title*="⌘"]` to `Shift+Ctrl+` and `Ctrl+` at startup.
+- New toasts and hints build their text from `KEYMOD` instead of hard-coding `⌘`.
 
-## 启动器与协议
+## Launchers and protocol
 
-- mac：`打开工作流开发平台.command`；Windows：`打开工作流开发平台.bat`（`cd /d "%~dp0"`、`node_modules` 不存在才 `npm install`、失败提示 Node 18+、`chcp 65001`）；Linux：`npm start`。
-- `workflow-studio://` 在 mac/Windows 可登记；Linux 开发态没有 `.desktop`，`registerProtocol()` 直接跳过并打一行说明，别刷失败日志。
-- 开发态取调试口仍要走启动脚本，裸 Electron 不带 9222。
+- macOS: `open-workflow-studio.command`; Windows: `open-workflow-studio.bat` (`cd /d "%~dp0"`, installs
+  dependencies only when `node_modules` is missing, hints Node 18+ on failure, `chcp 65001`); Linux: `npm start`.
+- `workflow-studio://` registers on macOS/Windows. On Linux there is no `.desktop` entry in development, so
+  `registerProtocol()` skips it with one log line instead of spamming failures.
+- To get a debugging port in development you still need the launcher script; a bare Electron has no 9222.
 
-## 测试与冒烟
+## Tests and smoke check
 
-- `node tools/test-platform.js`（或 `npm run test:platform`）：纯 Node 断言 mac/linux/win32 三套解析结果，不启 Electron。
-- **夹具用中性路径**（`/home/demo`、`C:\demo`）：`tools/scan-public.js` 会把「带用户名的本机目录写法」和部门/岗位名当成命中；夹具里别写真实用户目录（哪怕只是示例），否则公开扫描会冒出假报警。这里的示例路径都用 `/home/…` 与 `C:\…`。
-- 改完在 mac 上重启一次用户实例做冒烟：agent 列表能读到（证明 hermes 桥接没坏）、编辑分屏与实时视图能进、控制台无异常、`[title*=⌘]` 仍是 `⌘`。
-- 真实 Windows/Linux 机器不在本机，只有单测覆盖；对外说「支持三平台」时要讲清这一点，需要时再补真机验证或 electron-builder 打包。
+- `node tools/test-platform.js` (or `npm run test:platform`): plain Node assertions for the macOS, Linux and
+  Windows resolutions, no Electron.
+- **Fixtures use neutral paths** (`/home/demo`, `C:\demo`): `tools/scan-public.js` treats a home-directory path
+  with a user name, and department/role words, as hits. Never put a real user directory in a fixture (not even
+  as an example) or the public scan raises false alarms. Examples here always use `/home/…` and `C:\…`.
+- After a change, restart the user's instance once as a smoke test on macOS: the agent list loads (proves the
+  hermes bridge still works), the split edit view and the live view open, the console is clean, and
+  `[title*=⌘]` still reads `⌘`.
+- There is no real Windows or Linux machine here, so only the unit tests cover them; when claiming "runs on all
+  three", say that plainly, and verify on a real machine (or with an electron-builder package) when it matters.
