@@ -123,6 +123,7 @@ git ls-remote --heads origin
 - **窗内入口是右栏列表的第一行。** 实时入口不只放 ⋯ 菜单：右栏链路列表**第一行**就是「实时工作流」，和已存工作流并列（虚线边表示它不是一条已存链路、不进版本）。点它＝把**画布区**切换成实时视图——不是新窗口，也不是盖住整个工作台的浮层；顶栏名字变「实时工作流」、执行方下拉隐藏、其它工作流行让出选中态；点回任意工作流就自动退出并恢复名字与下拉。这就是用户验收这一项的原话标准：「像隔板 / 新工作流那样切换」。
 - 已登记自定义协议 `workflow-studio://`：`open "workflow-studio://open"` 开或前置主窗口，`open "workflow-studio://live"` 切到实时视图（视同点右栏那张虚线卡）；`./node_modules/.bin/electron . --unregister-protocol` 启动一次即解除登记。
 - 单实例靠 `app.requestSingleInstanceLock()`：第二个进程直接退出，把 URL 交给已开的那个窗口处理；实测连续唤起两次，进程数仍为 1、页面 1→2。
+- **要打开用户平时用的那个实例（带 9222 调试口），跑仓库根的启动脚本**：`cd <本机仓库根> && (./打开工作流开发平台.command > /tmp/wf-launch.log 2>&1 &)`，然后 `curl -s http://127.0.0.1:9222/json/list` 确认有 `type=page`、title 为「工作流开发平台」，再用 `osascript -e 'tell application "System Events" to tell process "Electron" to get {position of window 1, size of window 1}'` 核到 1380×880。协议唤起只负责「开或前置」，它经 LaunchServices 起的是**不带调试口**的裸 Electron（窗口还会以 960×648 出现，低于应用自己的 minWidth），要 CDP 或要用户那套数据就必须走启动脚本。切换实例前先 `osascript -e 'tell application "Electron" to quit'` 退干净：单实例锁会让后起的进程把 URL 交给旧实例直接退出，端口依旧不会出现。
 - **Hermes desktop 聊天只放行 http/https/mailto**（`apps/desktop/electron/external-open.ts` 的 `SUPPORTED_WEB`），贴自定义协议链接点了会被自己拦掉——要唤起就让 agent 跑 `open`，别做聊天里可点的链接。
 
 ## Pitfalls
