@@ -749,6 +749,7 @@ function applyZoom() {
   canvas.style.transformOrigin = '0 0';
   canvas.style.transform = `scale(${zoom})`;
   if (changed && cw && ch) { wrap.scrollLeft = cx * zoom - cw / 2; wrap.scrollTop = cy * zoom - ch / 2; }
+  clampScroll();
   lastZoom = zoom;
   const z = $('#zoom'); if (z) z.textContent = Math.round(zoom * 100) + '%';
 }
@@ -819,6 +820,7 @@ function annotateChips() {
 function renderDoc(d, opts) {
   if (!d || !Array.isArray(d.cards)) return;
   const switched = doc && doc.conv && d.conv && doc.conv.key !== d.conv.key;
+  const anchor = switched ? null : anchorAtCenter();     // 先记住用户正在看的那张卡（切对话不锚，直接 fit）
   doc = d;
   for (const c of doc.cards) { if (!Number.isFinite(c.x)) c.x = 0; if (!Number.isFinite(c.y)) c.y = 0; c.checks = c.checks || []; if (!c.status) c.status = 'idle'; }
   if (switched) { fitted = false; canvas.querySelectorAll('.node').forEach(el => el.remove()); edgesSvg.innerHTML = ''; }
@@ -832,15 +834,14 @@ function renderDoc(d, opts) {
   drawEdges();
   annotateChips();
   paintMedia();
-  // 卡摆好之后一定要把视野对准它们：不然后打开的窗口停在空地上（卡在 ORIGIN 偏移那边，看起来就是空白）
+  // 卡摆好之后：优先把用户正在看的那张卡钉在原处；没法锚（首次/切对话）才整体对准
   if (doc.cards.length) {
-    const inside = (() => {
-      const r = canvas.querySelector('.node') && canvas.querySelector('.node').getBoundingClientRect();
-      return !!r && r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
-    })();
-    if (!fitted || !inside) {
+    if (restoreAnchor(anchor)) { fitted = true; }
+    else if (!fitted || !viewHitsAnyNode()) {
       fitted = true;
       requestAnimationFrame(() => requestAnimationFrame(() => { try { fit(); } catch (e) {} }));
+    } else {
+      clampScroll();
     }
   }
   paintStat(); paintEmpty();
@@ -864,6 +865,65 @@ function fit() {
   zoom = z; applyZoom();
   wrap.scrollLeft = (OX + x0 - pad) * z;      // 卡画在 ORIGIN 偏移之后的坐标上，滚动量要带上它
   wrap.scrollTop = (OY + y0 - pad) * z;
+  clampScroll();
+}
+
+// ---------- 视野：更新不跳、也不会被甩到空白处 ----------
+// 画布是 12000×8000 的固定尺寸再叠 transform 缩放，滚动区不会跟着缩放变；
+// 所以任何滚动/缩放之后都要把视野夹回「有卡的范围」，否则能一路滚进空白区、看起来像工作流丢了。
+function contentBox() {
+  const ns = [...canvas.querySelectorAll('#canvas .node')];
+  if (!ns.length) return null;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const el of ns) {
+    const x = parseFloat(el.style.left) || 0, y = parseFloat(el.style.top) || 0;
+    x0 = Math.min(x0, x); y0 = Math.min(y0, y);
+    x1 = Math.max(x1, x + el.offsetWidth); y1 = Math.max(y1, y + el.offsetHeight);
+  }
+  return { x0, y0, x1, y1 };
+}
+function clampScroll(margin = 160) {
+  const cb = contentBox();
+  if (!cb || !wrap.clientWidth) return;
+  const cw = wrap.clientWidth, ch = wrap.clientHeight;
+  const L = cb.x0 * zoom, T = cb.y0 * zoom, R = cb.x1 * zoom, B = cb.y1 * zoom;
+  // 视口内允许的滚动范围：内容底边不能高于上边缘、内容顶边不能低于下边缘（留 margin）
+  // 边距按视口尺寸给到 45%：拖到极限时至少还有将近半屏是卡片，不会只剩一条缝
+  const axis = (cur, lo, hi, view) => {
+    const m = Math.max(160, view * 0.45);
+    const a = Math.max(0, lo - view + m);
+    const b = Math.max(a, hi - m);
+    return Math.min(b, Math.max(a, cur));
+  };
+  wrap.scrollLeft = axis(wrap.scrollLeft, L, R, cw);
+  wrap.scrollTop = axis(wrap.scrollTop, T, B, ch);
+}
+function viewHitsAnyNode() {
+  return [...canvas.querySelectorAll('#canvas .node')].some(el => {
+    const r = el.getBoundingClientRect();
+    return r.right > 0 && r.bottom > 0 && r.left < innerWidth && r.top < innerHeight;
+  });
+}
+// 更新前记下「离视野中心最近的那张卡」在屏幕上的位置；更新后把它放回原处 —— 新卡长出来时画面不跳
+function anchorAtCenter() {
+  let best = null, bd = Infinity;
+  for (const el of canvas.querySelectorAll('#canvas .node')) {
+    const r = el.getBoundingClientRect();
+    if (r.right < 0 || r.bottom < 0 || r.left > innerWidth || r.top > innerHeight) continue;
+    const d = Math.hypot((r.left + r.right) / 2 - innerWidth / 2, (r.top + r.bottom) / 2 - innerHeight / 2);
+    if (d < bd) { bd = d; best = { id: el.dataset.id, left: r.left, top: r.top }; }
+  }
+  return best;
+}
+function restoreAnchor(a) {
+  if (!a) return false;
+  const el = canvas.querySelector(`.node[data-id="${CSS.escape(a.id)}"]`);
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  wrap.scrollLeft += r.left - a.left;
+  wrap.scrollTop += r.top - a.top;
+  clampScroll();
+  return true;
 }
 
 function bindCanvas() {
@@ -877,6 +937,7 @@ function bindCanvas() {
     if (!panning) return;
     wrap.scrollLeft = ox - (e.clientX - sx);
     wrap.scrollTop = oy - (e.clientY - sy);
+    clampScroll();
   });
   addEventListener('pointerup', () => { panning = false; wrap.classList.remove('panning'); });
   wrap.addEventListener('wheel', e => {
@@ -964,5 +1025,13 @@ async function init() {
     if (st.on) $('#lfol').checked = true;
     if (cur) await hydrate(cur);                      // 跟随关着也把上次保存的解析结果摆上来
   }
+}
+// 自测钩子：只有网址带 #selftest 时才挂（正常使用没有副作用），方便用 CDP 灌假 doc 验证视野不跳
+if (location.hash === '#selftest') {
+  window.__lc = {
+    renderDoc, fit, clampScroll, contentBox, anchorAtCenter, restoreAnchor,
+    get zoom() { return zoom; }, get doc() { return doc; },
+    scroll() { return { left: wrap.scrollLeft, top: wrap.scrollTop, w: wrap.clientWidth, h: wrap.clientHeight }; }
+  };
 }
 init();
