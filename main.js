@@ -737,7 +737,7 @@ ipcMain.handle('live:doc:save', (_e, doc) => {
 const RUN_FILE_RE = /(?:~|\.{1,2}\/)?[^\s"'`，。；、）)】\\]*?\/[^\s"'`，。；、）)】\\]*?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|txt|json|csv|ya?ml)/g;   // 文件路径：绝对或相对都认，反斜杠/引号一类直接切开
 ipcMain.handle('run:pull', async (_e, { profile, limit, minutes: minutesArg } = {}) => {
   try {
-    // 只读这个执行方自己的对话，而且只要最近一段时间的（默认 20 分钟）：商品信息就是商品信息。
+    // 只读这个执行方自己的对话，而且只要最近一段时间的（默认 20 分钟）：它是谁就只读谁。
     const minutes = Math.max(1, Math.min(240, Number(minutesArg) || 20));
     const since = Date.now() - minutes * 60 * 1000;
     const r2 = await livefeed.recentMessages(profile, 1200);
