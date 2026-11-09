@@ -735,52 +735,27 @@ ipcMain.handle('live:doc:save', (_e, doc) => {
 
 // 「取回本次文件」：从执行方最近的对话里，把这次跑出来的文件捞出来（只读会话库）
 const RUN_FILE_RE = /(?:~|\.{1,2}\/)?[^\s"'`，。；、）)】\\]*?\/[^\s"'`，。；、）)】\\]*?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|txt|json|csv|ya?ml)/g;   // 文件路径：绝对或相对都认，反斜杠/引号一类直接切开
-ipcMain.handle('run:pull', async (_e, { profile, limit } = {}) => {
+ipcMain.handle('run:pull', async (_e, { profile, limit, minutes: minutesArg } = {}) => {
   try {
-    // 你说的是「跟某个 agent 的对话」，但那段对话可能落在 default 里、也可能是它自己的 profile，
-    // 还可能是派活时开的那条：所以按「最近动过的库」一起扫，取最新的文件。
-    const home = os.homedir();
-    const profDirs = path.join(home, '.hermes', 'profiles');
-    const cands = [];
-    try {
-      const dbs = [{ id: 'default', file: path.join(home, '.hermes', 'state.db') }];
-      for (const id of fs.readdirSync(profDirs)) {
-        if (!/^[\w.-]{1,64}$/.test(id)) continue;
-        dbs.push({ id, file: path.join(profDirs, id, 'state.db') });
-      }
-      const now = Date.now();
-      for (const db of dbs) {
-        let st; try { st = fs.statSync(db.file); } catch (e) { continue; }
-        const fresh = now - st.mtimeMs < 6 * 3600 * 1000;                     // 六小时内动过的库才扫
-        if (!fresh && db.id !== profile && db.id !== 'default') continue;
-        cands.push({ id: db.id, mtime: st.mtimeMs });
-      }
-    } catch (e) { /* 读不到目录时退回只扫执行方 */ }
-    if (!cands.length) cands.push({ id: profile, mtime: Date.now() });
-    cands.sort((a, b) => (b.id === profile) - (a.id === profile) || b.mtime - a.mtime);
-
+    // 只读这个执行方自己的对话，而且只要最近一段时间的（默认 20 分钟）：商品信息就是商品信息。
+    const minutes = Math.max(1, Math.min(240, Number(minutesArg) || 20));
+    const since = Date.now() - minutes * 60 * 1000;
+    const r2 = await livefeed.recentMessages(profile, 1200);
+    if (!r2 || !r2.msgs) return { ok: false, error: (r2 && r2.error) || '读不到这个执行方的会话库' };
     const seen = new Map();
     let scanned = 0;
-    const sources = [];
-    for (const c of cands.slice(0, 6)) {
-      const r2 = await livefeed.recentMessages(c.id, 1200);
-      if (!r2 || !r2.msgs) continue;
-      scanned += r2.msgs.length;
-      let hitHere = 0;
-      for (const msg of r2.msgs) {
-        const text = [msg.text, msg.result, JSON.stringify(msg.tools || [])].filter(Boolean).join('\n');
-        for (const raw of text.match(RUN_FILE_RE) || []) {
-          const p = raw.replace(/^(?:MEDIA:|file:\/\/)/i, '').replace(/[)\]}>,.;:]+$/, '');   // MEDIA: 前缀 / 结尾标点都去掉
-          if (!p.includes('/') || p.includes('://')) continue;
-          const name = p.split('/').pop();
-          const at = Number(msg.at) || 0;
-          const prev = seen.get(p);
-          if (prev) { prev.at = Math.max(prev.at, at); prev.hits++; continue; }
-          seen.set(p, { path: p, name, at, msgId: msg.id || 0, profile: c.id, hits: 1 });
-          hitHere++;
-        }
+    for (const msg of r2.msgs) {
+      const at = Number(msg.at) || 0;
+      if (at && at < since) continue;                       // 只认窗口内的消息
+      scanned++;
+      const text = [msg.text, msg.result, JSON.stringify(msg.tools || [])].filter(Boolean).join('\n');
+      for (const raw of text.match(RUN_FILE_RE) || []) {
+        const p = raw.replace(/^(?:MEDIA:|file:\/\/)/i, '').replace(/[)\]}>,.;:]+$/, '');
+        if (!p.includes('/') || p.includes('://')) continue;
+        const prev = seen.get(p);
+        if (prev) { prev.at = Math.max(prev.at, at); prev.hits++; continue; }
+        seen.set(p, { path: p, name: p.split('/').pop(), at, msgId: msg.id || 0, hits: 1 });
       }
-      if (hitHere) sources.push(c.id);
     }
     const files = [...seen.values()]
       .filter(f => !/\.(tmp|lock|log|db|db-wal|db-shm)$/i.test(f.path))
@@ -788,7 +763,7 @@ ipcMain.handle('run:pull', async (_e, { profile, limit } = {}) => {
       .filter(f => !/\/(package-lock\.json|package\.json|config\.yaml|SKILL\.md)$/i.test(f.path))
       .filter(f => !/^\/(tmp|private\/tmp|var\/folders)\//.test(f.path))
       .sort((a, b) => b.at - a.at).slice(0, 40);
-    return { ok: true, conv: { profile, sources }, files, scanned };
+    return { ok: true, conv: { profile, sources: files.length ? [profile] : [], minutes }, files, scanned };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }

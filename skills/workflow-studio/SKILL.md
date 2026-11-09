@@ -212,6 +212,7 @@ git ls-remote --heads origin
 - **用脚本做整段替换后先查重复声明再做语法检查。** 同一脚本里对同一标识符二次声明（`let saveTimer` 加了两遍）只会得到一条 SyntaxError，整个文件静默不执行；替换后 `grep -n "let <名>\|function <名>" <文件>` 再 `node --check`，不要只信 `--check` 通过就以为没重影。
 - **渲染层文件会被离线脚本丢进 Node `vm` 里执行，顶层不许直接摸 `navigator`/`document`/`window`。** `scripts/check-fixtures.js` 用 `vm.runInContext` 加载 `renderer/app.js`（沙箱里有假 `window`，没有 `navigator`），任何顶层 `navigator.platform` 都会让整套离线样本直接抛 `ReferenceError`。浏览器能力的探测写成 `typeof navigator !== 'undefined' && …`，或推迟到 `init()` 之后；改完先跑 `node skills/workflow-studio/scripts/check-fixtures.js`（不是只看 `node --check`），它才是这条路径的真回归。
 - 流中整块 innerHTML 重建会丢折叠态和点击；只更新变化节点。
+- **「取回本次文件」＝从会话库只读取这次跑出来的文件，挂到卡片元素上，别让用户自己找。** 用户在 Hermes 对话里让 agent「跑一次看效果」，回到画布点一颗按钮就该看到这次进去/出来的文件。三条真坑：① `livefeed` 归一后的字段是 `text` / `result` / `tools`，**不是** 数据库里的 `content` / `tool_calls`——按列名取值只会得到空数组，且不报错；② `listConversations` 会滤掉消息少的会话且最新的那条常常是随手一问，真正干活的那条可能在**别的 profile**（`default` 或它自己的库）里，所以要扫「执行方 + default + 六小时内动过的库」再合并；③ 回复里的路径常带 `MEDIA:` 前缀、结尾带标点，路径正则还要认相对路径，否则最新产物排不上去。匹配到卡片用「文件名 + 上级目录拆词打分」而不是整段路径包含，落不到就退到最后一张输出卡，每卡封顶几个并在状态条报「取回 N 个，M 个没对上」。写盘只 `saveStore()`（不算一版），点「保留工作流」才成版。实现细节、过滤表与干跑验据见 `references/run-artifacts.md`。
 - 图与测试对应哪个版本写清；未验收的实验解析/布局不能写进手册当可靠方法。
 
 ## Topical references
@@ -224,3 +225,4 @@ git ls-remote --heads origin
 - `references/hermes-chat-visual.md`：对齐 Hermes 的视觉来源与密度数值。
 - `references/public-repo-hygiene.md`：扫描器读索引、字面量自伤、作者身份与历史改写、标签核对、中英双版 README 的验收。
 - `references/mcp-and-cli-integration.md`：把工作流暴露给别的 agent（MCP/CLI）、只读边界、客户端注册与验据、测试夹具。
+- `references/run-artifacts.md`：把一次运行产生的文件从会话库取回并挂到卡片（`run:pull`）、字段归一、跨 profile 合并、路径清洗与匹配打分。

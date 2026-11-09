@@ -324,7 +324,7 @@ async function pullRunFiles() {
   try { r = await window.tcflow.pullRun({ profile: w.agent }); } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
   if (!r || !r.ok) { splitStat((r && r.error) || '取回失败'); return; }
   const files = r.files || [];
-  if (!files.length) { splitStat('这次对话里没找到文件（跑完再点一次）'); return; }
+  if (!files.length) { splitStat(`最近 20 分钟 ${agentName(w.agent)} 没有新文件（跑完再点一次）`); return; }
 
   const order = chainOrder(w);
   const textOf = n => [n.title, n.body, implOf(n), modsOf(n).map(m => m.name).join(' ')].join(' ').toLowerCase();
@@ -356,8 +356,7 @@ async function pullRunFiles() {
   saveStore();                                       // 存内容，但不记版本（点「保留工作流」才记）
   render();
   if (panelCardId) renderPanel();
-  const src = (r.conv && r.conv.sources && r.conv.sources.length) ? r.conv.sources.join(' / ') : (w.agent || '最近对话');
-  splitStat(added ? `从 ${src} 的对话里取回 ${added} 个文件${missed ? `，${missed} 个没对上卡片` : ''}` : '这些文件已经在卡片上了');
+  splitStat(added ? `从 ${agentName(w.agent)} 最近 20 分钟的对话里取回 ${added} 个文件${missed ? `，${missed} 个没对上卡片` : ''}` : '这些文件已经在卡片上了');
 }
 
 async function keepFlow() {
