@@ -126,6 +126,7 @@ async function enterLive() {
   const name = $('#flowName');
   if (name) { name.value = '实时工作流'; name.readOnly = true; }
   const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = 'none';
+  const eb0 = $('#btnEditFlow'); if (eb0) eb0.style.display = 'none';
   renderWorkflowList();
   await bootLiveView();
   const wv = $('#liveWV');
@@ -169,6 +170,7 @@ function enterSplit() {
   cw.classList.add('live', 'split');
   canvas.classList.add('editing');
   const kb = $('#splitKeep'); if (kb) kb.textContent = '保留工作流';
+  const eb = $('#btnEditFlow'); if (eb) eb.style.display = 'none';
   const w0 = flow();
   if (w0) { layoutChain(w0); render(); }
   editHistoryInit();
@@ -269,6 +271,7 @@ async function enterSplitRef(snapshot) {
   cw.classList.add('live', 'split');
   canvas.classList.add('editing');
   const kb = $('#splitKeep'); if (kb) kb.textContent = '保留工作流';
+  const eb = $('#btnEditFlow'); if (eb) eb.style.display = 'none';
   render();
   const w = flow();
   if (w) { layoutChain(w); render(); }
@@ -450,6 +453,7 @@ function exitLive() {
   const name = $('#flowName');
   if (name) name.readOnly = false;
   const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = '';
+  const eb1 = $('#btnEditFlow'); if (eb1) eb1.style.display = '';
   renderWorkflowList();
   if (name) { const w = flow(); name.value = (w && w.name) || '未命名工作流'; }
 }
@@ -464,6 +468,12 @@ function bindUI() {
   $('#tClear').onclick = clearPreviews;
   $('#btnTempChat').onclick = startTempCanvas;
   $('#tempSave').onclick = promoteTemp;
+  const editFlowBtn = $('#btnEditFlow');
+  if (editFlowBtn) editFlowBtn.onclick = () => {
+    if (liveMode || editMode) return;           // 实时视图里用实时画布自己的「编辑工作流」；已经在编辑就别重复进
+    const id = store.current;
+    if (id) editHistoryFlow(id);
+  };
   const sk = $('#splitKeep'), sg = $('#splitGen');
   if (sk) sk.onclick = keepFlow;
   const su = $('#splitUndo'), sr = $('#splitRedo');
@@ -1198,7 +1208,7 @@ function renderWorkflowList() {
     el.onclick = () => switchWorkflow(w.id);
     el.innerHTML = `<div class="wn">${esc(w.name)}${on ? '<span class="wsel">选中</span>' : ''}</div>
       <div class="ws">v${w.round ? w.round - 1 : (w.version || 1)} · ${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
-      <div class="ed" title="编辑这条：上面只读参考，下面改">✎</div>
+      <div class="ed" title="编辑工作流：上面只读参考这一版，下面改">✎</div>
       <div class="dup" title="复制这条链路">⧉</div>
       <div class="x" title="删除">✕</div>`;
     el.querySelector('.ed').onclick = (ev) => { ev.stopPropagation(); editHistoryFlow(w.id); };
