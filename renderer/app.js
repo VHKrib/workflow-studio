@@ -98,6 +98,7 @@ function cardLine(n, i) {
 
 // 实时工作流：和一条工作流一样占画布区，从右边列表切进来（不再另开窗口）
 let liveMode = false;
+let editMode = false;      // 编辑工作流的分屏里：卡片正文收起来，改成下面一块「参考」文本，保留时再挪到上方
 let liveBooted = false;
 async function bootLiveView() {
   const wv = $('#liveWV');
@@ -157,7 +158,12 @@ function enterSplit() {
   const cw = document.querySelector('.canvaswrap');
   if (!cw) return;
   liveMode = true;
+  editMode = true;
   cw.classList.add('live', 'split');
+  canvas.classList.add('editing');
+  const kb = $('#splitKeep'); if (kb) kb.textContent = '保留工作流';
+  const w0 = flow();
+  if (w0) { layoutChain(w0); render(); }
   const name = $('#flowName'); if (name) name.readOnly = false;
   const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = '';
   const wv = $('#liveWV');
@@ -170,10 +176,30 @@ function splitStat(msg) { const el = $('#splitStat'); if (el) el.textContent = m
 
 function keepFlow() {
   const w = flow(); if (!w) return;
+  const btn = $('#splitKeep');
+  if (!editMode) {                       // 已经保留过：这颗按钮变成「继续编辑」
+    editMode = true;
+    canvas.classList.add('editing');
+    layoutChain(w); render();
+    try { fitView(true, 0.2); } catch (e) { }
+    if (btn) btn.textContent = '保留工作流';
+    splitStat('继续编辑：改完再点「保留工作流」');
+    return;
+  }
+  let moved = 0;
+  for (const n of w.nodes) {
+    const t = String(n.note || '').trim();
+    if (t) { n.body = t; n.note = ''; moved++; }     // 参考文本 → 卡片正文（和读取链路得到的卡一样，描述在上方）
+  }
+  editMode = false;
+  canvas.classList.remove('editing');
+  layoutChain(w); render();
+  try { fitView(true, 0.2); } catch (e) { }
   saveStore();
-  const t = new Date();
+  const t2 = new Date();
   const p2 = n => String(n).padStart(2, '0');
-  splitStat(`已保留 ${p2(t.getHours())}:${p2(t.getMinutes())}:${p2(t.getSeconds())}`);
+  if (btn) btn.textContent = '继续编辑';
+  splitStat(`已保留 ${p2(t2.getHours())}:${p2(t2.getMinutes())}:${p2(t2.getSeconds())}` + (moved ? ` · ${moved} 张卡的内容已转到上方` : ''));
 }
 
 const GEN_TYPES = new Set(['tool', 'file', 'model', 'check', 'cmd']);
@@ -213,8 +239,9 @@ function applyGenerated(w, data) {
   for (const c of cards) {
     const old = c.id && oldById.get(c.id);
     const mods = normalizeMods(c.mods, c.kind);
-    if (old) next.push(Object.assign(old, { kind: c.kind, title: String(c.title).trim(), body: String(c.body || '').trim(), mods: mods.length ? mods : (old.mods || []) }));
-    else next.push({ id: uid(), kind: c.kind, title: String(c.title).trim(), body: String(c.body || '').trim(), impl: '', mods, checks: [], chat: [], status: 'idle' });
+    const body = String(c.body || '').trim();
+    if (old) next.push(Object.assign(old, { kind: c.kind, title: String(c.title).trim(), body: editMode ? old.body : body, note: editMode ? body : old.note, mods: mods.length ? mods : (old.mods || []) }));
+    else next.push({ id: uid(), kind: c.kind, title: String(c.title).trim(), body: editMode ? '' : body, note: editMode ? body : '', impl: '', mods, checks: [], chat: [], status: 'idle' });
   }
   w.nodes = next;
   const ids = new Set(next.map(n => n.id));
@@ -276,6 +303,7 @@ function exitLive() {
   const cw = document.querySelector('.canvaswrap');
   if (cw) cw.classList.remove('live', 'split');
   const wv = $('#liveWV'); if (wv) { try { wv.send('live:readonly', false); } catch (e) { } }
+  editMode = false; canvas.classList.remove('editing');
   splitStat('');
   const name = $('#flowName');
   if (name) name.readOnly = false;
@@ -1136,6 +1164,7 @@ function nodeEl(n) {
   el.dataset.id = n.id;
   el.dataset.sig = nodeSig(n);
   if (n.draft) el.classList.add('draft');
+  if (editMode) el.classList.add('editing');
   el.title = '双击打开右栏：改名字、和 agent 聊这张卡';
   el.innerHTML = `
     <div class="hd">
@@ -1145,6 +1174,7 @@ function nodeEl(n) {
     </div>
     <div class="body" data-ph="${esc(k.ph)}">${esc(n.body)}</div>
     ${modsHTML(n)}
+    <textarea class="note" placeholder="这张卡要写清什么？写参考，保留时挪到上方做描述">${esc(n.note || '')}</textarea>
     <div class="ft">
       <div class="checks">${(n.checks || []).map(c => `<span class="chip">${esc(c)}</span>`).join('')}${n.preview ? `<span class="chip pvchip" title="这张卡有只读预演的结论（左栏 / 测试里看）">预演 ✓</span>` : ''}</div>
       ${implOf(n) ? '<span class="gar" data-act="impl" title="内部实现已封装：卡片上不显示，点开看">⚙</span>' : ''}
@@ -1153,6 +1183,12 @@ function nodeEl(n) {
       <span class="mini" data-act="link" title="拖到另一张卡建立连线">↗ 连线</span>
     </div>`;
 
+  const noteEl = el.querySelector('.note');
+  if (noteEl) {
+    noteEl.addEventListener('pointerdown', ev => ev.stopPropagation());
+    noteEl.addEventListener('dblclick', ev => ev.stopPropagation());
+    noteEl.addEventListener('input', () => { n.note = noteEl.value; saveLocal(); });
+  }
   el.querySelector('[data-act="link"]').addEventListener('click', ev => { ev.stopPropagation(); startLink(n, el); });
   el.querySelector('[data-act="ask"]').addEventListener('click', ev => { ev.stopPropagation(); openCard(n); chatAsk('review'); });
   el.querySelector('[data-act="opt"]').addEventListener('click', ev => { ev.stopPropagation(); openCard(n); chatAsk('next'); });
