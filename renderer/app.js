@@ -116,6 +116,11 @@ async function bootLiveView() {
 async function enterLive() {
   liveMode = true;
   const cw = document.querySelector('.canvaswrap');
+  if (refViewOn) {
+    const wvRef = $('#liveWV');
+    if (wvRef) { try { wvRef.setAttribute('src', 'live.html'); } catch (e) { } }
+    refViewOn = false;
+  }
   if (cw) { cw.classList.remove('split'); cw.classList.add('live'); }
   const wv0 = $('#liveWV'); if (wv0) { try { wv0.send('live:readonly', false); } catch (e) { } }
   const name = $('#flowName');
@@ -221,6 +226,56 @@ function editRedo() {
   editHist.undo.push(snapFlow(w));
   applyEditSnap(editHist.redo.pop());
   splitStat('已重做一步');
+}
+
+// ---------- 历史工作流编辑：上面放原来那一版的只读参考 ----------
+let refViewOn = false;
+async function loadRefView(doc) {
+  const wv = $('#liveWV');
+  if (!wv) return;
+  let dir = '';
+  try { dir = await window.tcflow.appDir(); } catch (e) { }
+  if (dir) wv.setAttribute('preload', dir + '/preload.js');
+  await new Promise(res => {
+    const done = () => { wv.removeEventListener('dom-ready', done); res(); };
+    wv.addEventListener('dom-ready', done);
+    wv.setAttribute('src', 'live.html?mode=ref');
+  });
+  refViewOn = true;
+  try { wv.send('ref:doc', doc); } catch (e) { }
+}
+
+function editHistoryFlow(id) {
+  const w = store.workflows.find(x => x.id === id);
+  if (!w) return;
+  const snapshot = JSON.parse(JSON.stringify({
+    conv: { key: 'ref:' + w.id, who: w.name },
+    name: w.name,
+    cards: w.nodes,
+    edges: w.edges,
+  }));
+  if (liveMode) exitLive();                 // 先收掉实时那套（它会把参考视图指回 live.html）
+  store.current = w.id;
+  selId = null; panelCardId = null; panelOpen = false;
+  render(); renderWorkflowList();
+  enterSplitRef(snapshot);
+}
+
+async function enterSplitRef(snapshot) {
+  const cw = document.querySelector('.canvaswrap');
+  if (!cw) return;
+  liveMode = true;
+  editMode = true;
+  cw.classList.add('live', 'split');
+  canvas.classList.add('editing');
+  const kb = $('#splitKeep'); if (kb) kb.textContent = '保留工作流';
+  render();
+  const w = flow();
+  if (w) { layoutChain(w); render(); }
+  editHistoryInit();
+  try { fitView(true, 0.2); } catch (e) { }
+  await loadRefView(snapshot);
+  splitStat('上面是原来那一版（只读，双击看元素），下面改');
 }
 
 // ---------- 分屏下半区：保留 / AI 通用化 ----------
@@ -340,7 +395,11 @@ async function generalizeFlow() {
   splitStat('AI 正在按你现在的结构补全…');
   try {
     const profile = w.agent || 'default';
-    const brief = chainOrder(w).map(n => `- [${KINDS[n.kind].label}] ${n.title}｜${n.body || '(空)'}｜工具：${(n.mods || []).map(m => m.name).join('、') || '无'}`).join('\n');
+    const brief = chainOrder(w).map(n => {
+      const mods = (n.mods || []).map(m => m.name).join('、') || '无';
+      const note = String(n.note || '').trim();
+      return `- [${KINDS[n.kind].label}] 标题：${n.title}｜工具/元素：${mods}${note ? '｜我的要求：' + note : ''}`;
+    }).join('\n');
     const ids = w.nodes.map(n => `${n.id}（${KINDS[n.kind].label}）`).join('、');
     const prompt = [
       '你在编辑一条已经人工确认过的链路。严格按用户现在的结构改，不要自作主张扩链。',
@@ -351,6 +410,7 @@ async function generalizeFlow() {
       '4) 加工卡（加工）：可以补全工具、模型、接口（这里是唯一允许加元素的地方），但不得改变这段加工的目的；',
       '5) 文字：去实例化，不要商品名/货号/店铺名/人名/本机路径/一次性参数；写做法与合格标准；',
       '6) 名称：给一个通用名字，不要带版本号。',
+      '7) 每张卡的描述由你**重新写**：不要参考、也不要复述原来的描述（原来的描述不会给你）；只依据上面的类型、标题、工具/元素、我的要求，以及它在链路里的位置，写清「这一步做什么、做到什么算合格」。',
       '',
       '当前链路（按顺序）：',
       brief,
@@ -1138,8 +1198,10 @@ function renderWorkflowList() {
     el.onclick = () => switchWorkflow(w.id);
     el.innerHTML = `<div class="wn">${esc(w.name)}${on ? '<span class="wsel">选中</span>' : ''}</div>
       <div class="ws">v${w.round ? w.round - 1 : (w.version || 1)} · ${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
+      <div class="ed" title="编辑这条：上面只读参考，下面改">✎</div>
       <div class="dup" title="复制这条链路">⧉</div>
       <div class="x" title="删除">✕</div>`;
+    el.querySelector('.ed').onclick = (ev) => { ev.stopPropagation(); editHistoryFlow(w.id); };
     el.querySelector('.dup').onclick = (ev) => { ev.stopPropagation(); duplicateWorkflow(w.id); };
     el.querySelector('.x').onclick = (ev) => deleteWorkflow(w.id, ev);
     box.appendChild(el);

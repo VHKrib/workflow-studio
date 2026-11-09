@@ -19,6 +19,7 @@ let doc = null;
 let pos = new Map();       // 卡 id → {x, y, w, h}（画布坐标，含 ORIGIN）
 let fitted = false;
 let readOnly = false;      // 确定工作流之后：这块变成只读参考
+const REF = /(?:^|[?&])mode=ref(?:&|$)/.test(location.search);   // 历史工作流编辑时的只读参考视图
 
 const esc = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 const pad2 = n => String(n).padStart(2, '0');
@@ -731,7 +732,31 @@ const implOf = n => String((n && n.impl) || '').trim();
 const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y]);
 function findDock() { return null; }                     // 实时窗口不接插槽（连线是解析出来的，不靠拖）
 function saveStore() { persist(); }              // 拖动收尾：存位置
-function openCard(n) { if (readOnly) { setStat('上面是只读参考，改动请到下面那张画布'); return; } openEditor(n.id); }   // 双击 / ⚙ 都进同一个面板
+function openCard(n) {
+  if (REF) { showRefPreview(n); return; }          // 参考视图：双击只查看元素，不改
+  if (readOnly) { setStat('上面是只读参考，改动请到下面那张画布'); return; }
+  openEditor(n.id);
+}
+// 参考视图里的元素预览（只读）
+function showRefPreview(n) {
+  let box = document.getElementById('refPrev');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'refPrev';
+    box.className = 'refprev';
+    box.addEventListener('click', ev => { if (ev.target === box) box.remove(); });
+    document.body.appendChild(box);
+  }
+  const mods = (n.mods || []).map(m => `<span class="rpmod">${esc(m.name)}</span>`).join('') || '<span class="rpnil">没有记录元素</span>';
+  box.innerHTML = `<div class="rpcard">
+    <div class="rph"><span class="rpk ${n.kind}">${KIND[n.kind] || n.kind}</span><b>${esc(n.title)}</b><span class="rpx">✕</span></div>
+    <div class="rpb">${esc(n.body || '（没有描述）')}</div>
+    <div class="rpl">元素</div><div class="rpm">${mods}</div>
+    ${n.impl ? `<div class="rpl">内部实现</div><div class="rpi">${esc(n.impl)}</div>` : ''}
+    <div class="rpn">只读参考：改到下面那张画布</div>
+  </div>`;
+  box.querySelector('.rpx').onclick = () => box.remove();
+}
 function chatAsk() { const i = document.getElementById('chatIn'); if (i) i.focus(); }
 
 // 只读窗口里的「连线」按钮：不建新关系，只提示一句
@@ -1034,6 +1059,12 @@ function confirmFlow() {
 
 async function init() {
   bindCanvas();
+  if (REF) {
+    document.body.classList.add('refmode');
+    const brand = document.querySelector('.lbrand'); if (brand) brand.textContent = '参考 · 只读';
+    if (window.tcflow.onRefDoc) window.tcflow.onRefDoc(d => { if (d && d.cards) { renderDoc(d); setReadOnly(true); } });
+    return;
+  }
   const cf = document.getElementById('lconfirm');
   if (cf) cf.onclick = confirmFlow;
   if (window.tcflow.onLiveReadonly) window.tcflow.onLiveReadonly(v => setReadOnly(v));

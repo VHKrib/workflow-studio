@@ -49,6 +49,12 @@ contextBridge.exposeInMainWorld('tcflow', {
     ipcRenderer.on('live:confirm-to-app', h);
     return () => ipcRenderer.removeListener('live:confirm-to-app', h);
   },
+  // 历史工作流编辑：把原始那一版当只读参考灌进参考视图
+  onRefDoc: (cb) => {
+    const h = (_e, doc) => cb(doc);
+    ipcRenderer.on('ref:doc', h);
+    return () => ipcRenderer.removeListener('ref:doc', h);
+  },
   // 确认之后左边那块只读参考：true = 只读
   onLiveReadonly: (cb) => {
     const h = (_e, v) => cb(v);
