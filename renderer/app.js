@@ -301,10 +301,10 @@ function bindReqBox() {
   if (send) send.onclick = () => generalizeFlow();
 }
 
-function keepFlow() {
+async function keepFlow() {
   const w = flow(); if (!w) return;
   const btn = $('#splitKeep');
-  if (!editMode) {                       // 已经保留过：这颗按钮变成「继续编辑」
+  if (btn && btn.textContent === '继续编辑') {   // 已经保留过：这颗按钮变成「继续编辑」，再点回到编辑态
     editMode = true;
     canvas.classList.add('editing');
     layoutChain(w); render();
@@ -323,6 +323,14 @@ function keepFlow() {
   if (w.pendingLive) delete w.pendingLive;      // 保留 = 转正，进「历史工作流」列表
   const stem = String(w.name || '工作流').replace(/\s*·\s*v\d+$/, '');
   const round = Math.max(1, Number(w.round) || 1);
+  try {
+    if (!VER.list[w.id]) {                        // 没读过版本就先取一次，免得新版本号跟已有的撞
+      const r = await window.tcflow.versionList(w.id);
+      VER.list[w.id] = (r && r.list) || [];
+      VER.sig[w.id] = VER.list[w.id].length ? verContent(VER.list[w.id][VER.list[w.id].length - 1].snapshot) : '';
+    }
+    commitVersion(w);                             // 只有点「保留工作流」才产生版本
+  } catch (e) { }
   w.name = `${stem} · v${round}`;               // 名字带版本号，不再写「已确定」
   w.round = round + 1;
   layoutChain(w); render(); renderWorkflowList();
@@ -734,7 +742,7 @@ function saveStore(bump = true) {
   if (w && touch) w.updated_at = Date.now();
   if (w && editMode) editHistoryNote();
   saveLocal();
-  if (w && touch) { scheduleVersion(w); queueLinkWrite(w); }
+  if (w && touch) { queueLinkWrite(w); }        // 只同步共享状态；版本要人点「保留/保存工作流」才记
 }
 // 只落本地存储（不动版本、不推状态文件）：打字过程中的节流落盘用它
 function saveLocal() {
@@ -1223,10 +1231,10 @@ function restoreVersion(id, v) {
   w.edges = (snap.edges || []).map(x => [x[0], x[1]]);
   if (snap.agent) w.agent = snap.agent;
   store.current = id; selId = null; panelCardId = null;
-  saveStore();                        // 恢复也是一条新版本，回得去
+  saveLocal();                        // 只落本地：版本要人点「保留工作流」才记
   renderWorkflowList(); render();
   try { fitView(true); } catch (e2) { }
-  splitStat(`已恢复到 v${v}（记为新版本）`);
+  splitStat(`已载入 v${v} 的内容（点「保留工作流」才记成新版本）`);
 }
 function renderWorkflowList() {
   const slot = $('#liveSlot'), box = $('#wfList');
@@ -1275,9 +1283,16 @@ function renderWorkflowList() {
           const hm = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
           return `<div class="vrow" data-v="${e.v}"><b>v${e.v}</b><span class="vt">${hm}</span>
             <span class="vw">${esc(String(e.what || '').slice(0, 24))}</span>
-            <span class="vr" data-v="${e.v}" title="把内容恢复到这一版（记为新版本）">恢复</span></div>`;
+            <span class="ve" data-v="${e.v}" title="以这一版为底打开编辑画布">编辑</span>
+            <span class="vr" data-v="${e.v}" title="只把内容换回这一版（不记版本）">恢复</span></div>`;
         }).join('');
         wrap.querySelectorAll('.vr').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); restoreVersion(w.id, Number(b.dataset.v)); });
+        wrap.querySelectorAll('.ve').forEach(b => b.onclick = (ev) => {
+          ev.stopPropagation();
+          const vid = Number(b.dataset.v);
+          restoreVersion(w.id, vid);          // 先把内容换成这一版（不记版本）
+          editHistoryFlow(w.id);              // 再进分屏：上面就是这一版的只读参考
+        });
       }
       box.appendChild(wrap);
     }

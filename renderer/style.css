@@ -94,7 +94,8 @@ button.ghost{background:transparent}
 .vers .vrow b{color:var(--ink-2);font-weight:600}
 .vers .vrow .vt{color:var(--muted)}
 .vers .vrow .vw{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
-.vers .vrow .vr{font-size:11px;padding:1px 7px;border:1px solid var(--soft-line);border-radius:6px;background:#fff;cursor:pointer;color:var(--ink-2)}
+.vers .vrow .ve,.vers .vrow .vr{font-size:11px;padding:1px 7px;border:1px solid var(--soft-line);border-radius:6px;background:#fff;cursor:pointer;color:var(--ink-2)}
+.vers .vrow .ve:hover{border-color:var(--accent-line);color:var(--accent-ink)}
 .vers .vrow .vr:hover{border-color:var(--accent-line);color:var(--accent-ink)}
 .vers .vrow.nil{color:var(--muted);padding-left:2px}
 /* 实时工作流：右栏列表下面那张卡，点开只读直播窗口（不是一条已存链路，所以用虚线边） */
