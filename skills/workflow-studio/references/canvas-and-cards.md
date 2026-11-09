@@ -22,6 +22,19 @@
 - `zoomReset`（⌂）仍然是「复位并看全」的兜底：`zoom = 1 → layoutChain → fit`。
 - **验据**：给实时页留一个只有 `location.hash === '#selftest'` 才挂的钩子（暴露 `renderDoc / fit / clampScroll / scroll`），灌三张假卡再追加两张，断言同一张卡的屏幕 rect 前后位移 0px；再合成 2400px 拖拽后断言可见卡数量不为 0。钩子按 hash 开关，正常使用无副作用。
 
+### 连线曲率（拖动只改端点，不改弯法）
+
+原实现每次重画都按两端中点现算控制点：`c1=(mx,y1)`、`c2=(mx,y2)`、`mx=(x1+x2)/2`，等价于 `dx=(x2-x1)/2`。拖动时每帧都调 `drawEdges()`，于是曲率跟着指针连续变化——用户看到的是「线在重新计算曲度」，随后会明确要求拖完不要再算。
+
+- **缓存控制点偏移**：`EDGE_DX` 以 `"a>b"` 为键存 `dx`；绘制时 `c1 = x1 + dx`、`c2 = x2 - dx`。端点照旧按卡片/插槽实时取，只有弯法被冻结。
+- **只在结构变化时重算**：`layoutChain` 收尾 `drawEdges({recalc: true})`（排完版不重算会留旧弯法、看着歪）、新建连线（键不存在自动算）、导入/换工作流。默认路径（拖动、缩放、局部重绘、保存后重画）一律复用。
+- **顺手清理**：每轮把不在当前 `w.edges` 里的键删掉，否则删掉的连线会留下陈旧 dx，同名边重连时弯法是老的。
+- **两个画布都要改**：主画布 `renderer/app.js` 与共享脚本 `renderer/cardsys.js` 各有一份同名 `drawEdges`，只改一份等于没改。改前先数重复（见 SKILL.md 的重复定义陷阱）。
+- **验据（不碰用户数据）**：
+  - 实时页：`tools/test-edge-shape.js` + `tools/test-stub-preload.js` 起一个带桩 `window.tcflow` 的隔离窗口，加载 `live.html#selftest`，`__lc.renderDoc(假 doc)` 后用 `sendInputEvent` 拖 180/90px，解析 `path[data-k="a>b"]` 的 `d`（`M x1,y1 C c1x,y1 c2x,y2 x2,y2`），断言 `c1x-x1`、`x2-c2x` 不变而 `x2` 变了；再 `renderDoc` 一次验证排版会重算。
+  - 主画布：在页面里只改 `el.style.left`（不写文档、不调 `saveStore`），调全局 `drawEdges()`，比对控制点偏移不变，随后把 `style.left` 复原再画一次——全程不会落盘。
+  - 自测时容易误判：拖动的目标是 `b`，`a>b` 这条边的 `x1`（来自 `a`）本来就不该动，要看 `x2` 或 `b>c` 那条。
+
 ## 卡片模块与连线
 
 - 输入卡模块是素材，加工卡自身模块是做法/工具，输出卡模块是成果；模块名用具体短词，不用整段正文切片代替。
@@ -86,3 +99,12 @@
 - 坐标必须落在**可见**元素上：卡片在视口外时 rect 为负，事件落到别处——文档级 dblclick 计数会加，卡片自己的处理器却不触发，看着像「双击没绑」。先把视野复位（缩放复位或滚进视口）再点；用文档级计数器区分「没点到」与「处理器没绑」，别急着改产品代码。
 
 截图必须亲眼检查关键文字、卡片和浮层的交集；数据正确不代表可见。解析或布局改变后重取对应证据，不沿用旧截图。
+
+## 「确定工作流」：复制一份可编辑的，原图退成只读参考
+
+- 入口在实时画布顶栏（「解析链路」右边）。点击 → `live.js` 把 doc 深拷贝后 `tcflow.liveConfirm()` → 主进程转发 `live:confirm-to-app` 给主窗口。
+- 主窗口 `adoptLiveFlow(doc)`：新建一条工作流（名字加 ` · 已确定`，`nodes` 全部标 `manual:true` 保留解析时的位置，`fromLive` 记住来源岗位/会话），入 store、落 localStorage、选中它。
+- 分屏：`.canvaswrap` 加 `split` 类——左边 `#liveView` 50% 只读参考，右边 `#wrap` 从 50% 起是可编辑的那份；样式见 style.css 的 `.canvaswrap.live.split`。
+- 只读靠三层：`#canvas.ro .node{pointer-events:none}`（禁拖动/双击）、`openCard` 直接 return、⌘Z/⌘S/Delete 在 `readOnly` 时短路，`persist()` 也不写。
+- **fitView 必须在分屏之后、下一帧再跑**：分屏前 `#wrap` 还是 `display:none`、宽度为 0，先算会把缩放压到下限、右边看着是空的。分屏面板窄，`fitView(true, 0.2)` 允许比 0.3 更小，才能一眼看全。
+- 退出分屏：点右栏任意别的（或同一条已确定）工作流走 `exitLive()` → 去掉 `split` 并把 webview 的只读解除；重新进实时视图会恢复可编辑的解析视图。
