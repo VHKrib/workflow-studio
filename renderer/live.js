@@ -731,7 +731,7 @@ const implOf = n => String((n && n.impl) || '').trim();
 const nodeSig = n => JSON.stringify([n.kind, n.title, n.body, n.impl, modsOf(n).map(m => m.type + ':' + m.name), n.checks || [], n.x, n.y]);
 function findDock() { return null; }                     // 实时窗口不接插槽（连线是解析出来的，不靠拖）
 function saveStore() { persist(); }              // 拖动收尾：存位置
-function openCard(n) { if (readOnly) { setStat('下面是只读参考，改动请到上面那张画布'); return; } openEditor(n.id); }   // 双击 / ⚙ 都进同一个面板
+function openCard(n) { if (readOnly) { setStat('上面是只读参考，改动请到下面那张画布'); return; } openEditor(n.id); }   // 双击 / ⚙ 都进同一个面板
 function chatAsk() { const i = document.getElementById('chatIn'); if (i) i.focus(); }
 
 // 只读窗口里的「连线」按钮：不建新关系，只提示一句
@@ -1009,9 +1009,9 @@ function setReadOnly(v) {
   const btn = document.getElementById('lconfirm');
   if (btn) {
     btn.disabled = readOnly;
-    btn.textContent = readOnly ? '已确定 · 下方只读' : '确定工作流';
+    btn.textContent = readOnly ? '已确定 · 上方只读' : '确定工作流';
   }
-  if (readOnly) { closeEditor(); setStat('下面是只读参考，上面那张画布可以改'); }
+  if (readOnly) { closeEditor(); setStat('上面是只读参考，下面那张画布可以改'); }
 }
 
 function confirmFlow() {
@@ -1021,7 +1021,7 @@ function confirmFlow() {
   if (btn) { btn.disabled = true; btn.textContent = '确定中…'; }
   const copy = JSON.parse(JSON.stringify(doc));
   window.tcflow.liveConfirm({ doc: copy, name: doc.name }).then(r => {
-    if (r && r.ok) { setStat('已复制成一条可编辑的工作流：上面改，下面只读'); }
+    if (r && r.ok) { setStat('已复制成一条可编辑的工作流：下面改，上面只读'); }
     else {
       if (btn) { btn.disabled = false; btn.textContent = '确定工作流'; }
       setStat('没确定成：' + ((r && r.error) || '未知原因'));

@@ -104,7 +104,7 @@
 
 - 入口在实时画布顶栏（「解析链路」右边）。点击 → `live.js` 把 doc 深拷贝后 `tcflow.liveConfirm()` → 主进程转发 `live:confirm-to-app` 给主窗口。
 - 主窗口 `adoptLiveFlow(doc)`：新建一条工作流（名字加 ` · 已确定`，`nodes` 全部标 `manual:true` 保留解析时的位置，`fromLive` 记住来源岗位/会话），入 store、落 localStorage、选中它。
-- 分屏是**上下**、不是左右（用户明确纠正过「横向分开」）：`.canvaswrap` 加 `split` 类后，上半 `#wrap` 可编辑、下半 `#liveView` 只读参考；`#wrap{inset:0 0 50% 0}`、`.liveview{top:50%;bottom:0}`，zoombar 抬到 `bottom:calc(50% + 14px)`，否则会浮在参考区上。
+- 分屏是**上下**、不是左右（用户明确纠正过「横向分开」）：`.canvaswrap` 加 `split` 类后，上半 `#liveView` 只读参考、下半 `#wrap` 可编辑；`.liveview{top:0;bottom:50%}`、`#wrap{inset:50% 0 0 0}`，zoombar 留在下半的右下角（`bottom:14px`）。
 - 只读靠三层：`#canvas.ro .node{pointer-events:none}`（禁拖动/双击）、`openCard` 直接 return、⌘Z/⌘S/Delete 在 `readOnly` 时短路，`persist()` 也不写。
 - **fitView 必须在分屏之后、下一帧再跑**：分屏前 `#wrap` 还是 `display:none`、尺寸为 0，先算会把缩放压到下限、上面看着是空的。半个画布更矮，`fitView(true, 0.2)` 允许比 0.3 更小，才能一眼看全。
 - 退出分屏：点右栏任意别的（或同一条已确定）工作流走 `exitLive()` → 去掉 `split` 并把 webview 的只读解除；重新进实时视图会恢复可编辑的解析视图。
