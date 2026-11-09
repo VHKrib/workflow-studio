@@ -77,8 +77,8 @@ button.ghost{background:transparent}
 .wf.on::before{content:'';position:absolute;left:0;top:8px;bottom:8px;width:3px;border-radius:2px;background:var(--accent)}
 .wf .wsel{display:inline-block;margin-left:6px;font-size:9.5px;font-weight:700;letter-spacing:.04em;
   padding:0 5px;border-radius:999px;background:var(--accent);color:#fff;vertical-align:1px}
-.wf .ws{font-size:11px;color:var(--ink-3);margin-top:2px}
-.wf .ver{position:absolute;right:66px;top:5px;font-size:11px;line-height:1;color:var(--ink-3);padding:2px 6px;border:1px solid var(--soft-line);border-radius:6px;background:#fff;cursor:pointer}
+.wf .ws{font-size:11px;color:var(--ink-3);margin-top:2px;padding-right:62px}   /* 给右下角的版本胶囊留位置，别压字 */
+.wf .ver{position:absolute;right:8px;bottom:5px;font-size:11px;line-height:1;color:var(--ink-3);padding:2px 6px;border:1px solid var(--soft-line);border-radius:6px;background:#fff;cursor:pointer}
 .wf .ver:hover{color:var(--accent-ink);border-color:var(--accent-line);background:var(--accent-soft)}
 .wf .ed{position:absolute;right:44px;top:6px;font-size:12px;line-height:1;color:#b3aca1;opacity:.7;padding:2px 3px;border-radius:5px}
 .wf .ed:hover{opacity:1;color:var(--accent-ink);background:var(--surface)}
