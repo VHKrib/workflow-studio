@@ -19,7 +19,6 @@
     </div>
     <span class="sp"></span>
     <button id="btnRead" class="readbtn">⇣ 读取 agent 链路</button>
-    <button id="btnEditFlow" class="ghost" title="上面只读参考当前这一版，下面复制一份来改；点「保留工作流」就升级这一条">编辑工作流</button>
     <div class="menu-wrap">
       <button id="btnAddCard" class="ghost">+ 加卡片</button>
       <div class="menu" id="addMenu">
@@ -76,12 +75,22 @@
         <webview id="liveWV"></webview>
       </div>
       <!-- 分屏后（下面那半区）：保留这条工作流 / 让 AI 按三类卡改成通用做法 -->
-      <div id="splitBar" class="splitbar">
+      <!-- 画布常驻操作：编辑 / 保留 / AI 补全 -->
+      <div id="actBar" class="splitbar actbar">
+        <button id="btnEditFlow" class="sbtn">编辑工作流</button>
+        <button id="splitKeep" class="sbtn">保留工作流</button>
+        <button id="splitGen" class="sbtn gen" title="按你现在的结构补全内容与工具：不增卡、不加产出；加工卡可以补工具">AI 补全</button>
         <button id="splitUndo" class="sbtn ico" title="撤销（⌘Z）" disabled>↶</button>
         <button id="splitRedo" class="sbtn ico" title="重做（⇧⌘Z）" disabled>↷</button>
-        <button id="splitKeep" class="sbtn">保留工作流</button>
-        <button id="splitGen" class="sbtn gen" title="按你现在的结构补全内容与工具：不增卡、不加产出，只把文字写成通用做法、加工卡可以补工具">AI 补全</button>
         <span id="splitStat" class="sstat"></span>
+      </div>
+      <!-- 编辑态：整条工作流的要求，写给 AI 看 -->
+      <div id="reqBox" class="reqbox">
+        <textarea id="reqText" rows="2" placeholder="整条工作流的要求 / 提示词：这次想怎么改、要什么风格、哪些不能动…"></textarea>
+        <div class="reqrow">
+          <span class="reqhint">AI 补全时会带上这段要求（只影响文字与工具，不改结构）</span>
+          <button id="reqSend" class="sbtn gen">按这段要求补全</button>
+        </div>
       </div>
       <div class="dock-fab" id="dockFab" title="展开：和平台主管聊">✍ 和 agent 聊</div>
       <div class="zoombar">

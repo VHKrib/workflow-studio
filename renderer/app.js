@@ -272,6 +272,7 @@ async function enterSplitRef(snapshot) {
   canvas.classList.add('editing');
   const kb = $('#splitKeep'); if (kb) kb.textContent = '保留工作流';
   const eb = $('#btnEditFlow'); if (eb) eb.style.display = 'none';
+  loadReqBox();
   render();
   const w = flow();
   if (w) { layoutChain(w); render(); }
@@ -283,6 +284,22 @@ async function enterSplitRef(snapshot) {
 
 // ---------- 分屏下半区：保留 / AI 通用化 ----------
 function splitStat(msg) { const el = $('#splitStat'); if (el) el.textContent = msg || ''; }
+
+// 整条工作流的要求（只影响 AI 补全的措辞，不改结构）
+function loadReqBox() {
+  const w = flow();
+  const ta = $('#reqText');
+  if (ta) ta.value = (w && w.req) || '';
+}
+function bindReqBox() {
+  const ta = $('#reqText');
+  if (ta) ta.addEventListener('input', () => {
+    const w = flow(); if (!w) return;
+    w.req = ta.value; saveLocal();
+  });
+  const send = $('#reqSend');
+  if (send) send.onclick = () => generalizeFlow();
+}
 
 function keepFlow() {
   const w = flow(); if (!w) return;
@@ -415,6 +432,7 @@ async function generalizeFlow() {
       '6) 名称：给一个通用名字，不要带版本号。',
       '7) 每张卡的描述由你**重新写**：不要参考、也不要复述原来的描述（原来的描述不会给你）；只依据上面的类型、标题、工具/元素、我的要求，以及它在链路里的位置，写清「这一步做什么、做到什么算合格」。',
       '',
+      (w.req && String(w.req).trim() ? '\n我的总体要求（优先满足）：\n' + String(w.req).trim() + '\n' : ''),
       '当前链路（按顺序）：',
       brief,
       '',
@@ -454,6 +472,7 @@ function exitLive() {
   if (name) name.readOnly = false;
   const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = '';
   const eb1 = $('#btnEditFlow'); if (eb1) eb1.style.display = '';
+  loadReqBox();
   renderWorkflowList();
   if (name) { const w = flow(); name.value = (w && w.name) || '未命名工作流'; }
 }
@@ -476,6 +495,7 @@ function bindUI() {
   };
   const sk = $('#splitKeep'), sg = $('#splitGen');
   if (sk) sk.onclick = keepFlow;
+  bindReqBox();
   const su = $('#splitUndo'), sr = $('#splitRedo');
   if (su) su.onclick = editUndo;
   if (sr) sr.onclick = editRedo;
@@ -1187,6 +1207,27 @@ function deleteWorkflow(id, ev) {
   try { window.tcflow.linkDrop(id); delete LINK.paths[id]; } catch (e) { }   // 共享状态文件也不留（副本删掉后不残留文件）
   saveStore(false); renderWorkflowList(); render();
 }
+const openVers = new Set();          // 展开了哪些项目的版本
+const verCache = new Map();          // id → 版本列表
+async function loadVersions(id) {
+  try { const r = await window.tcflow.versionList(id); verCache.set(id, (r && r.list) || []); }
+  catch (e) { verCache.set(id, []); }
+  renderWorkflowList();
+}
+function restoreVersion(id, v) {
+  const w = store.workflows.find(x => x.id === id);
+  const e = (verCache.get(id) || []).find(x => x.v === v);
+  if (!w || !e || !e.snapshot) return;
+  const snap = e.snapshot;
+  w.nodes = (snap.cards || []).map(n => Object.assign({}, n));
+  w.edges = (snap.edges || []).map(x => [x[0], x[1]]);
+  if (snap.agent) w.agent = snap.agent;
+  store.current = id; selId = null; panelCardId = null;
+  saveStore();                        // 恢复也是一条新版本，回得去
+  renderWorkflowList(); render();
+  try { fitView(true); } catch (e2) { }
+  splitStat(`已恢复到 v${v}（记为新版本）`);
+}
 function renderWorkflowList() {
   const slot = $('#liveSlot'), box = $('#wfList');
   if (slot) slot.innerHTML = '';
@@ -1206,15 +1247,40 @@ function renderWorkflowList() {
     el.className = 'wf' + (on ? ' on' : '');
     el.dataset.id = w.id;
     el.onclick = () => switchWorkflow(w.id);
+    const open = openVers.has(w.id);
     el.innerHTML = `<div class="wn">${esc(w.name)}${on ? '<span class="wsel">选中</span>' : ''}</div>
       <div class="ws">v${w.round ? w.round - 1 : (w.version || 1)} · ${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
+      <div class="ver" title="展开/收起版本">${open ? '▾' : '▸'}</div>
       <div class="ed" title="编辑工作流：上面只读参考这一版，下面改">✎</div>
       <div class="dup" title="复制这条链路">⧉</div>
       <div class="x" title="删除">✕</div>`;
+    el.querySelector('.ver').onclick = (ev) => {
+      ev.stopPropagation();
+      if (openVers.has(w.id)) openVers.delete(w.id); else { openVers.add(w.id); if (!verCache.has(w.id)) { loadVersions(w.id); return; } }
+      renderWorkflowList();
+    };
     el.querySelector('.ed').onclick = (ev) => { ev.stopPropagation(); editHistoryFlow(w.id); };
     el.querySelector('.dup').onclick = (ev) => { ev.stopPropagation(); duplicateWorkflow(w.id); };
     el.querySelector('.x').onclick = (ev) => deleteWorkflow(w.id, ev);
     box.appendChild(el);
+    if (open) {
+      const list = verCache.get(w.id);
+      const wrap = document.createElement('div');
+      wrap.className = 'vers';
+      if (!list) wrap.innerHTML = '<div class="vrow nil">读版本中…</div>';
+      else if (!list.length) wrap.innerHTML = '<div class="vrow nil">还没有存过版本</div>';
+      else {
+        wrap.innerHTML = list.slice().sort((a, b) => b.v - a.v).map(e => {
+          const t = new Date(e.at || Date.now());
+          const hm = String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+          return `<div class="vrow" data-v="${e.v}"><b>v${e.v}</b><span class="vt">${hm}</span>
+            <span class="vw">${esc(String(e.what || '').slice(0, 24))}</span>
+            <span class="vr" data-v="${e.v}" title="把内容恢复到这一版（记为新版本）">恢复</span></div>`;
+        }).join('');
+        wrap.querySelectorAll('.vr').forEach(b => b.onclick = (ev) => { ev.stopPropagation(); restoreVersion(w.id, Number(b.dataset.v)); });
+      }
+      box.appendChild(wrap);
+    }
   }
 }
 function agentName(id) { const a = agents.find(x => x.id === id); return a ? a.name : id; }

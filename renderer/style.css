@@ -78,12 +78,25 @@ button.ghost{background:transparent}
 .wf .wsel{display:inline-block;margin-left:6px;font-size:9.5px;font-weight:700;letter-spacing:.04em;
   padding:0 5px;border-radius:999px;background:var(--accent);color:#fff;vertical-align:1px}
 .wf .ws{font-size:11px;color:var(--ink-3);margin-top:2px}
+.wf .ver{position:absolute;right:64px;top:6px;font-size:11px;line-height:1;color:#b3aca1;opacity:.75;padding:2px 3px;border-radius:5px;cursor:pointer}
+.wf .ver:hover{opacity:1;color:var(--accent-ink);background:var(--surface)}
+.wf .ed{position:absolute;right:44px;top:6px;font-size:12px;line-height:1;color:#b3aca1;opacity:.7;padding:2px 3px;border-radius:5px}
+.wf .ed:hover{opacity:1;color:var(--accent-ink);background:var(--surface)}
 .wf .dup{position:absolute;right:25px;top:6px;font-size:12px;line-height:1;color:#b3aca1;opacity:.7;
   padding:2px 3px;border-radius:5px}
 .wf .dup:hover{opacity:1;color:var(--accent-ink);background:var(--surface)}
 .wf .x{position:absolute;right:7px;top:7px;font-size:11px;color:#c0b8ad;opacity:0}
 .wf:hover .x{opacity:1}
 .wf .x:hover{color:var(--danger)}
+/* 项目下的版本列表 */
+.vers{margin:-2px 0 8px 10px;padding:4px 0 2px 10px;border-left:2px solid var(--soft-line)}
+.vers .vrow{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--ink-3);padding:3px 6px;border-radius:6px;cursor:default}
+.vers .vrow b{color:var(--ink-2);font-weight:600}
+.vers .vrow .vt{color:var(--muted)}
+.vers .vrow .vw{flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)}
+.vers .vrow .vr{font-size:11px;padding:1px 7px;border:1px solid var(--soft-line);border-radius:6px;background:#fff;cursor:pointer;color:var(--ink-2)}
+.vers .vrow .vr:hover{border-color:var(--accent-line);color:var(--accent-ink)}
+.vers .vrow.nil{color:var(--muted);padding-left:2px}
 /* 实时工作流：右栏列表下面那张卡，点开只读直播窗口（不是一条已存链路，所以用虚线边） */
 .livecard{margin-top:10px;padding:9px 10px;border:1px dashed var(--line-strong);border-radius:var(--radius-sm);
   cursor:pointer;background:var(--card);transition:border-color .15s,background .15s}
@@ -618,10 +631,22 @@ button:disabled{opacity:.45;cursor:default;pointer-events:none}
 .canvaswrap.live.split > #wrap{display:block !important;position:absolute;inset:50% 0 0 0}
 .canvaswrap.live.split > .zoombar{left:auto;right:16px;bottom:14px}
 /* 分屏时下半区顶部的操作条 */
-.splitbar{position:absolute;right:16px;top:calc(50% + 12px);z-index:7;display:none;align-items:center;gap:8px;
+.splitbar{position:absolute;right:16px;top:12px;z-index:7;display:none;align-items:center;gap:8px;
   padding:6px 8px;border:1px solid var(--line);border-radius:10px;background:var(--card);
   box-shadow:0 8px 20px rgba(20,16,12,.10)}
 .canvaswrap.live.split .splitbar{display:flex}
+.actbar{display:flex}                      /* 编辑/保留/AI 补全常驻在画布右上 */
+.canvaswrap.live .actbar{display:none}     /* 实时视图里用实时画布自己的按钮 */
+.canvaswrap.live.split .actbar{display:flex;top:calc(50% + 12px)}   /* 分屏时挪到下半区顶部 */
+/* 需求对话框：只在编辑态显示，贴在下半区左下 */
+.reqbox{position:absolute;left:16px;bottom:12px;z-index:7;width:380px;display:none;flex-direction:column;gap:6px;
+  padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--card);box-shadow:0 10px 24px rgba(20,16,12,.10)}
+.canvaswrap.live.split .reqbox{display:flex}
+.reqbox textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:46px;font:inherit;font-size:12.5px;line-height:1.5;
+  padding:6px 8px;border:1px solid var(--soft-line);border-radius:8px;background:#fff;color:var(--ink-2)}
+.reqbox textarea:focus{outline:none;border-color:var(--accent-line);background:#fffdf9}
+.reqbox .reqrow{display:flex;align-items:center;gap:8px}
+.reqbox .reqhint{flex:1 1 auto;font-size:11px;color:var(--muted)}
 .splitbar .sbtn{font-size:12.5px;padding:5px 11px;border:1px solid var(--line);border-radius:8px;background:#fff;cursor:pointer;color:var(--ink-2)}
 .splitbar .sbtn:hover:not(:disabled){border-color:var(--accent-line);color:var(--accent-ink)}
 .splitbar .sbtn:disabled{opacity:.45;cursor:default}
