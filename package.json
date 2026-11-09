@@ -17,7 +17,10 @@
     "test:platform": "node tools/test-platform.js",
     "dist:mac": "npx --yes electron-builder --mac dmg --publish never",
     "dist:win": "npx --yes electron-builder --win nsis --publish never",
-    "dist:linux": "npx --yes electron-builder --linux AppImage --publish never"
+    "dist:linux": "npx --yes electron-builder --linux AppImage --publish never",
+    "mcp": "node mcp/workflow-studio.js",
+    "wf": "node tools/workflow-cli.js",
+    "test:mcp": "node tools/test-mcp.js"
   },
   "devDependencies": {
     "electron": "^32.0.0"

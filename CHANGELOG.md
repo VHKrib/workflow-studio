@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.6.0
+
+Workflows stop being locked inside the app: any MCP-speaking agent can read them.
+
+- **MCP server** (`mcp/workflow-studio.js`, stdio, no dependencies) exposing `list_workflows`, `get_workflow` and
+  `get_versions` — works with Claude Code, Codex, OpenClaw and any other MCP client.
+- **CLI** (`tools/workflow-cli.js`): `list` / `show <name>` / `versions <name> [--v N] [--json]` for harnesses
+  that only have a shell.
+- Both read the same files the app writes (`links/<id>.json`, `versions/<id>.json`), need no running app, and
+  stay read-only: the canvas remains the only writer, so two agents can never race on one workflow.
+- `WF_HOME` points the adapters at another data directory (isolated instance, copy, or test fixture).
+- Regression test `npm run test:mcp` performs a real stdio handshake against a throwaway data directory.
+- Setup snippets: [docs/integrations.md](docs/integrations.md).
+
 ## v0.5.0
 
 This release puts the canvas on top of *someone else's conversation*: a separate read-only window picks one

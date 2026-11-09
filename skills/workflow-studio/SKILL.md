@@ -116,6 +116,10 @@ git ls-remote --heads origin
 
 核密钥、本机路径、其他业务内容和 120000 符号链接目标；不只扫普通文件。公开图片/GIF也要亲眼检查。未获授权不提交/推送；改写已公开历史和强推必须另获用户明确批准，审批失败不换写法绕过。
 
+- **`scan-public` 读的是 git 索引（`git ls-files` 那批 blob），不是工作树。** 改完文件不 `git add` 就重跑，它仍然报旧内容——会出现「本地文件已经清干净、扫描还命中」的假象，然后你以为改错了继续改。判 0 命中前先 `git add -A`，再扫；扫描器报的行号与当前文件对不上时，先怀疑索引没更新。
+- **别把扫描要抓的那串字面量写进解释它的文档里。** 想写「这条规则会命中带用户名的家目录写法」，就必须绕开那个字面前缀（写成 `/home/…`、`C:\…` 或纯文字描述）；否则文档自己成了命中项，越解释越扫不过。
+- **公开文档的语言口径：仓库文件统一英文，只有介绍做成两版且不许混排。** `README.md` 纯英文 + `README.zh-CN.md` 纯中文，互相链接；链接文案也算（英文版里写 `Chinese version`，不要留「中文说明」这种中文字样）；`CHANGELOG.md`、GitHub About 描述与 topics 一律英文单语。改完逐行断言英文版里没有 CJK、中文版里没有整段英文正文，而不是凭感觉。历史改写（路径与作者身份）与标签核对的完整步骤见 `references/public-repo-hygiene.md`。
+
 - **`scan-public` 只扫当前树；命中出现在尚未推送的提交里时，要把那段历史一起清掉再谈推送。** 顺序是：先在当前工作树里把命中删干净并正常提交（此刻 tip 树已干净），再用 `FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --tree-filter '<替换脚本>' <已公开sha>..HEAD` 只重写未公开尾段——远端不受影响，仍是快进推送，不触发强推审批。改完必须 `git diff <旧 tip> <新 tip>` **0 行**（证明交付内容没变，只是历史里的那串被换掉），再断言 `git grep <命中串> <每个新提交>` 为空、重跑 `scan-public` 为 0 命中，最后删掉 `refs/original` 与临时备份分支，避免它们被 `--all` 推出去。**已公开的历史绝不这样改。**
 
 完成标志：验收版本、合并内容与批准发布范围一致，外部写入已回读；未做的步骤不写完成。
@@ -172,6 +176,7 @@ git ls-remote --heads origin
 - **探针别用 `node -e` 拼内联表达式。** 表达式里有反引号、`${}`、中文和引号时，shell 转义迟早出错，报的是 `SyntaxError: Invalid or unexpected token` / `unexpected EOF`，看起来像产品 bug。把表达式写成文件，用一个固定脚本连 CDP 执行（本仓 `skills/workflow-studio/scripts/cdp-eval.js --port 9335 --page live.html --expr-file x.js`）。
 - **`git commit --amend` 前先 `git log -1 --name-only` 确认 HEAD 就是那条要改的提交。** 连着提交 fix 和 docs 时最容易改错：amend 会把后一条并进前一条的消息里，同一条修复出现两次、另一条变更被吃掉。发现后 `git reset --soft <基线>`、再按文件分两次重提，别在同一 HEAD 上反复 amend。
 - **用脚本做整段替换后先查重复声明再做语法检查。** 同一脚本里对同一标识符二次声明（`let saveTimer` 加了两遍）只会得到一条 SyntaxError，整个文件静默不执行；替换后 `grep -n "let <名>\|function <名>" <文件>` 再 `node --check`，不要只信 `--check` 通过就以为没重影。
+- **渲染层文件会被离线脚本丢进 Node `vm` 里执行，顶层不许直接摸 `navigator`/`document`/`window`。** `scripts/check-fixtures.js` 用 `vm.runInContext` 加载 `renderer/app.js`（沙箱里有假 `window`，没有 `navigator`），任何顶层 `navigator.platform` 都会让整套离线样本直接抛 `ReferenceError`。浏览器能力的探测写成 `typeof navigator !== 'undefined' && …`，或推迟到 `init()` 之后；改完先跑 `node skills/workflow-studio/scripts/check-fixtures.js`（不是只看 `node --check`），它才是这条路径的真回归。
 - 流中整块 innerHTML 重建会丢折叠态和点击；只更新变化节点。
 - 图与测试对应哪个版本写清；未验收的实验解析/布局不能写进手册当可靠方法。
 
@@ -183,3 +188,4 @@ git ls-remote --heads origin
 - `references/versioning-and-preview.md`：编辑成版、回滚感知、复制独立性与零执行预演。
 - `references/cross-platform.md`：三平台外部命令、快捷键文案、启动器与 `platform.js` 单测。
 - `references/hermes-chat-visual.md`：对齐 Hermes 的视觉来源与密度数值。
+- `references/public-repo-hygiene.md`：扫描器读索引、字面量自伤、作者身份与历史改写、标签核对、中英双版 README 的验收。
