@@ -313,7 +313,6 @@ async function keepFlow() {
   canvas.classList.remove('editing');
   if (w.pendingLive) delete w.pendingLive;      // 保留 = 转正，进「历史工作流」列表
   const stem = String(w.name || '工作流').replace(/\s*·\s*v\d+$/, '');
-  const round = Math.max(1, Number(w.round) || 1);
   try {
     if (!VER.list[w.id]) {                        // 没读过版本就先取一次，免得新版本号跟已有的撞
       const r = await window.tcflow.versionList(w.id);
@@ -322,8 +321,7 @@ async function keepFlow() {
     }
     commitVersion(w);                             // 只有点「保留工作流」才产生版本
   } catch (e) { }
-  w.name = `${stem} · v${round}`;               // 名字带版本号，不再写「已确定」
-  w.round = round + 1;
+  w.name = `${stem} · v${w.version}`;            // 名字上的版本号 = 刚存出来的那一版（同一个计数器，不再对不上）
   delete verCache[w.id];                        // 版本缓存作废，展开时能看到刚存的这版
   layoutChain(w); render(); renderWorkflowList();
   try { fitView(true, 0.2); } catch (e) { }
@@ -725,6 +723,13 @@ function loadStore() {
   // 选中的那条要记得住：上次选谁就是谁；链路被删掉了才退回第一条
   if (!store.workflows.some(w => w.id === store.current)) store.current = store.workflows[0] ? store.workflows[0].id : null;
   store.workflows.forEach(w => { w.version = w.version || 1; w.updated_at = w.updated_at || Date.now(); });
+  // 名字尾巴上的版本号以 w.version 为准：老数据里两套计数（round / version）会对不上，开机就地校正一次
+  let fixed = 0;
+  store.workflows.forEach(w => {
+    const m = /^(.*?)\s*·\s*v(\d+)$/.exec(String(w.name || ''));
+    if (m && Number(m[2]) !== Number(w.version || 1)) { w.name = `${m[1]} · v${w.version}`; fixed++; }
+  });
+  if (fixed) saveLocal();
 }
 // 画布改动 → 本地存储 + 共享状态文件（临时画布不写本地存储：关掉就没了）
 // bump=false：只是聊天/状态点这种不影响链路结构的改动，不算新版本、也不写文件（文件里只有链路）
@@ -1195,7 +1200,15 @@ function duplicateWorkflow(id) {
   renderWorkflowList(); render(); centerView();
   return w;
 }
-function switchWorkflow(id) { exitLive(); if (isTemp()) dropTemp(); stopPreview(); store.current = id; selId = null; panelCardId = null; panelOpen = false; saveStore(false); renderWorkflowList(); render(); centerView(); }
+// 名字上的版本号以 w.version 为准：打开时对不上就地校正（不改内容、不记版本）
+function syncNameVersion(w) {
+  if (!w) return;
+  const m = /^(.*?)\s*·\s*v(\d+)$/.exec(String(w.name || ''));
+  if (!m) return;
+  const want = Number(w.version) || 1;
+  if (Number(m[2]) !== want) { w.name = `${m[1]} · v${want}`; saveLocal(); }
+}
+function switchWorkflow(id) { exitLive(); if (isTemp()) dropTemp(); stopPreview(); store.current = id; syncNameVersion(store.workflows.find(x => x.id === id)); selId = null; panelCardId = null; panelOpen = false; saveStore(false); renderWorkflowList(); render(); centerView(); }
 function deleteWorkflow(id, ev) {
   ev.stopPropagation();
   if (store.workflows.length <= 1) return alert('至少保留一个工作流');
@@ -1250,7 +1263,7 @@ function renderWorkflowList() {
     el.onclick = () => switchWorkflow(w.id);
     const open = openVers.has(w.id);
     el.innerHTML = `<div class="wn">${esc(w.name)}${on ? '<span class="wsel">选中</span>' : ''}</div>
-      <div class="ws">v${w.round ? w.round - 1 : (w.version || 1)} · ${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
+      <div class="ws">v${w.version || 1} · ${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
       <div class="ver" title="展开/收起版本">${open ? '▾' : '▸'}</div>
       <div class="ed" title="编辑工作流：上面只读参考这一版，下面改">✎</div>
       <div class="dup" title="复制这条链路">⧉</div>

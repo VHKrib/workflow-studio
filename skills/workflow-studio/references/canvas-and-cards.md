@@ -169,3 +169,10 @@
 - 版本行两个动作：**编辑**＝先载入那一版内容（不记版本）再进分屏，上面就是这一版的只读参考；**恢复**＝只把内容换回那一版，点保留才记成新版本。
 
 - **存完要能马上看见这一版**：`keepFlow` 里 `delete verCache[w.id]`，再 `openVers.add(w.id)` + `loadVersions(w.id)`（延迟 200ms 等主进程写完），否则列表里还是旧的缓存/看不到新版本。
+
+### 版本号必须只有一个来源
+
+- 名字尾巴、列表副标题、版本列表里的 `vN` 全部读 **`w.version`**，它就等于 `commitVersion()` 刚存出来的那一版。**不要再维护第二套计数**（早先用过 `round`，结果名字写着 v6、版本列表已经是 v31）。
+- 保留时先 `commitVersion(w)`（它会更新 `w.version`），再 `w.name = 基名 + ' · v' + w.version`。
+- `loadStore()` 收尾做一次**开机校正**：名字尾巴的 `vN` 与 `w.version` 不一致就地改成 `w.version`（`saveLocal`，不记版本）——老数据里两套计数留下的错位会被自动修好。
+- 切换工作流时也调 `syncNameVersion()`，避免中间态没对齐。
