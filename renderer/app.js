@@ -314,6 +314,47 @@ function bindReqBox() {
   if (send) send.onclick = () => generalizeFlow();
 }
 
+// 「取回本次文件」：执行方最近一次对话里跑出来的文件，按名字/环节对到卡片上（素材给输入卡、其余给成果）
+async function pullRunFiles() {
+  const w = flow();
+  if (!w) return;
+  if (!w.agent) { splitStat('先给这条链路指派执行方'); return; }
+  splitStat('正在读执行方最近一次对话…');
+  let r;
+  try { r = await window.tcflow.pullRun({ profile: w.agent }); } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
+  if (!r || !r.ok) { splitStat((r && r.error) || '取回失败'); return; }
+  const files = r.files || [];
+  if (!files.length) { splitStat('这次对话里没找到文件（跑完再点一次）'); return; }
+
+  const order = chainOrder(w);
+  const textOf = n => [n.title, n.body, implOf(n), modsOf(n).map(m => m.name).join(' ')].join(' ').toLowerCase();
+  const outFallback = order.slice().reverse().find(n => n.kind === 'out') || order[order.length - 1];
+  const perCard = new Map();                       // 一张卡最多挂几个，别让整条链变成一张卡的附件箱
+  let added = 0, missed = 0;
+  for (const f of files.slice(0, 16)) {            // 只取最近 16 个，够看效果
+    const full = String(f.path || '').toLowerCase();
+    const base = String(f.name || '').replace(/\.[^.]+$/, '').toLowerCase();
+    const dir = full.split('/').slice(0, -1).join('/').split('/').pop() || '';
+    const hit = order.find(n => {
+      const t = textOf(n);
+      return (base && t.includes(base)) || (dir && dir.length > 3 && t.includes(dir));
+    }) || outFallback;
+    if (!hit) { missed++; continue; }
+    const used = perCard.get(hit.id) || 0;
+    if (used >= 6) { missed++; continue; }          // 命中卡已满，记一笔没挂上的
+    const mods = modsOf(hit);
+    if (mods.some(m => (m.path && m.path === f.path) || m.name === f.name)) continue;
+    mods.push({ id: uid(), type: hit.kind === 'in' ? 'mat' : 'res', name: f.name, path: f.path });
+    hit.mods = mods;
+    perCard.set(hit.id, used + 1);
+    added++;
+  }
+  saveStore();                                       // 存内容，但不记版本（点「保留工作流」才记）
+  render();
+  if (panelCardId) renderPanel();
+  splitStat(added ? `取回 ${added} 个文件${missed ? `，${missed} 个没对上卡片` : ''}` : '这些文件已经在卡片上了');
+}
+
 async function keepFlow() {
   const w = flow(); if (!w) return;
   const btn = $('#splitKeep');
@@ -484,6 +525,7 @@ function exitLive() {
   if (name) name.readOnly = false;
   const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = '';
   const eb1 = $('#btnEditFlow'); if (eb1) eb1.style.display = '';
+  const pr = $('#btnPullRun'); if (pr) pr.onclick = pullRunFiles;
   loadReqBox();
   renderWorkflowList();
   if (name) { const w = flow(); name.value = (w && w.name) || '未命名工作流'; }

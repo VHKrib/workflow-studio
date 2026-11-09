@@ -733,6 +733,34 @@ ipcMain.handle('live:doc:save', (_e, doc) => {
   return { ok: okSave };
 });
 
+// 「取回本次文件」：从执行方最近的对话里，把这次跑出来的文件捞出来（只读会话库）
+const RUN_FILE_RE = /(?:~|\.{1,2}\/)?[^\s"'`，。；、）)】\\]*?\/[^\s"'`，。；、）)】\\]*?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|txt|json|csv|ya?ml)/g;   // 文件路径：绝对或相对都认，反斜杠/引号一类直接切开
+ipcMain.handle('run:pull', async (_e, { profile, limit } = {}) => {
+  try {
+    const r2 = await livefeed.recentMessages(profile, 3000);
+    if (!r2 || !r2.msgs) return { ok: false, error: (r2 && r2.error) || '读不到会话库' };
+    const seen = new Map();
+    let lastSession = '';
+    for (const msg of r2.msgs) {
+      const text = [msg.text, msg.result, JSON.stringify(msg.tools || [])].filter(Boolean).join('\n');   // livefeed 归一到 text / result / tools
+      for (const p of text.match(RUN_FILE_RE) || []) {
+        const name = p.split('/').pop();
+        const prev = seen.get(p);
+        seen.set(p, { path: p, name, at: msg.at || 0, msgId: msg.id || 0, session: msg.session || '', hits: prev ? prev.hits + 1 : 1 });
+        lastSession = msg.session || lastSession;
+      }
+    }
+    const files = [...seen.values()]
+      .filter(f => !/\.(tmp|lock|log|db|db-wal|db-shm)$/i.test(f.path))                       // 运行垃圾
+      .filter(f => !/(^|\/)(node_modules|\.git|\.hermes|__pycache__)\//.test(f.path))           // 依赖/配置目录
+      .filter(f => !/\/(package-lock\.json|package\.json|config\.yaml|SKILL\.md)$/i.test(f.path))
+      .filter(f => !/^\/(tmp|private\/tmp|var\/folders)\//.test(f.path))                      // 临时目录
+      .sort((a, b) => b.msgId - a.msgId).slice(0, 40);
+    return { ok: true, conv: { profile, session: lastSession, title: '' }, files, scanned: r2.msgs.length };
+  } catch (e) {
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+});
 ipcMain.handle('live:open', () => openLiveWindow());
 ipcMain.handle('live:open-path', (_e, p) => {
   try {

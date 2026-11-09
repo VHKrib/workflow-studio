@@ -41,6 +41,7 @@ contextBridge.exposeInMainWorld('tcflow', {
   liveSnapshot: (payload) => ipcRenderer.invoke('live:snapshot', payload),
   liveAnalyze: (payload) => ipcRenderer.invoke('live:analyze', payload),
   livePeek: (payload) => ipcRenderer.invoke('live:peek', payload),
+  pullRun: (payload) => ipcRenderer.invoke('run:pull', payload),      // 取回最近一次跑出来的文件
   liveDocSave: (doc) => ipcRenderer.invoke('live:doc:save', doc),
   // 「确定工作流」：把实时解析出来的这份复制成一条可编辑的工作流（转发给主窗口去建）
   liveConfirm: (payload) => ipcRenderer.invoke('live:confirm', payload),

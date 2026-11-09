@@ -211,4 +211,21 @@ async function readMessages(profile, session, afterId = 0, opts = {}) {
   return { msgs, file, initial: !afterId, limit: MSG_LIMIT };
 }
 
-module.exports = { ROOT, LIST_LIMIT, MSG_LIMIT, listConversations, readMessages, askCandidates, whoOf, dbOf, roURI, assertSelect, EV_TEXT, EV_CALLS, normRow };
+
+// 最近一段消息（按 id 倒数 N 条再正序返回）：给「取回本次文件」用。
+// 不走会话列表——列表里最新那条往往是随手一问，真正干过活的那条可能不在前几条。
+async function recentMessages(profile, limit = 3000) {
+  if (!safeName(profile)) return { error: '会话标识不合法' };
+  const file = dbOf(profile);
+  try { fs.accessSync(file, fs.constants.R_OK); } catch (e) { return { error: '会话库不可读：' + profile }; }
+  const n = Math.max(50, Math.min(20000, Number(limit) || 3000));
+  const sql = `SELECT json_group_array(json_object('id',id,'role',role,'tool_name',tool_name,'content',substr(coalesce(content,''),1,${EV_TEXT}),'tool_calls',substr(coalesce(tool_calls,''),1,${EV_CALLS}),'ct_len',length(coalesce(content,'')),'at',timestamp,'session',session_id))
+    FROM (SELECT * FROM messages WHERE id > (SELECT coalesce(max(id),0) FROM messages) - ${n} ORDER BY id DESC)`;
+  const r = await query(file, sql);
+  if (r.error) return { error: r.error };
+  const rows = Array.isArray(r.rows) ? r.rows : [];
+  rows.sort((a, b) => (a.id || 0) - (b.id || 0));
+  return { msgs: rows.map(normRow), file };
+}
+
+module.exports = { ROOT, LIST_LIMIT, MSG_LIMIT, listConversations, readMessages, recentMessages, askCandidates, whoOf, dbOf, roURI, assertSelect, EV_TEXT, EV_CALLS, normRow };
