@@ -183,3 +183,10 @@
 - **不要在业务代码里再写死 `/usr/bin/...`、`/bin/sleep` 或 `⌘` 文案**：渲染层的快捷键文案由 `localizeKeys()` 在启动时把 `⌘` 换成 `Ctrl+`（mac 原样），新增提示要用 `KEYMOD` 拼。
 - 改这几处后跑 `npm run test:platform`（不需要 Electron），断言三平台解析结果。
 - Windows 启动器是 `打开工作流开发平台.bat`；Linux 开发态跳过协议登记（`workflow-studio://` 需要打包后的 `.desktop`）。
+
+### 打包（三平台）
+
+- 配置写在 `package.json` 的 `build` 段，命令是 `npm run dist:mac / dist:win / dist:linux`，都走 `npx --yes electron-builder`：**不要把它加进 devDependencies**，否则 `npm i` 会从「只装 electron」变成拉一堆构建依赖，违背「保持 `npm i && npm start` 就能跑」。
+- `dist/` 已在 `.gitignore`；`build.files` 显式列出 `main.js / preload.js / platform.js / chain.js / livefeed.js / actmap.js / linkstore.js / versions.js / renderer/**`，新增根目录模块要记得加进去，否则打包后运行会报模块找不到。
+- macOS 实测：`dist/Workflow Studio-0.5.0-arm64.dmg` 94MB，`hdiutil verify` 校验通过、能挂载出 `.app`（241MB）；未签名（没有 Developer ID，`codesign` 显示 not signed at all），默认 Electron 图标。要签名/公证再配 `CSC_LINK` 等环境变量。
+- Windows 的 NSIS 安装包要在 Windows 机器上打，本机只能验证配置解析与单测。
