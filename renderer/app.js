@@ -147,9 +147,9 @@ function adoptLiveFlow(doc) {
   renderWorkflowList();
   render();
   enterSplit();
-  // 分屏是刚加的，等一帧拿到右半边的真实宽度再对准，否则会按 0 宽算缩放（画布看着是空的）
+  // 分屏是刚加的，等一帧拿到上半边的真实尺寸再对准，否则会按 0 宽算缩放（画布看着是空的）
   requestAnimationFrame(() => requestAnimationFrame(() => { try { fitView(true, 0.2); } catch (e) { } }));
-  const fs = $('#footStat'); if (fs) fs.textContent = '已确定：右边这条可以改，左边是只读参考';
+  const fs = $('#footStat'); if (fs) fs.textContent = '已确定：上面这条可以改，下面是只读参考';
   return w;
 }
 
