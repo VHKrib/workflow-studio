@@ -737,26 +737,56 @@ ipcMain.handle('live:doc:save', (_e, doc) => {
 const RUN_FILE_RE = /(?:~|\.{1,2}\/)?[^\s"'`，。；、）)】\\]*?\/[^\s"'`，。；、）)】\\]*?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|txt|json|csv|ya?ml)/g;   // 文件路径：绝对或相对都认，反斜杠/引号一类直接切开
 ipcMain.handle('run:pull', async (_e, { profile, limit } = {}) => {
   try {
-    const r2 = await livefeed.recentMessages(profile, 3000);
-    if (!r2 || !r2.msgs) return { ok: false, error: (r2 && r2.error) || '读不到会话库' };
-    const seen = new Map();
-    let lastSession = '';
-    for (const msg of r2.msgs) {
-      const text = [msg.text, msg.result, JSON.stringify(msg.tools || [])].filter(Boolean).join('\n');   // livefeed 归一到 text / result / tools
-      for (const p of text.match(RUN_FILE_RE) || []) {
-        const name = p.split('/').pop();
-        const prev = seen.get(p);
-        seen.set(p, { path: p, name, at: msg.at || 0, msgId: msg.id || 0, session: msg.session || '', hits: prev ? prev.hits + 1 : 1 });
-        lastSession = msg.session || lastSession;
+    // 你说的是「跟某个 agent 的对话」，但那段对话可能落在 default 里、也可能是它自己的 profile，
+    // 还可能是派活时开的那条：所以按「最近动过的库」一起扫，取最新的文件。
+    const home = os.homedir();
+    const profDirs = path.join(home, '.hermes', 'profiles');
+    const cands = [];
+    try {
+      const dbs = [{ id: 'default', file: path.join(home, '.hermes', 'state.db') }];
+      for (const id of fs.readdirSync(profDirs)) {
+        if (!/^[\w.-]{1,64}$/.test(id)) continue;
+        dbs.push({ id, file: path.join(profDirs, id, 'state.db') });
       }
+      const now = Date.now();
+      for (const db of dbs) {
+        let st; try { st = fs.statSync(db.file); } catch (e) { continue; }
+        const fresh = now - st.mtimeMs < 6 * 3600 * 1000;                     // 六小时内动过的库才扫
+        if (!fresh && db.id !== profile && db.id !== 'default') continue;
+        cands.push({ id: db.id, mtime: st.mtimeMs });
+      }
+    } catch (e) { /* 读不到目录时退回只扫执行方 */ }
+    if (!cands.length) cands.push({ id: profile, mtime: Date.now() });
+    cands.sort((a, b) => (b.id === profile) - (a.id === profile) || b.mtime - a.mtime);
+
+    const seen = new Map();
+    let scanned = 0;
+    const sources = [];
+    for (const c of cands.slice(0, 6)) {
+      const r2 = await livefeed.recentMessages(c.id, 1200);
+      if (!r2 || !r2.msgs) continue;
+      scanned += r2.msgs.length;
+      let hitHere = 0;
+      for (const msg of r2.msgs) {
+        const text = [msg.text, msg.result, JSON.stringify(msg.tools || [])].filter(Boolean).join('\n');
+        for (const p of text.match(RUN_FILE_RE) || []) {
+          const name = p.split('/').pop();
+          const at = Number(msg.at) || 0;
+          const prev = seen.get(p);
+          if (prev) { prev.at = Math.max(prev.at, at); prev.hits++; continue; }
+          seen.set(p, { path: p, name, at, msgId: msg.id || 0, profile: c.id, hits: 1 });
+          hitHere++;
+        }
+      }
+      if (hitHere) sources.push(c.id);
     }
     const files = [...seen.values()]
-      .filter(f => !/\.(tmp|lock|log|db|db-wal|db-shm)$/i.test(f.path))                       // 运行垃圾
-      .filter(f => !/(^|\/)(node_modules|\.git|\.hermes|__pycache__)\//.test(f.path))           // 依赖/配置目录
+      .filter(f => !/\.(tmp|lock|log|db|db-wal|db-shm)$/i.test(f.path))
+      .filter(f => !/(^|\/)(node_modules|\.git|\.hermes|__pycache__)\//.test(f.path))
       .filter(f => !/\/(package-lock\.json|package\.json|config\.yaml|SKILL\.md)$/i.test(f.path))
-      .filter(f => !/^\/(tmp|private\/tmp|var\/folders)\//.test(f.path))                      // 临时目录
-      .sort((a, b) => b.msgId - a.msgId).slice(0, 40);
-    return { ok: true, conv: { profile, session: lastSession, title: '' }, files, scanned: r2.msgs.length };
+      .filter(f => !/^\/(tmp|private\/tmp|var\/folders)\//.test(f.path))
+      .sort((a, b) => b.at - a.at).slice(0, 40);
+    return { ok: true, conv: { profile, sources }, files, scanned };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
   }

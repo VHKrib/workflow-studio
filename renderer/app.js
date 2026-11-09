@@ -352,7 +352,8 @@ async function pullRunFiles() {
   saveStore();                                       // 存内容，但不记版本（点「保留工作流」才记）
   render();
   if (panelCardId) renderPanel();
-  splitStat(added ? `取回 ${added} 个文件${missed ? `，${missed} 个没对上卡片` : ''}` : '这些文件已经在卡片上了');
+  const src = (r.conv && r.conv.sources && r.conv.sources.length) ? r.conv.sources.join(' / ') : (w.agent || '最近对话');
+  splitStat(added ? `从 ${src} 的对话里取回 ${added} 个文件${missed ? `，${missed} 个没对上卡片` : ''}` : '这些文件已经在卡片上了');
 }
 
 async function keepFlow() {
