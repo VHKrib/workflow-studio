@@ -182,8 +182,10 @@ Every workflow lives on disk as plain JSON, and two small adapters expose it to 
   so Claude Code, Codex, OpenClaw or any MCP client can read your workflows;
 - **`tools/workflow-cli.js`** — `list` / `show` / `versions` for harnesses that only have a terminal.
 
-Both are read-only and need nothing but `node`; the canvas stays the only writer. Setup snippets for each
-client, and the data-directory layout, are in [docs/integrations.md](docs/integrations.md).
+Reads (`list_workflows`, `get_workflow`, `get_versions`) need nothing but `node`; writes (`save_workflow`,
+`update_card`, `rollback_workflow`) are optimistic — you pass the version you read, every write becomes a
+version, and a stale version is refused untouched. Setup snippets for each client, the data-directory layout
+and the write rules are in [docs/integrations.md](docs/integrations.md).
 
 ## How the agent bridge works
 

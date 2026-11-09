@@ -8,8 +8,11 @@ Workflows stop being locked inside the app: any MCP-speaking agent can read them
   `get_versions` — works with Claude Code, Codex, OpenClaw and any other MCP client.
 - **CLI** (`tools/workflow-cli.js`): `list` / `show <name>` / `versions <name> [--v N] [--json]` for harnesses
   that only have a shell.
-- Both read the same files the app writes (`links/<id>.json`, `versions/<id>.json`), need no running app, and
-  stay read-only: the canvas remains the only writer, so two agents can never race on one workflow.
+- **Write-back** — `save_workflow`, `update_card` and `rollback_workflow` record real versions. Every write
+  takes the version the caller read (a stale version is refused untouched), bumps the number, appends a snapshot
+  and is serialised by a lock file, so the app and an agent can never interleave blindly. `--read-only` publishes
+  the three read tools only.
+- Both read the same files the app writes (`links/<id>.json`, `versions/<id>.json`) and need no running app.
 - `WF_HOME` points the adapters at another data directory (isolated instance, copy, or test fixture).
 - Regression test `npm run test:mcp` performs a real stdio handshake against a throwaway data directory.
 - Setup snippets: [docs/integrations.md](docs/integrations.md).

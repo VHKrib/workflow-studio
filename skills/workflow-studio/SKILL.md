@@ -124,6 +124,33 @@ git ls-remote --heads origin
 
 完成标志：验收版本、合并内容与批准发布范围一致，外部写入已回读；未做的步骤不写完成。
 
+## 对外集成（MCP / CLI）
+
+别的 agent／harness 要读这些工作流时，不接它的私有协议，也不要求它装本应用：本仓已经有两个适配器，
+新增入口沿用同一套而不是再写一份。
+
+- `mcp/workflow-studio.js`：零依赖 stdio JSON-RPC（手写，勿引 SDK），工具面 `list_workflows` /
+  `get_workflow` / `get_versions`；查法按 id → 精确名 → 名字片段，返回给 agent 的形状是解析过的（连线成 `A -> B`、
+  卡 `{kind,title,body,mods}`），不是整份文档。
+- `tools/workflow-cli.js`：`list` / `show` / `versions [--v N] [--json]`，给只有终端的 harness；它与 MCP
+  服务端共用 `mcp/workflow-studio.js` 导出的读函数，`main()` 用 `require.main === module` 隔开。
+- **两个适配器都只读**：画布是唯一写入方（原子写 + 只认更大版本号），开写接口会让两个 agent 无仲裁地抢同一条
+  工作流。写回（版本递增 + 冲突规则）是另一套设计，不是一个开关。
+- `WF_HOME` 指到别处＝隔离数据目录；测试用它跑夹具，绝不拿用户真实工作流当靶子。
+- 验据要三层：`npm run test:mcp`（夹具 + 真 stdio 握手）、CLI 读真实数据、以及**在真客户端注册并真调一次**
+  （`claude mcp add … -- node <绝对路径>` → `claude mcp list` 显示 Connected → 一次 `claude -p` 带
+  `--allowedTools mcp__workflow-studio__list_workflows` 拿到数据）。只看到「注册成功」不算接通。
+- 实现细节、客户端配置片段与陷阱见 `references/mcp-and-cli-integration.md`；对外说明放 `docs/integrations.md`。
+
+## 打包分发
+
+- 打包走 `npm run dist:mac / dist:win / dist:linux`，底层是 `npx --yes electron-builder`：**不要把它写进
+  devDependencies**，否则 `npm i` 从「只装 electron」变成拉一堆构建依赖，违背「`npm i && npm start` 就能跑」。
+- `package.json` 的 `build.files` 是白名单：新增仓库根目录模块（如 `platform.js`、`mcp/`）必须同时加进去，
+  否则打包后运行时报模块找不到。
+- mac 上可实测：产物在 `dist/`，用 `hdiutil verify` 校验、挂载后确认 `.app` 存在；未签名时明确说「未签名」，
+  别让用户以为下载即用。Windows 的 NSIS 包要在 Windows 上打。
+
 ## 从 Hermes desktop 打开（唤起）
 
 - **窗内入口是右栏列表的第一行。** 实时入口不只放 ⋯ 菜单：右栏链路列表**第一行**就是「实时工作流」，和已存工作流并列（虚线边表示它不是一条已存链路、不进版本）。点它＝把**画布区**切换成实时视图——不是新窗口，也不是盖住整个工作台的浮层；顶栏名字变「实时工作流」、执行方下拉隐藏、其它工作流行让出选中态；点回任意工作流就自动退出并恢复名字与下拉。这就是用户验收这一项的原话标准：「像隔板 / 新工作流那样切换」。
@@ -189,3 +216,4 @@ git ls-remote --heads origin
 - `references/cross-platform.md`：三平台外部命令、快捷键文案、启动器与 `platform.js` 单测。
 - `references/hermes-chat-visual.md`：对齐 Hermes 的视觉来源与密度数值。
 - `references/public-repo-hygiene.md`：扫描器读索引、字面量自伤、作者身份与历史改写、标签核对、中英双版 README 的验收。
+- `references/mcp-and-cli-integration.md`：把工作流暴露给别的 agent（MCP/CLI）、只读边界、客户端注册与验据、测试夹具。
