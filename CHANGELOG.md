@@ -1,32 +1,61 @@
-# 更新记录
+# Changelog
 
 ## v0.5.0
 
-这一版把画布伸到「别人的对话」上：另开一个只读窗口，选一条正在跑的 Hermes 对话，跟着它一张张长出链路卡。
+This release puts the canvas on top of *someone else's conversation*: a separate read-only window picks one
+running Hermes conversation and grows a chain card by card as it goes.
 
-- **独立实时画布**：主窗口「⋯ → 实时画布」另开一个窗口，只放画布——选对话、一个「跟随」开关、当前状态，其余都没有。
-- **动作变卡**：人说的话 = 输入卡；读文件 / 跑命令 / 查网页 / 看技能 / 调接口 = 加工卡（正文写「读了 10 份资料」这种计数）；跨岗位派活 = 加工卡并标出交给谁；最终回答与写出的文件 = 输出卡。
-- **连续同类合并、就地更新**：连读 10 个文件只长一张卡，计数往上走；同一句要求重复发、同一次要求下的多段回答也并回同一张，不刷卡片。
-- **卡片正面只说人话**：命令、绝对路径、JSON、字段名一律进「⚙ 内部实现」；正面只有人话与计数。
-- **只读硬边界**：会话库只用 `sqlite3 -readonly` + `?mode=ro` 打开，只跑 SELECT；只读最近 200 条，不把整库拉进内存；列表只给「谁 / 什么时候 / 在做什么」三栏，不吐私聊正文。主窗口仍是唯一写者，独立窗口的写入会被主进程直接拒。
-- **开关与状态**：开 → 每 ≤1 秒读一次增量；关 → 立刻停读、画面留在原地；换对话 → 清空重画、0 残留；选中的对话与开关记在应用数据目录，关掉窗口重开还在。
-- **窗口归属**：关独立窗口不影响主窗口，关主窗口时它跟着关。
+- **Standalone live canvas** — *⋯ → live canvas* opens a second window that holds only the board: conversation
+  picker, one follow switch, current status. Nothing else.
+- **Actions become cards** — what the person asked for is an input card; reads, commands, lookups, skill loads
+  and API calls roll up into process cards (the body says "read 10 files"); a handoff to another agent is a
+  process card naming the target; the answer and any written files become output cards.
+- **Repeats merge in place** — ten reads in a row stay one card with a rising count; a repeated request and
+  its follow-up answers fold back into the same card instead of flooding the board.
+- **Plain language on the front** — commands, absolute paths, JSON and field names go into internal wiring;
+  the card face shows intent and counts only.
+- **Hard read-only boundary** — the session database is opened with `sqlite3 -readonly` and `?mode=ro`, SELECT
+  only, newest 200 rows, never the whole file; the picker lists who / when / what it is doing, never private
+  message bodies. The main window stays the only writer; writes from the second window are rejected.
+- **Switch and status** — following reads an increment at most once a second; switching off stops immediately
+  and leaves the board as it is; switching conversation clears and redraws with nothing left over. The last
+  conversation and switch state survive a restart.
+- **Window ownership** — closing the live window never affects the main window; closing the main window closes
+  it too.
 
 ## v0.4.0
 
-这一版把画布从「摆卡片」做成「和 agent 一起搭链路」：搭出来的东西留得下来、退得回去，跑之前还能先体检。
+This release turns the board from "placing cards" into "building a chain with an agent": what you build
+persists, rolls back, and can be checked before it runs.
 
-- **一条工作流自己指定执行方**：顶栏、概览、运行弹层三处同步；右下角常驻对话框另有固定对象，聊的是整条链路，不接单张卡。
-- **卡片拆成模块**：输入卡写素材、加工卡写工具、输出卡写成果，每块一个短词；把卡拖进加工卡的插槽就接上，拖出来就断开；会绕成圈的接入直接被拒绝。
-- **对话建链路**：新开一块临时画布边说边搭，卡片随着回答一张张长出来，满意了再存成正式工作流。
-- **读取一个 agent 的工作链路**：先只读地翻它自己的说明、技能和最近的干活记录，交给模型拆成卡片预览，人按「放进画布」才落地；中途可以取消、可以重来，到点自己收场。
-- **版本与回滚**：每条链路只留最近 20 版，连续打字算一次；左栏版本列表点一行就整条回滚，回滚本身也记一版；回滚时正在跑的对话会被停掉。
-- **编辑即版本**：换输入元素、换加工方式、改标题、改内部实现、加删模块，画布立刻变、底稿一秒内同步，停手就记一版。
-- **复制一条链路来试**：副本是独立的一份，改哪边都不影响另一边；右栏标出当前选中的那条，关窗重开还记得。
-- **测试先做两件事**：本机静态体检（断链、缺输入缺产出、空卡、绕圈、被拆成两截，逐条写怎么补）；只读预演（执行方按卡片顺序说会怎么做、缺什么，全程零工具，不跑命令、不写文件、不发消息、不花钱）。
-- **卡片正面只说人话**：用哪些图、哪些数据、怎么加工、交出什么文件，具体可执行；命令、脚本、路径、字段名收进「⚙ 内部实现」，卡片正面不显示。
-- **整修**：卡片底部带校验徽标的卡不再把「↗ 连线」按钮挤出边框；示例内容与公开文档里的历史字段名换成了中性说法；窗口拉到最窄时顶栏一排放不下，会把测试、复制、逐卡验证、对话建链路、读取链路先收进「⋯」，**「开始运行」永远在窗内可点**。
+- **Each workflow picks its own executor** — top bar, overview and run dialog stay in sync; the persistent
+  dock at the bottom right talks to a fixed supervisor agent about the whole chain, never about one card.
+- **Cards break into modules** — materials on input cards, tools on process cards, results on output cards,
+  one short chip each; drag a card into a process card's socket to connect, drag the chip out to disconnect;
+  a connection that would close a loop is refused.
+- **Talk a workflow into existence** — a temporary canvas grows cards as the answer streams; save it as a real
+  workflow when it looks right.
+- **Read an agent's work chain** — a read-only pass over that agent's own description, skills and recent work
+  records, turned into a card preview by the model; nothing lands until a person presses *put on canvas*.
+  Runs can be cancelled, retried, and time out on their own.
+- **Versions and rollback** — newest 20 per workflow, typing in a burst counts once; clicking a row in the side
+  panel rolls the whole chain back, and the rollback is itself a version; a run in flight is stopped on rollback.
+- **Editing is a version** — swapping materials, changing a tool, renaming a card, editing internal wiring or
+  adding a module updates the canvas immediately, syncs the shared state file within a second, and records a
+  version once you stop.
+- **Copy a chain to experiment** — an independent copy; edits on either side never touch the other; the selected
+  chain is marked in the side panel and remembered across restarts.
+- **Tests run two passes first** — a local static pass (broken links, missing input/output, empty cards, loops,
+  split chains, each with a fix) and a read-only rehearsal where the executor walks the cards and says what it
+  would do and what is missing, with zero tools: no commands, no file writes, no messages, no publishing, no
+  spending.
+- **Plain language on cards** — what goes in, how it is processed, what comes out, concretely; commands,
+  scripts, paths and field names move into internal wiring and stay off the card face.
+- **Polish** — cards with a validation badge no longer push the *link* button out of the frame; seed content and
+  public docs use neutral wording; at the narrowest window the top bar folds tests, copy, per-card validation,
+  talk-a-workflow and read-chain into `⋯`, while *run* always stays clickable.
 
 ## v0.3.0
 
-上一版：三色卡片画布、拖拽与缩放、卡片问 agent 与「下一步」候选卡、导入导出、逐卡验证。
+The previous release: three-colour card canvas, drag and zoom, per-card agent chat with "next step"
+candidates, JSON import/export, per-card validation.
