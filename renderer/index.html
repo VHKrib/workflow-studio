@@ -76,6 +76,8 @@
       </div>
       <!-- 分屏后（下面那半区）：保留这条工作流 / 让 AI 按三类卡改成通用做法 -->
       <div id="splitBar" class="splitbar">
+        <button id="splitUndo" class="sbtn ico" title="撤销（⌘Z）" disabled>↶</button>
+        <button id="splitRedo" class="sbtn ico" title="重做（⇧⌘Z）" disabled>↷</button>
         <button id="splitKeep" class="sbtn">保留工作流</button>
         <button id="splitGen" class="sbtn gen" title="按 输入 / 加工 / 输出 三类卡，把内容改写成这一类活儿的通用做法">AI 通用化</button>
         <span id="splitStat" class="sstat"></span>
@@ -97,7 +99,9 @@
         <button id="tempSave" class="primary">存成正式</button>
         <span id="tempClose" title="关掉临时画布（不进列表）">✕</span>
       </div>
-      <h3>工作流 · 一块画布</h3>
+      <h3 class="gh">实时 · 正在跑</h3>
+      <div id="liveSlot"></div>
+      <h3 class="gh">历史工作流</h3>
       <div id="wfList"></div>
     </aside>
   </div>

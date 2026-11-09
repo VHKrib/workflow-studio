@@ -139,6 +139,7 @@ function adoptLiveFlow(doc) {
     chat: [],
     version: 1,
     updated_at: Date.now(),
+    pendingLive: true,
     fromLive: { profile: (doc.conv && doc.conv.profile) || '', session: (doc.conv && doc.conv.session) || '' }
   };
   store.workflows.unshift(w);
@@ -164,11 +165,61 @@ function enterSplit() {
   const kb = $('#splitKeep'); if (kb) kb.textContent = '保留工作流';
   const w0 = flow();
   if (w0) { layoutChain(w0); render(); }
+  editHistoryInit();
   const name = $('#flowName'); if (name) name.readOnly = false;
   const fa = document.querySelector('.flowagent'); if (fa) fa.style.display = '';
   const wv = $('#liveWV');
   if (wv) { try { wv.send('live:readonly', true); } catch (e) { } }
   renderWorkflowList();
+}
+
+// ---------- 编辑画布自己的撤销 / 重做 ----------
+const editHist = { undo: [], redo: [], last: '' };
+function snapFlow(w) { return JSON.stringify({ name: w.name, nodes: w.nodes, edges: w.edges }); }
+function paintEditHist() {
+  const u = $('#splitUndo'), r = $('#splitRedo');
+  if (u) u.disabled = !editHist.undo.length;
+  if (r) r.disabled = !editHist.redo.length;
+}
+function editHistoryInit() {
+  const w = flow();
+  editHist.undo = []; editHist.redo = [];
+  editHist.last = w ? snapFlow(w) : '';
+  paintEditHist();
+}
+function editHistoryNote() {              // 内容变了就记一版（saveStore / 输入参考 都会调）
+  const w = flow();
+  if (!w || !editMode) return;
+  const s2 = snapFlow(w);
+  if (editHist.last && s2 !== editHist.last) {
+    editHist.undo.push(editHist.last);
+    if (editHist.undo.length > 60) editHist.undo.shift();
+    editHist.redo.length = 0;
+  }
+  editHist.last = s2;
+  paintEditHist();
+}
+function applyEditSnap(s2) {
+  const w = flow(); if (!w || !s2) return;
+  const d = JSON.parse(s2);
+  w.name = d.name; w.nodes = d.nodes; w.edges = d.edges;
+  editHist.last = s2;
+  render(); renderWorkflowList();                 // 快照里已经带着坐标，别再走自动排版（那会把卡挪走）
+  try { fitView(true, 0.2); } catch (e) { }
+  saveLocal();
+  paintEditHist();
+}
+function editUndo() {
+  const w = flow(); if (!w || !editHist.undo.length) return;
+  editHist.redo.push(snapFlow(w));
+  applyEditSnap(editHist.undo.pop());
+  splitStat('已撤回一步');
+}
+function editRedo() {
+  const w = flow(); if (!w || !editHist.redo.length) return;
+  editHist.undo.push(snapFlow(w));
+  applyEditSnap(editHist.redo.pop());
+  splitStat('已重做一步');
 }
 
 // ---------- 分屏下半区：保留 / AI 通用化 ----------
@@ -193,7 +244,8 @@ function keepFlow() {
   }
   editMode = false;
   canvas.classList.remove('editing');
-  layoutChain(w); render();
+  if (w.pendingLive) delete w.pendingLive;      // 保留 = 转正，进「历史工作流」列表
+  layoutChain(w); render(); renderWorkflowList();
   try { fitView(true, 0.2); } catch (e) { }
   saveStore();
   const t2 = new Date();
@@ -304,6 +356,12 @@ function exitLive() {
   if (cw) cw.classList.remove('live', 'split');
   const wv = $('#liveWV'); if (wv) { try { wv.send('live:readonly', false); } catch (e) { } }
   editMode = false; canvas.classList.remove('editing');
+  const pending = store.workflows.filter(w => w.pendingLive);
+  if (pending.length) {
+    store.workflows = store.workflows.filter(w => !w.pendingLive);
+    if (!store.workflows.some(w => w.id === store.current)) store.current = store.workflows[0] && store.workflows[0].id;
+    saveLocal(); renderWorkflowList(); render();
+  }
   splitStat('');
   const name = $('#flowName');
   if (name) name.readOnly = false;
@@ -324,6 +382,9 @@ function bindUI() {
   $('#tempSave').onclick = promoteTemp;
   const sk = $('#splitKeep'), sg = $('#splitGen');
   if (sk) sk.onclick = keepFlow;
+  const su = $('#splitUndo'), sr = $('#splitRedo');
+  if (su) su.onclick = editUndo;
+  if (sr) sr.onclick = editRedo;
   if (sg) sg.onclick = generalizeFlow;
   $('#tempClose').onclick = closeTempCanvas;
   $('#btnAddCard').onclick = e => { e.stopPropagation(); $('#moreMenu').classList.remove('on'); $('#addMenu').classList.toggle('on'); };
@@ -557,6 +618,7 @@ function saveStore(bump = true) {
   const w = flow();
   const touch = bump && !LINK.applying;
   if (w && touch) w.updated_at = Date.now();
+  if (w && editMode) editHistoryNote();
   saveLocal();
   if (w && touch) { scheduleVersion(w); queueLinkWrite(w); }
 }
@@ -1032,7 +1094,9 @@ function deleteWorkflow(id, ev) {
   saveStore(false); renderWorkflowList(); render();
 }
 function renderWorkflowList() {
-  const box = $('#wfList'); box.innerHTML = '';
+  const slot = $('#liveSlot'), box = $('#wfList');
+  if (slot) slot.innerHTML = '';
+  box.innerHTML = '';
   const live = document.createElement('div');
   live.className = 'wf live' + (liveMode ? ' on' : '');
   live.dataset.live = '1';
@@ -1040,8 +1104,9 @@ function renderWorkflowList() {
   live.innerHTML = `<div class="wn">实时工作流${liveMode ? '<span class="wsel">当前</span>' : ''}</div>
     <div class="ws">跟一条对话，看它现在怎么做</div>`;
   live.onclick = () => enterLive();
-  box.appendChild(live);
+  (slot || box).appendChild(live);
   for (const w of store.workflows) {
+    if (w.pendingLive) continue;          // 编辑中、还没「保留」的草稿不占历史列表
     const el = document.createElement('div');
     const on = w.id === store.current && !liveMode;
     el.className = 'wf' + (on ? ' on' : '');
@@ -1187,7 +1252,10 @@ function nodeEl(n) {
   if (noteEl) {
     noteEl.addEventListener('pointerdown', ev => ev.stopPropagation());
     noteEl.addEventListener('dblclick', ev => ev.stopPropagation());
-    noteEl.addEventListener('input', () => { n.note = noteEl.value; saveLocal(); });
+    noteEl.addEventListener('input', () => {
+      n.note = noteEl.value; saveLocal();
+      clearTimeout(noteEl._t); noteEl._t = setTimeout(() => editHistoryNote(), 700);
+    });
   }
   el.querySelector('[data-act="link"]').addEventListener('click', ev => { ev.stopPropagation(); startLink(n, el); });
   el.querySelector('[data-act="ask"]').addEventListener('click', ev => { ev.stopPropagation(); openCard(n); chatAsk('review'); });
@@ -3338,6 +3406,15 @@ wrap.addEventListener('pointerdown', e => {
   e.preventDefault();
   const x = e.clientX, y = e.clientY;
   rTimer = setTimeout(() => showRadial(x, y), 180);
+});
+addEventListener('keydown', e => {
+  if (!editMode) return;
+  const t = e.target || {};
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '') || t.isContentEditable) return;   // 输入框里交给浏览器自己的撤销
+  const meta = e.metaKey || e.ctrlKey;
+  const k = String(e.key || '').toLowerCase();
+  if (meta && k === 'z') { e.preventDefault(); if (e.shiftKey) editRedo(); else editUndo(); return; }
+  if (meta && k === 'y') { e.preventDefault(); editRedo(); }
 });
 addEventListener('pointermove', e => { if (!rOpen) return; const i = pick(e.clientX, e.clientY); if (i !== rHot) { rHot = i; paintRadial(); } });
 addEventListener('pointerup', () => { clearTimeout(rTimer); if (!rOpen) return; const i = rHot; hideRadial(); if (i >= 0) doAction(ACTIONS[i].id); });
