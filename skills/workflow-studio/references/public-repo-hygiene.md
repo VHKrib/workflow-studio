@@ -70,6 +70,17 @@ Pitfalls:
   approval.
 - After a force push, say plainly that existing clones must re-fetch or re-clone.
 
+## Verifying a push actually landed (CDN cache ≠ failed push)
+
+`raw.githubusercontent.com` is CDN-cached: right after a push it can still serve the previous content, which
+looks exactly like "the push didn't take" and tempts a redundant commit or a second push.
+
+- `git ls-remote origin main` is authoritative for the remote sha.
+- Read the file at that exact sha through the API:
+  `curl -s "https://api.github.com/repos/<owner>/<repo>/contents/<path>?ref=<sha>"`, base64-decode, then grep.
+  This bypasses the CDN window.
+- Only when both disagree with the local tree is something actually wrong.
+
 ## Bilingual docs, without mixing
 
 The shape the user asked for: repository files in English; the introduction exists in both languages as two

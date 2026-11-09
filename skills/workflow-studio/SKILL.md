@@ -118,7 +118,7 @@ git ls-remote --heads origin
 
 - **`scan-public` 读的是 git 索引（`git ls-files` 那批 blob），不是工作树。** 改完文件不 `git add` 就重跑，它仍然报旧内容——会出现「本地文件已经清干净、扫描还命中」的假象，然后你以为改错了继续改。判 0 命中前先 `git add -A`，再扫；扫描器报的行号与当前文件对不上时，先怀疑索引没更新。
 - **别把扫描要抓的那串字面量写进解释它的文档里。** 想写「这条规则会命中带用户名的家目录写法」，就必须绕开那个字面前缀（写成 `/home/…`、`C:\…` 或纯文字描述）；否则文档自己成了命中项，越解释越扫不过。
-- **公开文档的语言口径：仓库文件统一英文，只有介绍做成两版且不许混排。** `README.md` 纯英文 + `README.zh-CN.md` 纯中文，互相链接；链接文案也算（英文版里写 `Chinese version`，不要留「中文说明」这种中文字样）；`CHANGELOG.md`、GitHub About 描述与 topics 一律英文单语。改完逐行断言英文版里没有 CJK、中文版里没有整段英文正文，而不是凭感觉。历史改写（路径与作者身份）与标签核对的完整步骤见 `references/public-repo-hygiene.md`。
+- **公开文档的语言口径：仓库文件统一英文，只有介绍做成两版且不许混排。** `README.md` 纯英文 + `README.zh-CN.md` 纯中文，互相链接；链接文案也算（英文版里写 `Chinese version`，不要留「中文说明」这种中文字样）；`CHANGELOG.md`、GitHub About 描述与 topics 一律英文单语。改完逐行断言英文版里没有 CJK、中文版里没有整段英文正文，而不是凭感觉。历史改写（路径与作者身份）、标签核对与推送后核验（raw 有 CDN 缓存，按 sha 走 API 读）的完整步骤见 `references/public-repo-hygiene.md`。
 
 - **`scan-public` 只扫当前树；命中出现在尚未推送的提交里时，要把那段历史一起清掉再谈推送。** 顺序是：先在当前工作树里把命中删干净并正常提交（此刻 tip 树已干净），再用 `FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --tree-filter '<替换脚本>' <已公开sha>..HEAD` 只重写未公开尾段——远端不受影响，仍是快进推送，不触发强推审批。改完必须 `git diff <旧 tip> <新 tip>` **0 行**（证明交付内容没变，只是历史里的那串被换掉），再断言 `git grep <命中串> <每个新提交>` 为空、重跑 `scan-public` 为 0 命中，最后删掉 `refs/original` 与临时备份分支，避免它们被 `--all` 推出去。**已公开的历史绝不这样改。**
 
@@ -134,10 +134,16 @@ git ls-remote --heads origin
   卡 `{kind,title,body,mods}`），不是整份文档。
 - `tools/workflow-cli.js`：`list` / `show` / `versions [--v N] [--json]`，给只有终端的 harness；它与 MCP
   服务端共用 `mcp/workflow-studio.js` 导出的读函数，`main()` 用 `require.main === module` 隔开。
-- **两个适配器都只读**：画布是唯一写入方（原子写 + 只认更大版本号），开写接口会让两个 agent 无仲裁地抢同一条
-  工作流。写回（版本递增 + 冲突规则）是另一套设计，不是一个开关。
+- **写回必须走同一套并发规则，不许给 agent 开一条直写文件的旁路。** 写工具 `save_workflow` / `update_card` /
+  `rollback_workflow` 都要 `expected_version`（调用方读到的版本）：不一致就拒绝、**文件一个字节不改**、回包带
+  `current_version`；成功则版本 +1 + 追加 `list[].snapshot`（应用里可回滚，版本项 `by: 'mcp'`）、原子写，并用
+  `<data>/.locks/<id>.lock` 串行化第二个写者（等 2s 后报冲突，不交叉写）。写前校验：id 唯一、kind ∈
+  in|proc|out、标题非空、连线两端存在且不自连；校验不过不落盘。`--read-only` 只发布三个读工具。
+  画布靠「版本号更大就认领」接收这些写入，所以**验收要看到画布真的变了**，不是只看 MCP 回包 `ok:true`。
 - `WF_HOME` 指到别处＝隔离数据目录；测试用它跑夹具，绝不拿用户真实工作流当靶子。
-- 验据要三层：`npm run test:mcp`（夹具 + 真 stdio 握手）、CLI 读真实数据、以及**在真客户端注册并真调一次**
+- 验据要四层：`npm run test:mcp`（夹具 + 真 stdio 握手 + 写入/过期拒绝/回滚/保留 20 的断言）、CLI 读真实数据、
+  **隔离实例里写一版再看运行中的画布是否认领**（`--user-data-dir` 临时目录 + `WF_HOME` 指同一处，写 `update_card`
+  后 ~2s 内 DOM 里出现新正文、`store.workflows` 的 `version` 跟着涨）、以及**在真客户端注册并真调一次**
   （`claude mcp add … -- node <绝对路径>` → `claude mcp list` 显示 Connected → 一次 `claude -p` 带
   `--allowedTools mcp__workflow-studio__list_workflows` 拿到数据）。只看到「注册成功」不算接通。
 - 实现细节、客户端配置片段与陷阱见 `references/mcp-and-cli-integration.md`；对外说明放 `docs/integrations.md`。
