@@ -26,6 +26,6 @@ Electron 本身三平台都跑；这个应用没有原生模块、路径全走 `
 ## 测试与冒烟
 
 - `node tools/test-platform.js`（或 `npm run test:platform`）：纯 Node 断言 mac/linux/win32 三套解析结果，不启 Electron。
-- **夹具用中性路径**（`/home/demo`、`C:\demo`）：`tools/scan-public.js` 按字面 `/Users/`、部门名等命中，拿 `'/Users/x'` 当夹具会让公开扫描冒出假命中。
+- **夹具用中性路径**（`/home/demo`、`C:\demo`）：`tools/scan-public.js` 按字面 `/Users/`、部门名等命中，夹具里别写真实用户目录（哪怕只是示例），公开扫描按字面 `/<用户名>/` 命中会冒出假报警。
 - 改完在 mac 上重启一次用户实例做冒烟：agent 列表能读到（证明 hermes 桥接没坏）、编辑分屏与实时视图能进、控制台无异常、`[title*=⌘]` 仍是 `⌘`。
 - 真实 Windows/Linux 机器不在本机，只有单测覆盖；对外说「支持三平台」时要讲清这一点，需要时再补真机验证或 electron-builder 打包。
