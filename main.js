@@ -764,12 +764,21 @@ ipcMain.handle('run:pull', async (_e, { profile, limit, minutes: minutesArg } = 
         seen.set(p, { path: p, name: p.split('/').pop(), at, msgId: msg.id || 0, hits: 1 });
       }
     }
+    // 光看消息时间还不够：新消息里常会 ls 出上一次的旧文件。按文件时间再核一遍，只认这次跑之后写出来的。
+    const resolveExisting = (p) => {
+      const cands = path.isAbsolute(p) ? [p]
+        : [path.join(os.homedir(), p), path.join(process.cwd(), p), path.join(os.homedir(), '.hermes', 'profiles', profile, p)];
+      for (const c of cands) { try { const st = fs.statSync(c); if (st.isFile()) return { file: c, st }; } catch (e) { } }
+      return null;
+    };
     const files = [...seen.values()]
       .filter(f => !/\.(tmp|lock|log|db|db-wal|db-shm)$/i.test(f.path))
       .filter(f => !/(^|\/)(node_modules|\.git|\.hermes|__pycache__)\//.test(f.path))
       .filter(f => !/\/(package-lock\.json|package\.json|config\.yaml|SKILL\.md)$/i.test(f.path))
       .filter(f => !/^\/(tmp|private\/tmp|var\/folders)\//.test(f.path))
-      .sort((a, b) => b.at - a.at).slice(0, 40);
+      .map(f => { const hit = resolveExisting(f.path); return hit ? Object.assign({}, f, { path: hit.file, mtime: hit.st.mtimeMs }) : null; })
+      .filter(f => f && f.mtime >= sinceAt - 3000)                         // 旧文件直接不要
+      .sort((a, b) => b.mtime - a.mtime).slice(0, 40);
     return { ok: true, conv: { profile, sources: files.length ? [profile] : [], minutes, sinceAt, sinceId }, files, scanned };
   } catch (e) {
     return { ok: false, error: String((e && e.message) || e) };
