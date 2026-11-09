@@ -4,7 +4,7 @@ description: Use when developing Workflow Studio. Plan, test, ship.
 version: 1.0.0
 author: VHKrib, Hermes Agent
 license: MIT
-platforms: [macos]
+platforms: [macos, windows, linux]
 metadata:
   hermes:
     tags: [workflow, electron, canvas, agents, testing]
@@ -116,6 +116,8 @@ git ls-remote --heads origin
 
 核密钥、本机路径、其他业务内容和 120000 符号链接目标；不只扫普通文件。公开图片/GIF也要亲眼检查。未获授权不提交/推送；改写已公开历史和强推必须另获用户明确批准，审批失败不换写法绕过。
 
+- **`scan-public` 只扫当前树；命中出现在尚未推送的提交里时，要把那段历史一起清掉再谈推送。** 顺序是：先在当前工作树里把命中删干净并正常提交（此刻 tip 树已干净），再用 `FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --tree-filter '<替换脚本>' <已公开sha>..HEAD` 只重写未公开尾段——远端不受影响，仍是快进推送，不触发强推审批。改完必须 `git diff <旧 tip> <新 tip>` **0 行**（证明交付内容没变，只是历史里的那串被换掉），再断言 `git grep <命中串> <每个新提交>` 为空、重跑 `scan-public` 为 0 命中，最后删掉 `refs/original` 与临时备份分支，避免它们被 `--all` 推出去。**已公开的历史绝不这样改。**
+
 完成标志：验收版本、合并内容与批准发布范围一致，外部写入已回读；未做的步骤不写完成。
 
 ## 从 Hermes desktop 打开（唤起）
@@ -124,7 +126,7 @@ git ls-remote --heads origin
 - 已登记自定义协议 `workflow-studio://`：`open "workflow-studio://open"` 开或前置主窗口，`open "workflow-studio://live"` 切到实时视图（视同点右栏那张虚线卡）；`./node_modules/.bin/electron . --unregister-protocol` 启动一次即解除登记。
 - 单实例靠 `app.requestSingleInstanceLock()`：第二个进程直接退出，把 URL 交给已开的那个窗口处理；实测连续唤起两次，进程数仍为 1、页面 1→2。
 - **要打开用户平时用的那个实例（带 9222 调试口），跑仓库根的启动脚本**：`cd "<本机仓库根>" && (./打开工作流开发平台.command > /tmp/wf-launch.log 2>&1 &)`，然后 `curl -s http://127.0.0.1:9222/json/list` 确认有 `type=page`、title 为「工作流开发平台」，再用 `osascript -e 'tell application "System Events" to tell process "Electron" to get {position of window 1, size of window 1}'` 核到 1380×880。协议唤起只负责「开或前置」，它经 LaunchServices 起的是**不带调试口**的裸 Electron（窗口还会以 960×648 出现，低于应用自己的 minWidth），要 CDP 或要用户那套数据就必须走启动脚本。切换实例前先 `osascript -e 'tell application "Electron" to quit'` 退干净：单实例锁会让后起的进程把 URL 交给旧实例直接退出，端口依旧不会出现。
-- **这个应用本身跨平台，别把它说成 mac 专属。** 被问到能不能上 Windows/Linux 时按代码回答：依赖只有 electron、路径全走 `os.homedir()`、快捷键判 `metaKey || ctrlKey`、`window-all-closed` 已按平台分支；真正 mac 专属只有五处——`打开工作流开发平台.command` 启动脚本、`main.js` 里 `~/.hermes/hermes-agent/.hermes/bin/hermes` 的 `execFile`（Windows 上是 `hermes.cmd`，`execFile` 不认）、`livefeed.js` 的 `/usr/bin/sqlite3` 兜底（Windows 默认没有）、提示文案里的 `⌘Z`、Linux 上 `workflow-studio://` 要先打包并装 `.desktop` 才生效。
+- **这个应用本身跨平台（mac / Windows / Linux），别再按 mac 专属写。** 外部命令位置与快捷键文案统一走仓库根的 `platform.js`：`hermesBin()`（mac/linux `~/.hermes/.../bin/hermes`，Windows 取 `hermes.cmd`；**Windows 上 `.cmd/.bat` 必须 `shell:true`，否则 `execFile`/`spawn` 根本起不来**）、`sqliteBin()`、`modKey()`；渲染层源码照旧写 `⌘`，非 mac 平台由 `localizeKeys()` / `KEYMOD` 在启动时换成 `Ctrl+`。新增任何外部命令先加进这个模块并补 `tools/test-platform.js` 断言（`npm run test:platform`，纯 Node、不开 Electron）。启动器：mac `.command`、Windows `打开工作流开发平台.bat`；Linux 开发态跳过 `workflow-studio://` 登记（要打包后的 `.desktop`）。实现细节、陷阱与冒烟清单见 `references/cross-platform.md`。
 - **Hermes desktop 聊天只放行 http/https/mailto**（`apps/desktop/electron/external-open.ts` 的 `SUPPORTED_WEB`），贴自定义协议链接点了会被自己拦掉——要唤起就让 agent 跑 `open`，别做聊天里可点的链接。
 
 ## Pitfalls
@@ -179,4 +181,5 @@ git ls-remote --heads origin
 - `references/canvas-and-cards.md`：坐标、拖拽、模块插槽、面板、动画与界面探针。
 - `references/agents-and-live.md`：受限分析、正式回答解析、流式取消、临时与只读实时画布。
 - `references/versioning-and-preview.md`：编辑成版、回滚感知、复制独立性与零执行预演。
+- `references/cross-platform.md`：三平台外部命令、快捷键文案、启动器与 `platform.js` 单测。
 - `references/hermes-chat-visual.md`：对齐 Hermes 的视觉来源与密度数值。

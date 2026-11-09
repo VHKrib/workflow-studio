@@ -162,6 +162,22 @@ Electron is cross-platform and this app has no native modules, so the same sourc
 | Windows | double-click `打开工作流开发平台.bat` (installs deps on first run), or `npm start` |
 | Linux | `npm start` |
 
+### Packaging
+
+`npm i && npm start` stays the default path — packaging is opt-in and downloads `electron-builder` on demand (`npx`), so the dependency list stays one package.
+
+```bash
+npm run dist:mac     # -> dist/*.dmg
+npm run dist:win     # -> dist/*.exe (NSIS installer; build it on Windows)
+npm run dist:linux   # -> dist/*.AppImage
+```
+
+Output goes to `dist/` (git-ignored). The config lives in `package.json` under `build`.
+Builds are unsigned by default; add signing credentials via the standard electron-builder env vars
+(`CSC_LINK` / `CSC_KEY_PASSWORD`, `WIN_CSC_LINK`) when you need notarised or signed installers.
+The app icon falls back to the default Electron icon until you drop `build/icon.icns` (macOS) or
+`build/icon.ico` (Windows) in place.
+
 Platform differences are resolved in `platform.js` and covered by `npm run test:platform`:
 
 - the Hermes CLI path (`.../bin/hermes` on macOS/Linux, `hermes.cmd` on Windows — spawned through a shell there);

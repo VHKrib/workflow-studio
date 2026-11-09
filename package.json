@@ -14,9 +14,48 @@
   "scripts": {
     "start": "electron .",
     "shot": "node tools/shot.js",
-    "test:platform": "node tools/test-platform.js"
+    "test:platform": "node tools/test-platform.js",
+    "dist:mac": "npx --yes electron-builder --mac dmg --publish never",
+    "dist:win": "npx --yes electron-builder --win nsis --publish never",
+    "dist:linux": "npx --yes electron-builder --linux AppImage --publish never"
   },
   "devDependencies": {
     "electron": "^32.0.0"
+  },
+  "build": {
+    "appId": "studio.workflow.desktop",
+    "productName": "Workflow Studio",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "platform.js",
+      "chain.js",
+      "livefeed.js",
+      "actmap.js",
+      "linkstore.js",
+      "versions.js",
+      "renderer/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    }
   }
 }
