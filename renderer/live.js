@@ -747,7 +747,13 @@ function showRefPreview(n) {
     box.addEventListener('click', ev => { if (ev.target === box) box.remove(); });
     document.body.appendChild(box);
   }
-  const mods = (n.mods || []).map(m => `<span class="rpmod">${esc(m.name)}</span>`).join('') || '<span class="rpnil">没有记录元素</span>';
+  const modsOfCard = n.mods || [];
+  const pathOf = m => String(m.path || '');   // 只认元素自己带的路径：卡级路径会让每个 chip 都挂同一张图
+  const mods = modsOfCard.map(m => {
+    const p = pathOf(m);
+    const thumb = p && EXT_IMG.test(p) ? `<img class="rpthumb" data-p="${esc(p)}" alt="">` : '';
+    return `<span class="rpmod">${thumb}${esc(m.name)}</span>`;
+  }).join('') || '<span class="rpnil">没有记录元素</span>';
   box.innerHTML = `<div class="rpcard">
     <div class="rph"><span class="rpk ${n.kind}">${KIND[n.kind] || n.kind}</span><b>${esc(n.title)}</b><span class="rpx">✕</span></div>
     <div class="rpb">${esc(n.body || '（没有描述）')}</div>
@@ -756,6 +762,12 @@ function showRefPreview(n) {
     <div class="rpn">只读参考：改到下面那张画布</div>
   </div>`;
   box.querySelector('.rpx').onclick = () => box.remove();
+  box.querySelectorAll('.rpthumb').forEach(img => {
+    const p = img.dataset.p;
+    window.tcflow.livePeek({ path: p }).then(r => {
+      if (r && r.ok && r.url) img.src = r.url; else img.remove();
+    }).catch(() => img.remove());
+  });
 }
 function chatAsk() { const i = document.getElementById('chatIn'); if (i) i.focus(); }
 

@@ -16,6 +16,10 @@ Workflows stop being locked inside the app: any MCP-speaking agent can read them
 - `WF_HOME` points the adapters at another data directory (isolated instance, copy, or test fixture).
 - Regression test `npm run test:mcp` performs a real stdio handshake against a throwaway data directory.
 - Setup snippets: [docs/integrations.md](docs/integrations.md).
+- **Card panel shows its elements**: double-clicking a card lists its materials (plus those of upstream cards) and
+  its results (plus downstream), with a thumbnail, the file path and an "open" button per item. Missing files say
+  so instead of showing a broken image; items without a recorded path say that too. The read-only reference pane
+  in the split editor gets the same thumbnails.
 
 ## v0.5.0
 

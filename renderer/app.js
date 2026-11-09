@@ -1908,6 +1908,50 @@ function unplugDrag(e, pn, pe, chip) {
 }
 
 // ---------- 右栏 ----------
+// 卡片里「看得见的元素」：素材（本卡 + 上游）与成果（本卡 + 下游）；有路径的给缩略图，读不到就说「不在了」
+const EXT_IMG_RE = /\.(png|jpe?g|webp|gif|bmp|svg)$/i;
+const EXT_VID_RE = /\.(mp4|mov|webm|mkv)$/i;
+function pathIn(text) {
+  const m = /((?:~|\/)[^\s"'，。；、）)】]+?\.(?:png|jpe?g|webp|gif|bmp|svg|mp4|mov|webm|md|txt|json|csv|ya?ml))/i.exec(String(text || ''));
+  return m ? m[1] : '';
+}
+function elemsOf(n) {
+  const w = flow(); if (!w) return { mat: [], res: [] };
+  const mine = kind => modsOf(n).filter(m => m.type === kind)
+    .map(m => ({ name: m.name, path: m.path || pathIn(m.name) || pathIn(implOf(n)), from: '' }));
+  const ups = (w.edges || []).filter(e => e[1] === n.id).map(e => find(e[0])).filter(Boolean);
+  const downs = (w.edges || []).filter(e => e[0] === n.id).map(e => find(e[1])).filter(Boolean);
+  const fromCards = (cards, kind) => cards.flatMap(c => modsOf(c).filter(m => m.type === kind)
+    .map(m => ({ name: m.name, path: m.path || pathIn(m.name) || pathIn(implOf(c)), from: c.title })));
+  const uniq = arr => { const seen = new Set(); return arr.filter(x => { const k = x.path || x.name; if (!k || seen.has(k)) return false; seen.add(k); return true; }); };
+  return { mat: uniq(mine('mat').concat(fromCards(ups, 'mat'))), res: uniq(mine('res').concat(fromCards(downs, 'res'))) };
+}
+function paintPanelElems(n) {
+  const host = $('#pElems'); if (!host) return;
+  const { mat, res } = elemsOf(n);
+  const sec = (label, arr) => `
+    <div class="elhd">${label} <b>${arr.length}</b></div>
+    ${arr.length ? arr.map(e => `
+      <div class="elrow" data-path="${esc(e.path || '')}">
+        <div class="elthumb">${e.path && EXT_IMG_RE.test(e.path) ? '载入…' : (e.path ? (EXT_VID_RE.test(e.path) ? '视频' : '文件') : '—')}</div>
+        <div class="elname">${esc(e.name)}${e.from ? `<em>来自「${esc(e.from)}」</em>` : ''}</div>
+        ${e.path ? '<button class="elopen">打开</button>' : '<span class="elnil">未记录路径</span>'}
+      </div>`).join('') : `<div class="elnil">这张卡没有记录${label}</div>`}`;
+  host.innerHTML = sec('素材', mat) + sec('成果', res);
+  host.querySelectorAll('.elrow').forEach(row => {
+    const p = row.dataset.path; if (!p) return;
+    const th = row.querySelector('.elthumb');
+    const open = row.querySelector('.elopen');
+    const openIt = () => { try { window.tcflow.liveOpenPath(p); } catch (e) { } };
+    if (open) open.onclick = openIt;
+    if (th) th.onclick = openIt;
+    if (!th || !EXT_IMG_RE.test(p)) return;
+    window.tcflow.livePeek({ path: p }).then(r => {
+      if (r && r.ok && r.url) th.innerHTML = `<img alt="" src="${r.url}">`;
+      else th.textContent = '不在了';
+    }).catch(() => { th.textContent = '不在了'; });       // 读不到就说读不到，不画假图
+  });
+}
 function renderPanel() {
   const w = flow(), n = find(panelCardId);
   const t = $('#panelTitle'), b = $('#panelBody');
@@ -1951,6 +1995,7 @@ function renderPanel() {
     <div class="pmods"><span class="lab">${MOD_T[KIND_MOD[n.kind]]}</span>
       <div class="pm-list" id="pMods">${modsOf(n).map((m, i) => `<span class="mod t-${m.type} ed"><span class="mn" contenteditable="plaintext-only" spellcheck="false" data-i="${i}">${esc(m.name)}</span><b class="mx" data-x="${i}" title="删掉这块">✕</b></span>`).join('')}<input id="pModAdd" class="pm-add" placeholder="+ ${MOD_T[KIND_MOD[n.kind]]}（回车添加）"></div>
     </div>
+    <div class="elems" id="pElems"></div>
 
     <div class="chat">
       <div class="chat-hd"><b>和 ${esc(w.agent ? agentName(w.agent) : 'agent')} 聊这张卡</b><span class="kbd">Enter 发送</span></div>
@@ -1973,6 +2018,8 @@ function renderPanel() {
       <textarea id="pImpl" placeholder="执行时真正跑什么：命令 / 脚本 / 路径 / 字段名（例：hermes -p &lt;agent&gt; chat -q …、evidence/&lt;包&gt;/page-fields）">${esc(implOf(n))}</textarea>
       <input id="pChecks" value="${esc((n.checks || []).join(', '))}" placeholder="校验项，逗号分隔（例：sha256, schema）">
     </details>`;
+
+  paintPanelElems(n);                                     // 素材/成果：看得见的元素 + 缩略图
 
   $('#pTitle').oninput = e => { n.title = e.target.value; syncCard(n); saveEditing(); };
   $('#pTitle').onchange = () => {
