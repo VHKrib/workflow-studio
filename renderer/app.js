@@ -304,15 +304,6 @@ function bindReqBox() {
 async function keepFlow() {
   const w = flow(); if (!w) return;
   const btn = $('#splitKeep');
-  if (btn && btn.textContent === '继续编辑') {   // 已经保留过：这颗按钮变成「继续编辑」，再点回到编辑态
-    editMode = true;
-    canvas.classList.add('editing');
-    layoutChain(w); render();
-    try { fitView(true, 0.2); } catch (e) { }
-    if (btn) btn.textContent = '保留工作流';
-    splitStat('继续编辑：改完再点「保留工作流」');
-    return;
-  }
   let moved = 0;
   for (const n of w.nodes) {
     const t = String(n.note || '').trim();
@@ -333,12 +324,14 @@ async function keepFlow() {
   } catch (e) { }
   w.name = `${stem} · v${round}`;               // 名字带版本号，不再写「已确定」
   w.round = round + 1;
+  delete verCache[w.id];                        // 版本缓存作废，展开时能看到刚存的这版
   layoutChain(w); render(); renderWorkflowList();
   try { fitView(true, 0.2); } catch (e) { }
   saveStore();
+  openVers.add(w.id);                                                  // 存完自动展开版本，马上能看见这一版
+  setTimeout(() => loadVersions(w.id), 200);
   const t2 = new Date();
   const p2 = n => String(n).padStart(2, '0');
-  if (btn) btn.textContent = '继续编辑';
   splitStat(`已保留 ${p2(t2.getHours())}:${p2(t2.getMinutes())}:${p2(t2.getSeconds())}` + (moved ? ` · ${moved} 张卡的内容已转到上方` : ''));
 }
 
