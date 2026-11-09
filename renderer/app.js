@@ -335,10 +335,14 @@ async function pullRunFiles() {
     const full = String(f.path || '').toLowerCase();
     const base = String(f.name || '').replace(/\.[^.]+$/, '').toLowerCase();
     const dir = full.split('/').slice(0, -1).join('/').split('/').pop() || '';
-    const hit = order.find(n => {
+    const tokens = (base + ' ' + dir).split(/[-_\s.\/]+/).map(t => t.trim().toLowerCase()).filter(t => t.length >= 2);
+    let best = null, bestScore = 0;
+    for (const n of order) {
       const t = textOf(n);
-      return (base && t.includes(base)) || (dir && dir.length > 3 && t.includes(dir));
-    }) || outFallback;
+      const score = tokens.reduce((s2, tok) => s2 + (t.includes(tok) ? 1 : 0), 0);
+      if (score > bestScore) { best = n; bestScore = score; }
+    }
+    const hit = (bestScore >= 1 ? best : null) || outFallback;   // 名字/目录里的词对上卡片才落那张，否则落最后的输出卡
     if (!hit) { missed++; continue; }
     const used = perCard.get(hit.id) || 0;
     if (used >= 6) { missed++; continue; }          // 命中卡已满，记一笔没挂上的
