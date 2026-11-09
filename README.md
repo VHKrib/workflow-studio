@@ -8,7 +8,7 @@ board where several of their workflows are drawn, edited and rolled back — liv
 
 Electron + vanilla JS. No bundler, no framework, no database. `npm install && npm start`.
 
-[中文说明](README.zh-CN.md)
+[Chinese version](README.zh-CN.md)
 
 ---
 
