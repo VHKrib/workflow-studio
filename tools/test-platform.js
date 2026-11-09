@@ -3,17 +3,17 @@ const assert = require('assert');
 const { hermesBin, sqliteBin, modKey } = require('../platform');
 
 // --- hermes：mac 上文件存在 → 用绝对路径、不开 shell
-let r = hermesBin({ platform: 'darwin', home: '/Users/x', exists: p => p === '/Users/x/.hermes/hermes-agent/.hermes/bin/hermes' });
-assert.strictEqual(r.cmd, '/Users/x/.hermes/hermes-agent/.hermes/bin/hermes');
+let r = hermesBin({ platform: 'darwin', home: '/home/demo', exists: p => p === '/home/demo/.hermes/hermes-agent/.hermes/bin/hermes' });
+assert.strictEqual(r.cmd, '/home/demo/.hermes/hermes-agent/.hermes/bin/hermes');
 assert.strictEqual(r.shell, false);
 
 // --- hermes：Windows 上有 .cmd → 取 .cmd，并且必须借 shell
-r = hermesBin({ platform: 'win32', home: 'C:\\Users\\x', exists: p => p.endsWith('hermes.cmd') });
+r = hermesBin({ platform: 'win32', home: 'C:\\demo', exists: p => p.endsWith('hermes.cmd') });
 assert.ok(r.cmd.endsWith('hermes.cmd'), 'win32 应该优先 .cmd，实际 ' + r.cmd);
 assert.strictEqual(r.shell, true);
 
 // --- hermes：Windows 上什么都不存在 → 退回 PATH 里的 hermes.cmd，仍开 shell
-r = hermesBin({ platform: 'win32', home: 'C:\\Users\\x', exists: () => false });
+r = hermesBin({ platform: 'win32', home: 'C:\\demo', exists: () => false });
 assert.strictEqual(r.cmd, 'hermes.cmd');
 assert.strictEqual(r.shell, true);
 
