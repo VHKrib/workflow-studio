@@ -1264,15 +1264,17 @@ function renderWorkflowList() {
     const open = openVers.has(w.id);
     el.innerHTML = `<div class="wn">${esc(w.name)}${on ? '<span class="wsel">选中</span>' : ''}</div>
       <div class="ws">v${w.version || 1} · ${w.nodes.length} 卡 · ${w.agent ? esc(execName(w.agent)) : '<span style="color:#c2410c">未指派</span>'}</div>
-      <div class="ver" title="展开/收起版本">${open ? '▾' : '▸'}</div>
+      <div class="ver" title="展开/收起版本">${open ? '▾ 版本' : '▸ 版本'}</div>
       <div class="ed" title="编辑工作流：上面只读参考这一版，下面改">✎</div>
       <div class="dup" title="复制这条链路">⧉</div>
       <div class="x" title="删除">✕</div>`;
-    el.querySelector('.ver').onclick = (ev) => {
+    const toggleVers = (ev) => {
       ev.stopPropagation();
       if (openVers.has(w.id)) openVers.delete(w.id); else { openVers.add(w.id); if (!verCache.has(w.id)) { loadVersions(w.id); return; } }
       renderWorkflowList();
     };
+    el.querySelector('.ver').onclick = toggleVers;
+    el.querySelector('.ws').onclick = toggleVers;
     el.querySelector('.ed').onclick = (ev) => { ev.stopPropagation(); editHistoryFlow(w.id); };
     el.querySelector('.dup').onclick = (ev) => { ev.stopPropagation(); duplicateWorkflow(w.id); };
     el.querySelector('.x').onclick = (ev) => deleteWorkflow(w.id, ev);
