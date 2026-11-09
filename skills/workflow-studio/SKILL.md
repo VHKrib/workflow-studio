@@ -140,6 +140,7 @@ git ls-remote --heads origin
 - **排版不搬＝没搬。** 只把卡片外壳和拖动搬过去、排布仍用自己写的算法，列宽/间距/竖向居中一不同，用户第一眼就是「为什么你照搬都没有搬好」。判断对齐的标准是排布规则同源（同一个 `layoutChain`），不是卡片长得像。
 - **共享脚本的适配器用 `function` 声明，不要用 `const`。** 两个经典脚本共享全局作用域：宿主里的 `const findDock = () => null` 与共享脚本的 `function findDock()` 撞成 `Identifier 'findDock' has already been declared`，宿主脚本整份不执行——症状是共享函数都存在、宿主自己的函数全是 `undefined`、界面空白而控制台只有一条 SyntaxError。函数声明同名才是「后者覆盖前者」。
 - **打开是空白时先查「视野里有没有卡」而不是「卡有没有生成」。** 卡画在 `ORIGIN` 偏移之后的坐标上，若 `fit()` 没执行，`wrap.scrollLeft` 仍是 0，卡片全在 6000px 之外：`nodes=8` 但 `visible=0`，看起来就是空画布。渲染完必须 `requestAnimationFrame` 里再 `fit()` 一次（布局尺寸要等一帧才准），验收断言用「卡片 rect 与视口相交的数量」，不用卡片总数。
+- **「跳画布 / 找不到工作流」先查视野两件事：更新后是否重排又 `fit()`，以及缩放后的滚动区是否仍是未缩放尺寸。** 前者用「锚定视口中心那张卡」修（更新前记它的屏幕 rect，排版后把差值补回滚动），后者用「滚动夹紧到内容包围盒」修（`transform: scale()` 不改滚动区，缩小后能滚进大片空白）。公式、挂载点与验据见 `references/canvas-and-cards.md` 的「视野锚定与边界」。
 - **适配器要对缺字段的老存档容错。** 旧 JSON 可能没有 `conv`：`flow()` 里直接取 `doc.conv.key` 会抛错，而抛错点在节点已追加之后，于是排版、连线、对焦全部被跳过——用户看到的是「卡歪在一边/一片空白」，不是报错。`flow()` 用 `(doc.conv && doc.conv.key) || doc.name || 'live'`，状态栏也按卡数兜底。
 - **只读/对齐窗口的「拖了又弹回」只从两处来：拖动不落盘、自动排版盖掉手工坐标。** 拖动松手先写 `n.manual = true` 再存盘，`layout()` 只给 `manual` 为假的卡重算坐标；否则用户拖完一松手、下一次重排就弹回原位。
 - **对齐一个面板＝位置、宽度行为和全部区块一起对齐，不只是字段。** 字段搬齐了用户仍会说「这也不一样啊，位置，还有 agent 也没有」：照抄源面板所在的那一栏（左栏、展开 364px、收起零宽 + `transition`，画布用 flex 让位），聊天区也算「同一张卡」的一部分，不能因为目标窗口用不上就删掉再解释。搬聊天块时把「和谁聊」换成被观察对象自己的显示名，发送走 `askAgent(profile=<被观察岗位>)`，气泡按 `role: me/agent` 存进这张卡并随解析结果落盘；每次发送是一次真实调用，只由用户点发送触发。
@@ -151,6 +152,7 @@ git ls-remote --heads origin
 - 只读不等于可以省略素材/成果，结构连通不等于依赖真实。
 - CDP 探针必须自包含、判空、render 后重新取元素；异步表达式用 IIFE，点击用真实鼠标事件。
 - **探针别用 `node -e` 拼内联表达式。** 表达式里有反引号、`${}`、中文和引号时，shell 转义迟早出错，报的是 `SyntaxError: Invalid or unexpected token` / `unexpected EOF`，看起来像产品 bug。把表达式写成文件，用一个固定脚本连 CDP 执行（本仓 `skills/workflow-studio/scripts/cdp-eval.js --port 9335 --page live.html --expr-file x.js`）。
+- **`git commit --amend` 前先 `git log -1 --name-only` 确认 HEAD 就是那条要改的提交。** 连着提交 fix 和 docs 时最容易改错：amend 会把后一条并进前一条的消息里，同一条修复出现两次、另一条变更被吃掉。发现后 `git reset --soft <基线>`、再按文件分两次重提，别在同一 HEAD 上反复 amend。
 - **用脚本做整段替换后先查重复声明再做语法检查。** 同一脚本里对同一标识符二次声明（`let saveTimer` 加了两遍）只会得到一条 SyntaxError，整个文件静默不执行；替换后 `grep -n "let <名>\|function <名>" <文件>` 再 `node --check`，不要只信 `--check` 通过就以为没重影。
 - 流中整块 innerHTML 重建会丢折叠态和点击；只更新变化节点。
 - 图与测试对应哪个版本写清；未验收的实验解析/布局不能写进手册当可靠方法。
